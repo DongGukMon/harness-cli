@@ -35,13 +35,14 @@ function makeState(overrides: Partial<HarnessState> = {}): HarnessState {
 // ─── Interactive Phase Tests ───────────────────────────────────────────────
 
 describe('Phase 1 interactive prompt', () => {
-  it('includes task path and phaseAttemptId sentinel instruction', () => {
+  it('includes task.md path from runId dir and phaseAttemptId sentinel instruction', () => {
     const state = makeState({
       phaseAttemptId: { '1': 'uuid-phase-1-attempt', '3': null, '5': null },
     });
     const prompt = assembleInteractivePrompt(1, state, '/tmp/harness');
 
-    expect(prompt).toContain('/tasks/my-task.md');
+    // Phase 1 injects .harness/<runId>/task.md, not the raw task string
+    expect(prompt).toContain('.harness/my-run/task.md');
     expect(prompt).toContain('uuid-phase-1-attempt');
     expect(prompt).toContain('phase-1.done');
   });
@@ -92,8 +93,10 @@ describe('Phase 3 interactive prompt', () => {
     expect(prompt).toContain(state.artifacts.spec);
     expect(prompt).toContain(state.artifacts.decisionLog);
     expect(prompt).toContain(state.artifacts.checklist);
-    // checklist schema reference
-    expect(prompt).toContain('체크리스트');
+    // checklist schema reference (per spec: "checks" array with name/command)
+    expect(prompt).toContain('checks');
+    expect(prompt).toContain('name');
+    expect(prompt).toContain('command');
     expect(prompt).toContain('phase-3.done');
     expect(prompt).toContain('attempt-phase3');
   });

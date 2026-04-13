@@ -181,10 +181,12 @@ describe('preparePhase — phaseAttemptId generation', () => {
     const cwd = makeTmpDir();
 
     const state = makeState();
-    const newState1 = preparePhase(1, state, harnessDir, runDir, cwd);
-    const newState2 = preparePhase(1, state, harnessDir, runDir, cwd);
+    preparePhase(1, state, harnessDir, runDir, cwd);
+    const firstId = state.phaseAttemptId['1'];
+    preparePhase(1, state, harnessDir, runDir, cwd);
+    const secondId = state.phaseAttemptId['1'];
 
-    expect(newState1.phaseAttemptId['1']).not.toBe(newState2.phaseAttemptId['1']);
+    expect(firstId).not.toBe(secondId);
   });
 
   it('preserves phaseAttemptId for other phases when setting Phase 3', () => {

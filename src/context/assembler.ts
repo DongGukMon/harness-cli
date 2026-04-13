@@ -12,27 +12,26 @@ import {
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-const REVIEWER_CONTRACT = `## 리뷰어 계약
+/**
+ * Shared reviewer contract per spec "Gate phase 프롬프트 계약 > 공통 역할 지시".
+ * All gate phases (2, 4, 7) include this preamble.
+ */
+const REVIEWER_CONTRACT = `You are an independent technical reviewer. Review the provided documents and return a structured verdict.
+Output format — must include exactly these sections in order:
 
-당신은 독립적인 게이트 리뷰어다. 다음 규칙을 반드시 따르라:
+## Verdict
+APPROVE or REJECT
 
-1. 최종 판정은 반드시 \`APPROVE\` 또는 \`REJECT\` 중 하나여야 한다.
-2. 판정은 응답의 마지막 줄에 단독으로 위치해야 한다 (예: \`APPROVE\` 또는 \`REJECT\`).
-3. 모든 코멘트는 구체적인 위치(파일명, 섹션, 줄 번호 등)를 인용해야 한다.
-4. 모호한 일반론이나 위치 없는 지적은 허용되지 않는다. Every comment must cite a specific location.
+## Comments
+- **[P0|P1|P2|P3]** — Location: ...
+  Issue: ...
+  Suggestion: ...
+  Evidence: ...
 
-### 응답 형식
+## Summary
+One to two sentences.
 
-\`\`\`
-## 리뷰 요약
-<전반적 평가>
-
-## 상세 코멘트
-- [파일/섹션/위치]: <코멘트>
-
-## 판정
-APPROVE | REJECT
-\`\`\`
+Rules: APPROVE only if zero P0/P1 findings. Every comment must cite a specific location.
 `;
 
 function readTemplateFile(filename: string): string {
@@ -47,14 +46,11 @@ function renderTemplate(template: string, vars: Record<string, string | undefine
     (_match: string, varName: string, block: string): string => {
       const value = vars[varName];
       if (!value) return '';
-      // Substitute variables inside the block
       return block.replace(/\{\{(\w+)\}\}/g, (_m: string, k: string): string => vars[k] ?? '');
     }
   );
-
   // Handle plain {{variable}} substitutions
   result = result.replace(/\{\{(\w+)\}\}/g, (_match: string, k: string): string => vars[k] ?? '');
-
   return result;
 }
 
@@ -83,108 +79,151 @@ function readArtifactContent(filePath: string, cwd: string): { content: string }
   try {
     return { content: fs.readFileSync(absPath, 'utf-8') };
   } catch {
-    return { content: `(파일 없음: ${filePath})` };
+    return { content: `(file not found: ${filePath})` };
   }
 }
 
 function truncateDiffPerFile(diff: string, perFileLimitBytes: number): string {
-  // Split diff into per-file chunks (keep the leading "diff --git" line with each chunk)
   const fileChunks = diff.split(/(?=^diff --git )/m);
   return fileChunks
     .map((chunk) => {
       if (chunk.length <= perFileLimitBytes) return chunk;
-      return chunk.slice(0, perFileLimitBytes) + '\n... [diff truncated]\n';
+      const truncated = chunk.slice(0, perFileLimitBytes);
+      const origBytes = chunk.length;
+      return truncated + `\n--- (truncated: ${origBytes} bytes)\n`;
     })
     .join('');
 }
+
+function runGit(cmd: string, cwd: string): string {
+  try {
+    return execSync(cmd, { cwd, encoding: 'utf-8' });
+  } catch {
+    return '';
+  }
+}
+
+// ─── Gate 2: Spec review ─────────────────────────────────────────────────────
 
 function buildGatePromptPhase2(state: HarnessState, cwd: string): string | { error: string } {
   const specResult = readArtifactContent(state.artifacts.spec, cwd);
   if ('error' in specResult) return specResult;
 
   return (
-    `# Gate 2: Spec Review\n\n` +
     REVIEWER_CONTRACT +
-    `\n## 검토 대상: 설계 스펙\n\n` +
-    `경로: ${state.artifacts.spec}\n\n` +
-    `\`\`\`\n${specResult.content}\n\`\`\`\n`
+    `\n<spec>\n${specResult.content}\n</spec>\n`
   );
 }
 
+// ─── Gate 4: Plan review (spec + plan, per spec) ─────────────────────────────
+
 function buildGatePromptPhase4(state: HarnessState, cwd: string): string | { error: string } {
+  const specResult = readArtifactContent(state.artifacts.spec, cwd);
+  if ('error' in specResult) return specResult;
+
   const planResult = readArtifactContent(state.artifacts.plan, cwd);
   if ('error' in planResult) return planResult;
 
-  const checklistResult = readArtifactContent(state.artifacts.checklist, cwd);
-  if ('error' in checklistResult) return checklistResult;
-
   return (
-    `# Gate 4: Plan Review\n\n` +
     REVIEWER_CONTRACT +
-    `\n## 검토 대상: 구현 계획\n\n` +
-    `경로: ${state.artifacts.plan}\n\n` +
-    `\`\`\`\n${planResult.content}\n\`\`\`\n\n` +
-    `## 검토 대상: 평가 체크리스트\n\n` +
-    `경로: ${state.artifacts.checklist}\n\n` +
-    `\`\`\`\n${checklistResult.content}\n\`\`\`\n`
+    `\n<spec>\n${specResult.content}\n</spec>\n\n` +
+    `<plan>\n${planResult.content}\n</plan>\n`
   );
 }
 
+// ─── Gate 7: Eval review (spec + plan + eval report + diff + metadata) ───────
+
 function buildGatePromptPhase7(state: HarnessState, cwd: string): string | { error: string } {
+  const specResult = readArtifactContent(state.artifacts.spec, cwd);
+  if ('error' in specResult) return specResult;
+
+  const planResult = readArtifactContent(state.artifacts.plan, cwd);
+  if ('error' in planResult) return planResult;
+
   const evalResult = readArtifactContent(state.artifacts.evalReport, cwd);
   if ('error' in evalResult) return evalResult;
 
-  // Build diff section
+  // Build diff section per spec "Phase 7 diff 범위 규칙"
   let diffSection: string;
+  let externalSummary = '';
+
   if (state.externalCommitsDetected) {
-    diffSection =
-      `## 외부 커밋 감지\n\n` +
-      `외부 커밋이 감지되어 diff를 자동으로 포함할 수 없습니다.\n` +
-      `구현 커밋 기준점: ${state.implCommit ?? '(없음)'}\n`;
-  } else {
-    const baseRef = state.implRetryBase ?? state.baseCommit;
-    let rawDiff = '';
-    try {
-      rawDiff = execSync(`git diff ${baseRef}..HEAD`, { cwd, encoding: 'utf-8' });
-    } catch {
-      rawDiff = '';
+    // Split diff: primary (harness range) + external summary
+    let primary = '';
+    if (state.implCommit !== null) {
+      // Phase 1-5 harness commits + Phase 6 eval commit
+      primary += runGit(`git diff ${state.baseCommit}...${state.implCommit}`, cwd);
+      if (state.evalCommit !== null) {
+        primary += '\n' + runGit(`git diff ${state.evalCommit}^..${state.evalCommit}`, cwd);
+      }
+    } else {
+      // Phase 5 skipped — fallback diff includes external commits
+      const target = state.evalCommit ?? 'HEAD';
+      primary = runGit(`git diff ${state.baseCommit}...${target}`, cwd);
+      primary =
+        `⚠️ IMPORTANT: Phase 5 was skipped and external commits were detected. ` +
+        `The primary diff below includes BOTH harness and external changes — they cannot be separated. ` +
+        `Focus on the eval report and spec/plan compliance rather than the diff.\n\n` +
+        primary;
     }
 
     const maxDiffBytes = MAX_DIFF_SIZE_KB * 1024;
-    const perFileBytes = PER_FILE_DIFF_LIMIT_KB * 1024;
-
-    if (rawDiff.length > maxDiffBytes) {
-      rawDiff = truncateDiffPerFile(rawDiff, perFileBytes);
+    if (primary.length > maxDiffBytes) {
+      primary = truncateDiffPerFile(primary, PER_FILE_DIFF_LIMIT_KB * 1024);
     }
 
-    diffSection = rawDiff
-      ? `## 구현 Diff\n\n\`\`\`diff\n${rawDiff}\n\`\`\`\n`
-      : `## 구현 Diff\n\n(diff를 가져올 수 없습니다)\n`;
+    diffSection = `<diff>\n${primary}\n</diff>\n`;
+
+    // External commits summary (commit list only, no diff)
+    const anchor = state.evalCommit ?? state.implCommit ?? state.baseCommit;
+    const externalLog = runGit(`git log ${anchor}..HEAD --oneline`, cwd);
+    if (externalLog.trim().length > 0) {
+      externalSummary = `\n## External Commits (not reviewed)\n\n\`\`\`\n${externalLog}\n\`\`\`\n`;
+    }
+  } else {
+    // Normal mode: full diff from baseCommit to HEAD
+    let diff = runGit(`git diff ${state.baseCommit}...HEAD`, cwd);
+    const maxDiffBytes = MAX_DIFF_SIZE_KB * 1024;
+    if (diff.length > maxDiffBytes) {
+      diff = truncateDiffPerFile(diff, PER_FILE_DIFF_LIMIT_KB * 1024);
+    }
+    diffSection = diff ? `<diff>\n${diff}\n</diff>\n` : '';
   }
 
+  // Metadata block per spec
+  const externalNote = state.externalCommitsDetected
+    ? `Note: External commits detected. See '## External Commits (not reviewed)' section below.\nPrimary diff covers harness implementation range only.\n`
+    : '';
+  const implRange =
+    state.implCommit !== null
+      ? `Harness implementation range: ${state.baseCommit}..${state.implCommit} (Phase 1–5 commits).`
+      : `Phase 5 skipped; no implementation commit anchor.`;
+
   const metadata =
-    `## 메타데이터\n\n` +
-    `- runId: ${state.runId}\n` +
-    `- baseCommit: ${state.baseCommit}\n` +
-    `- implRetryBase: ${state.implRetryBase}\n` +
-    `- implCommit: ${state.implCommit ?? '(없음)'}\n` +
-    `- externalCommitsDetected: ${state.externalCommitsDetected}\n`;
+    `<metadata>\n${externalNote}${implRange}\n` +
+    `Harness eval report commit: ${state.evalCommit ?? '(none)'} (the commit that last modified the eval report).\n` +
+    `Verified at HEAD: ${state.verifiedAtHead ?? '(none)'} (most recent Phase 6 run).\n` +
+    `Focus review on changes within the harness ranges above.\n` +
+    `</metadata>\n`;
 
   return (
-    `# Gate 7: Eval Review\n\n` +
     REVIEWER_CONTRACT +
-    `\n## 검토 대상: 평가 리포트\n\n` +
-    `경로: ${state.artifacts.evalReport}\n\n` +
-    `\`\`\`\n${evalResult.content}\n\`\`\`\n\n` +
+    `\n<spec>\n${specResult.content}\n</spec>\n\n` +
+    `<plan>\n${planResult.content}\n</plan>\n\n` +
+    `<eval_report>\n${evalResult.content}\n</eval_report>\n\n` +
     diffSection +
-    `\n` +
+    externalSummary +
+    '\n' +
     metadata
   );
 }
 
+// ─── Interactive prompt assembly ──────────────────────────────────────────────
+
 /**
  * Assemble initial prompt for interactive phases (1, 3, 5).
- * Reads template, substitutes variables, returns prompt string.
+ * Per spec: task.md path (not raw task string) is passed to Phase 1;
+ * Phase 5 supports multiple feedback paths (gate-7-feedback + verify-feedback).
  */
 export function assembleInteractivePrompt(
   phase: 1 | 3 | 5,
@@ -193,12 +232,21 @@ export function assembleInteractivePrompt(
 ): string {
   const templateFile = `phase-${phase}.md`;
   const template = readTemplateFile(templateFile);
-
-  const feedbackPath = state.pendingAction?.feedbackPaths[0];
   const phaseAttemptId = state.phaseAttemptId[String(phase)] ?? '';
 
+  // Phase 1 uses task.md file path (not raw task string) per spec
+  const taskMdPath = path.join('.harness', state.runId, 'task.md');
+
+  // feedback_path: first feedback from pendingAction, if any
+  // feedback_paths: all feedbacks (Phase 5 may have both gate-7 + verify)
+  const feedbackPaths = state.pendingAction?.feedbackPaths ?? [];
+  const feedbackPath = feedbackPaths[0];
+  const feedbackPathsList = feedbackPaths
+    .map((p) => `- 이전 피드백 (반드시 반영): ${p}`)
+    .join('\n');
+
   const vars: Record<string, string | undefined> = {
-    task_path: state.task,
+    task_path: taskMdPath,
     spec_path: state.artifacts.spec,
     decisions_path: state.artifacts.decisionLog,
     plan_path: state.artifacts.plan,
@@ -206,23 +254,20 @@ export function assembleInteractivePrompt(
     runId: state.runId,
     phaseAttemptId,
     feedback_path: feedbackPath,
+    feedback_paths: feedbackPathsList.length > 0 ? feedbackPathsList : undefined,
     harnessDir,
   };
 
   return renderTemplate(template, vars);
 }
 
-/**
- * Assemble gate prompt (2, 4, 7). Reads files inline, applies size limits.
- * Returns prompt string or error object for size-limit violations.
- */
 export function assembleGatePrompt(
   phase: 2 | 4 | 7,
   state: HarnessState,
   harnessDir: string,
   cwd: string
 ): string | { error: string } {
-  void harnessDir; // reserved for future use
+  void harnessDir;
 
   let result: string | { error: string };
 

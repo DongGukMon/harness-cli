@@ -1,10 +1,12 @@
-다음 파일들을 읽고 구현 계획에 따라 코드를 작성하라:
+다음 파일을 읽고 컨텍스트를 파악한 뒤 구현을 진행하라:
+- Spec: {{spec_path}}
 - Plan: {{plan_path}}
+- Decision Log: {{decisions_path}}
 - Checklist: {{checklist_path}}
-{{#if feedback_path}}
-- 이전 리뷰 피드백 (반드시 반영): {{feedback_path}}
+{{#if feedback_paths}}
+{{feedback_paths}}
 {{/if}}
 
-구현이 완료되면 변경사항을 git commit하라. 커밋 메시지는 구현 내용을 간결하게 요약한다.
+각 태스크 완료 시 반드시 변경사항을 git commit하라. commit 없이 세션을 종료하면 eval gate에서 변경분을 볼 수 없어 run이 실패한다.
 
-`.harness/{{runId}}/phase-5.done` 파일을 생성하되 내용으로 '{{phaseAttemptId}}' 한 줄만 기록한 뒤 세션을 종료하라.
+구현 완료 후 `.harness/{{runId}}/phase-5.done` 파일을 생성하되 내용으로 '{{phaseAttemptId}}' 한 줄만 기록한 뒤 세션을 종료하라.

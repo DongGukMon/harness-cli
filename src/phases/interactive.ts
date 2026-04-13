@@ -18,8 +18,9 @@ export interface InteractiveResult {
 
 /**
  * Pre-spawn cleanup and state preparation for an interactive phase.
- * Returns a new state object (does not mutate in place).
- * Also writes state atomically to runDir.
+ * **Mutates the state object in place** so callers retain prepared fields
+ * (phaseAttemptId, phaseOpenedAt, implRetryBase). Also writes state atomically.
+ * Returns the same state object for convenience.
  */
 export function preparePhase(
   phase: InteractivePhase,
@@ -44,25 +45,20 @@ export function preparePhase(
     }
   }
 
-  // Generate new phaseAttemptId (UUID v4)
-  const attemptId = randomUUID();
-
-  // Set phaseOpenedAt with 1-second truncation (stays in ms)
-  const openedAt = Math.floor(Date.now() / 1000) * 1000;
-
-  const newState: HarnessState = {
-    ...state,
-    phaseAttemptId: { ...state.phaseAttemptId, [String(phase)]: attemptId },
-    phaseOpenedAt: { ...state.phaseOpenedAt, [String(phase)]: openedAt },
+  // Mutate state in place so the caller's reference sees the updates
+  state.phaseAttemptId = { ...state.phaseAttemptId, [String(phase)]: randomUUID() };
+  state.phaseOpenedAt = {
+    ...state.phaseOpenedAt,
+    [String(phase)]: Math.floor(Date.now() / 1000) * 1000,
   };
 
   // Phase 5: update implRetryBase to current HEAD
   if (phase === 5) {
-    newState.implRetryBase = getHead(cwd);
+    state.implRetryBase = getHead(cwd);
   }
 
-  writeState(runDir, newState);
-  return newState;
+  writeState(runDir, state);
+  return state;
 }
 
 /**

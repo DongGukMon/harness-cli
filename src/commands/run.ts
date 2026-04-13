@@ -2,7 +2,7 @@ import { execSync } from 'child_process';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync, appendFileSync } from 'fs';
 import { join } from 'path';
 import { getGitRoot, getHead, generateRunId, hasStagedChanges, isWorkingTreeClean } from '../git.js';
-import { acquireLock, releaseLock } from '../lock.js';
+import { acquireLock, readLock, releaseLock } from '../lock.js';
 import { getPreflightItems, runPreflight } from '../preflight.js';
 import { findHarnessRoot, setCurrentRun } from '../root.js';
 import { createInitialState, writeState } from '../state.js';
@@ -115,13 +115,13 @@ export async function runCommand(task: string, options: RunOptions = {}): Promis
   writeFileSync(join(runDir, 'task.md'), task, 'utf-8');
 
   // 15. Register signal handlers
-  let currentChildPid: number | null = null;
+  // childPid lookup reads from the lock file (written by phase runners via updateLockChild)
   registerSignalHandlers({
     harnessDir,
     runId,
     getState: () => state,
     setState: (s) => Object.assign(state, s),
-    getChildPid: () => currentChildPid,
+    getChildPid: () => readLock(harnessDir)?.childPid ?? null,
     getCurrentPhaseType: () => {
       const phase = state.currentPhase;
       if (phase === 1 || phase === 3 || phase === 5) return 'interactive';

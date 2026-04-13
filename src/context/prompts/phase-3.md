@@ -1,29 +1,19 @@
-다음 파일들을 읽고 구현 계획(Implementation Plan)과 평가 체크리스트를 작성하라:
+다음 파일을 읽고 컨텍스트를 파악한 뒤 구현 계획을 작성하라:
 - Spec: {{spec_path}}
 - Decision Log: {{decisions_path}}
 {{#if feedback_path}}
 - 이전 리뷰 피드백 (반드시 반영): {{feedback_path}}
 {{/if}}
 
-## 체크리스트 스키마
-
-체크리스트는 다음 JSON 스키마를 따르는 YAML 또는 마크다운 형식으로 작성하라:
-
+plan을 {{plan_path}}에 저장하고,
+eval checklist를 {{checklist_path}}에 아래 JSON 스키마로 저장하라:
 ```json
 {
-  "type": "array",
-  "items": {
-    "type": "object",
-    "properties": {
-      "id": { "type": "string" },
-      "description": { "type": "string" },
-      "category": { "type": "string", "enum": ["functional", "quality", "security", "performance"] },
-      "automated": { "type": "boolean" }
-    },
-    "required": ["id", "description", "category", "automated"]
-  }
+  "checks": [
+    { "name": "<검증 항목 이름>", "command": "<실행 커맨드>" }
+  ]
 }
 ```
+`checks` 배열은 비어있지 않아야 하며 각 항목에 `name`(string)과 `command`(string)이 필수다.
 
-plan을 {{plan_path}}에, checklist를 {{checklist_path}}에 저장하고,
 `.harness/{{runId}}/phase-3.done` 파일을 생성하되 내용으로 '{{phaseAttemptId}}' 한 줄만 기록한 뒤 세션을 종료하라.

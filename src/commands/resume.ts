@@ -1,7 +1,7 @@
 import { existsSync } from 'fs';
 import { join } from 'path';
 import { getGitRoot } from '../git.js';
-import { acquireLock, releaseLock } from '../lock.js';
+import { acquireLock, readLock, releaseLock } from '../lock.js';
 import { getPreflightItems, runPreflight, resolveCodexPath } from '../preflight.js';
 import { findHarnessRoot, getCurrentRun, setCurrentRun } from '../root.js';
 import { readState, writeState } from '../state.js';
@@ -102,14 +102,13 @@ export async function resumeCommand(runId?: string, options: ResumeOptions = {})
   // 9. Acquire lock
   acquireLock(harnessDir, targetRunId);
 
-  // 10. Register signal handlers
-  let currentChildPid: number | null = null;
+  // 10. Register signal handlers (childPid lookup reads from lock)
   registerSignalHandlers({
     harnessDir,
     runId: targetRunId,
     getState: () => state!,
     setState: (s) => Object.assign(state!, s),
-    getChildPid: () => currentChildPid,
+    getChildPid: () => readLock(harnessDir)?.childPid ?? null,
     getCurrentPhaseType: () => {
       const phase = state!.currentPhase;
       if (phase === 1 || phase === 3 || phase === 5) return 'interactive';

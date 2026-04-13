@@ -605,9 +605,9 @@ async function handleVerifyEscalation(
   } else if (choice === 'S') {
     await forcePassVerify(state, runDir, cwd);
   } else {
-    // Quit
+    // Quit — verify-escalation uses show_escalation (per spec: only gate/verify error quit use show_verify_error)
     state.pendingAction = {
-      type: 'show_verify_error',
+      type: 'show_escalation',
       targetPhase: 6,
       sourcePhase: 5,
       feedbackPaths: [feedbackPath],
