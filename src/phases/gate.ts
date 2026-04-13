@@ -5,7 +5,7 @@ import type { HarnessState, GatePhaseResult, GateResult } from '../types.js';
 import { assembleGatePrompt } from '../context/assembler.js';
 import { updateLockChild, clearLockChild } from '../lock.js';
 import { GATE_TIMEOUT_MS, SIGTERM_WAIT_MS } from '../config.js';
-import { getProcessStartTime, isProcessGroupAlive } from '../process.js';
+import { getProcessStartTime, killProcessGroup } from '../process.js';
 
 function sidecarRaw(runDir: string, phase: number): string {
   return path.join(runDir, `gate-${phase}-raw.txt`);
@@ -215,14 +215,8 @@ export async function runGatePhase(
       if (settled) return;
       settled = true;
 
-      // SIGTERM → wait → SIGKILL
-      try { process.kill(-childPid, 'SIGTERM'); } catch { /* already dead */ }
-
-      await new Promise<void>((res) => setTimeout(res, SIGTERM_WAIT_MS));
-
-      if (isProcessGroupAlive(childPid)) {
-        try { process.kill(-childPid, 'SIGKILL'); } catch { /* already dead */ }
-      }
+      // Full PGID shutdown: SIGTERM → wait → SIGKILL → confirm ESRCH
+      await killProcessGroup(childPid, SIGTERM_WAIT_MS);
 
       resolve({ type: 'error', error: `Gate phase ${phase} timed out after ${GATE_TIMEOUT_MS}ms` });
     }, GATE_TIMEOUT_MS);
@@ -275,7 +269,9 @@ export async function runGatePhase(
     });
   });
 
-  // Step 6: Post-gate cleanup — clear childPid in lock
+  // Step 6: Post-gate cleanup — wait for process group ESRCH, then clear lock
+  // (killProcessGroup is idempotent: if already dead, returns immediately)
+  await killProcessGroup(childPid, SIGTERM_WAIT_MS);
   try {
     clearLockChild(harnessDir);
   } catch {

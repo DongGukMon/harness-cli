@@ -1,5 +1,5 @@
 import { execSync } from 'child_process';
-import { existsSync, writeFileSync, unlinkSync } from 'fs';
+import { existsSync, readFileSync, writeFileSync, unlinkSync } from 'fs';
 import { join } from 'path';
 import { getGitRoot, getHead, isWorkingTreeClean } from '../git.js';
 import { acquireLock, releaseLock } from '../lock.js';
@@ -119,10 +119,30 @@ function validateRequiredInputs(phase: PhaseNumber, state: HarnessState, cwd: st
     case 2:
       checkFile(state.artifacts.spec, 'spec');
       break;
-    case 3:
+    case 3: {
       checkFile(state.artifacts.plan, 'plan');
       checkFile(state.artifacts.checklist, 'checklist');
+      // Validate checklist schema: { checks: [{ name, command }] }
+      const checklistPath = join(cwd, state.artifacts.checklist);
+      try {
+        const raw = readFileSync(checklistPath, 'utf-8');
+        const parsed = JSON.parse(raw);
+        if (!parsed || !Array.isArray(parsed.checks) || parsed.checks.length === 0) {
+          throw new Error('checks array missing or empty');
+        }
+        for (const check of parsed.checks) {
+          if (typeof check?.name !== 'string' || typeof check?.command !== 'string') {
+            throw new Error('each check must have name (string) and command (string)');
+          }
+        }
+      } catch (err) {
+        process.stderr.write(
+          `Error: Phase 3 skip requires valid checklist.json: ${(err as Error).message}\n`
+        );
+        process.exit(1);
+      }
       break;
+    }
     case 4:
       checkFile(state.artifacts.spec, 'spec');
       checkFile(state.artifacts.plan, 'plan');

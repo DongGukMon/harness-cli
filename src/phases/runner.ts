@@ -322,13 +322,21 @@ async function handleGateReject(
       return;
     }
 
-    // Save feedback and reopen
+    // Save feedback and reopen. For Phase 7 reject → Phase 5, include any existing
+    // verify-feedback.md so Claude sees BOTH the eval gate feedback and prior verify failures.
     const feedbackPath = saveGateFeedback(runDir, phase, comments);
+    const feedbackPaths: string[] = [feedbackPath];
+    if (phase === 7) {
+      const verifyFeedback = path.join(runDir, 'verify-feedback.md');
+      if (fs.existsSync(verifyFeedback)) {
+        feedbackPaths.push(verifyFeedback);
+      }
+    }
     const pendingAction: PendingAction = {
       type: 'reopen_phase',
       targetPhase: targetInteractive,
       sourcePhase: phase as PhaseNumber,
-      feedbackPaths: [feedbackPath],
+      feedbackPaths,
     };
 
     // Crash-safe: feedback already saved → write pendingAction+state atomically
@@ -507,9 +515,12 @@ async function handleVerifyPhase(
     state.pendingAction = null;
     state.currentPhase = 7;
 
-    // Delete verify-result.json AFTER state advance (crash-safe)
+    // Delete verify-result.json + verify-feedback.md AFTER state advance (crash-safe)
     writeState(runDir, state);
     deleteVerifyResult(runDir);
+    try {
+      fs.unlinkSync(path.join(runDir, 'verify-feedback.md'));
+    } catch { /* best-effort: may not exist */ }
 
     printPhaseTransition(6, 7, phaseLabel(6) + ' — PASS', phaseLabel(7));
   } else if (outcome.type === 'fail') {

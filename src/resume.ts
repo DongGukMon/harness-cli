@@ -1,4 +1,5 @@
 import { existsSync, readFileSync, statSync, unlinkSync } from 'fs';
+import { execSync } from 'child_process';
 import { join } from 'path';
 import { getHead, isAncestor, detectExternalCommits } from './git.js';
 import { readState, writeState } from './state.js';
@@ -53,11 +54,17 @@ function validateCompletedArtifacts(state: HarnessState, cwd: string): void {
   if (state.phases['1'] === 'completed') {
     requireNonEmpty(join(cwd, state.artifacts.spec), 'spec', state.runId);
     requireNonEmpty(join(cwd, state.artifacts.decisionLog), 'decision log', state.runId);
+    // Check spec is not modified since committed (decisionLog is gitignored — skip)
+    requireCommittedClean(state.artifacts.spec, state.specCommit, cwd);
   }
   // Phase 3 completed: plan + checklist
   if (state.phases['3'] === 'completed') {
     requireNonEmpty(join(cwd, state.artifacts.plan), 'plan', state.runId);
     requireNonEmpty(join(cwd, state.artifacts.checklist), 'checklist', state.runId);
+    // Validate checklist schema
+    requireValidChecklist(join(cwd, state.artifacts.checklist));
+    // Check plan is not modified since committed (checklist is gitignored — skip)
+    requireCommittedClean(state.artifacts.plan, state.planCommit, cwd);
   }
   // Phase 6 completed: eval report
   if (state.phases['6'] === 'completed') {
@@ -68,6 +75,57 @@ function validateCompletedArtifacts(state: HarnessState, cwd: string): void {
       );
       process.exit(1);
     }
+    requireCommittedClean(state.artifacts.evalReport, state.evalCommit, cwd);
+  }
+}
+
+/**
+ * Ensure the artifact has no uncommitted modifications relative to its recorded commit.
+ * Per spec: `git diff <*Commit> -- <path>` must be empty.
+ * Skips the check if no commit anchor is recorded (artifact might be gitignored).
+ */
+function requireCommittedClean(relPath: string, commit: string | null, cwd: string): void {
+  if (commit === null) return;
+  if (relPath.startsWith('.harness/')) return; // gitignored
+  try {
+    const diff = execSync(`git diff ${commit} -- "${relPath}"`, {
+      cwd,
+      encoding: 'utf-8',
+    }).trim();
+    if (diff.length > 0) {
+      process.stderr.write(
+        `Artifact ${relPath} has been modified since it was committed at ${commit}.\n` +
+        `Commit changes first, or use 'harness jump N' to re-run from that phase.\n`
+      );
+      process.exit(1);
+    }
+  } catch (err) {
+    const msg = (err as Error).message;
+    if (msg.includes('__exit__')) throw err;
+    // git error (e.g., commit doesn't exist) — skip (ancestry validation will catch this)
+  }
+}
+
+/** Validate checklist.json matches the spec schema: `{ checks: [{ name, command }] }`. */
+function requireValidChecklist(absPath: string): void {
+  try {
+    const raw = readFileSync(absPath, 'utf-8');
+    const parsed = JSON.parse(raw);
+    if (!parsed || !Array.isArray(parsed.checks) || parsed.checks.length === 0) {
+      throw new Error('checks array missing or empty');
+    }
+    for (const check of parsed.checks) {
+      if (typeof check.name !== 'string' || typeof check.command !== 'string') {
+        throw new Error('each check must have name (string) and command (string)');
+      }
+    }
+  } catch (err) {
+    const msg = (err as Error).message;
+    process.stderr.write(
+      `Checklist ${absPath} is invalid: ${msg}.\n` +
+      `Use 'harness jump 3' to re-run planning.\n`
+    );
+    process.exit(1);
   }
 }
 

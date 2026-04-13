@@ -431,7 +431,7 @@ describe('validatePhaseArtifacts — Phase 1', () => {
 });
 
 describe('validatePhaseArtifacts — Phase 3', () => {
-  it('returns true when plan and checklist are non-empty and recent', () => {
+  it('returns true when plan and checklist are non-empty, valid schema, and recent', () => {
     const cwd = makeTmpDir();
     const state = makeState({
       phaseOpenedAt: { '1': null, '3': Math.floor(Date.now() / 1000) * 1000 - 5000, '5': null },
@@ -442,10 +442,31 @@ describe('validatePhaseArtifacts — Phase 3', () => {
     fs.mkdirSync(path.dirname(planPath), { recursive: true });
     fs.mkdirSync(path.dirname(checklistPath), { recursive: true });
     fs.writeFileSync(planPath, '# Plan content');
-    fs.writeFileSync(checklistPath, '# Checklist content');
+    // Checklist must match spec schema: { checks: [{ name, command }] }
+    fs.writeFileSync(
+      checklistPath,
+      JSON.stringify({ checks: [{ name: 'test', command: 'echo ok' }] })
+    );
 
     const result = validatePhaseArtifacts(3, state, cwd);
     expect(result).toBe(true);
+  });
+
+  it('returns false when checklist schema is invalid', () => {
+    const cwd = makeTmpDir();
+    const state = makeState({
+      phaseOpenedAt: { '1': null, '3': Math.floor(Date.now() / 1000) * 1000 - 5000, '5': null },
+    });
+
+    const planPath = path.join(cwd, state.artifacts.plan);
+    const checklistPath = path.join(cwd, state.artifacts.checklist);
+    fs.mkdirSync(path.dirname(planPath), { recursive: true });
+    fs.mkdirSync(path.dirname(checklistPath), { recursive: true });
+    fs.writeFileSync(planPath, '# Plan content');
+    fs.writeFileSync(checklistPath, '{ "not": "valid schema" }');
+
+    const result = validatePhaseArtifacts(3, state, cwd);
+    expect(result).toBe(false);
   });
 
   it('returns false when checklist is missing', () => {

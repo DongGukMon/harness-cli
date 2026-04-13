@@ -107,6 +107,15 @@ export function validatePhaseArtifacts(
         return false;
       }
     }
+
+    // Phase 3: validate checklist.json schema
+    if (phase === 3) {
+      const checklistPath = path.isAbsolute(state.artifacts.checklist)
+        ? state.artifacts.checklist
+        : path.join(cwd, state.artifacts.checklist);
+      if (!isValidChecklistSchema(checklistPath)) return false;
+    }
+
     return true;
   }
 
@@ -126,6 +135,21 @@ export function validatePhaseArtifacts(
   }
 
   return false;
+}
+
+/** Validate checklist.json matches spec schema: `{ checks: [{ name, command }] }`. */
+export function isValidChecklistSchema(absPath: string): boolean {
+  try {
+    const raw = fs.readFileSync(absPath, 'utf-8');
+    const parsed = JSON.parse(raw);
+    if (!parsed || !Array.isArray(parsed.checks) || parsed.checks.length === 0) return false;
+    for (const check of parsed.checks) {
+      if (typeof check?.name !== 'string' || typeof check?.command !== 'string') return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**
