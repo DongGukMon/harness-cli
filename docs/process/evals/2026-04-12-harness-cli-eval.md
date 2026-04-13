@@ -53,6 +53,17 @@ All 5 evaluation checks pass. The harness-cli TypeScript implementation is compl
   process group management, phase lifecycle state machine, resume/recovery paths,
   artifact auto-commits, preflight validation, signal handlers, prompt assembly
 
+**Eval gate rev-3 fixes** (applied after second Codex review):
+- Prompt assembler uses English reviewer contract matching spec format (`## Verdict / ## Comments / ## Summary`) instead of Korean variant
+- Phase 1 prompt uses `.harness/<runId>/task.md` file path instead of raw task string
+- Phase 3 prompt uses correct checklist schema (`{checks:[{name,command}]}`) instead of invented schema
+- Phase 5 prompt includes spec + decisions + multi-feedback paths per spec
+- Gate 4 prompt reads spec + plan (was wrongly reading plan + checklist)
+- Gate 7 prompt includes spec + plan + eval report + diff with external-commit split + metadata block
+- `preparePhase` now mutates state in place so caller retains phaseAttemptId/phaseOpenedAt/implRetryBase
+- Signal handler `getChildPid` reads from lock file (was always null)
+- Verify-escalation quit uses `show_escalation` pendingAction type (was incorrectly `show_verify_error`)
+
 **Eval gate rev-2 fixes** (applied after first Codex review):
 - Phase 6 PASS now calls `normalizeArtifactCommit` before setting `evalCommit` (was missing — reviewer P1)
 - Phase 1/3 normalize failure now marks phase as `error` instead of swallowing (was downgrading to warning — reviewer P1)
