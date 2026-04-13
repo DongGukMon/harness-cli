@@ -191,8 +191,8 @@ export async function runGatePhase(
   }
   const prompt = promptResult as string;
 
-  // Step 4: Spawn subprocess
-  const child = spawn('node', [state.codexPath, 'task', '--effort', 'high'], {
+  // Step 4: Spawn subprocess — prompt passed as positional arg (codex companion doesn't read stdin)
+  const child = spawn('node', [state.codexPath, 'task', '--effort', 'high', prompt], {
     stdio: ['pipe', 'pipe', 'pipe'],
     detached: true,
     cwd,
@@ -201,9 +201,6 @@ export async function runGatePhase(
   const childPid = child.pid!;
   const childStartedAt = getProcessStartTime(childPid);
   updateLockChild(harnessDir, childPid, phase, childStartedAt);
-
-  child.stdin.write(prompt);
-  child.stdin.end();
 
   let stdoutChunks: Buffer[] = [];
   let stderrChunks: Buffer[] = [];
