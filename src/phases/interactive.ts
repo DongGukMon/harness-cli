@@ -261,8 +261,17 @@ async function waitForPhaseCompletion(
       usePolling: false,
     });
 
-    watcher.on('add', () => evaluateCompletion());
-    watcher.on('change', () => evaluateCompletion());
+    function onSentinelDetected(): void {
+      if (settled) return;
+      const freshness = checkSentinelFreshness(sentinelPath, attemptId);
+      if (freshness === 'fresh') {
+        // Sentinel confirmed — kill Claude so exit handler triggers evaluation
+        child.kill('SIGTERM');
+      }
+    }
+
+    watcher.on('add', onSentinelDetected);
+    watcher.on('change', onSentinelDetected);
 
     // Child exit handler
     child.on('exit', () => {
