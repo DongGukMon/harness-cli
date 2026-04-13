@@ -203,7 +203,16 @@ export async function runInteractivePhase(
     cwd
   );
 
-  // Step 5: Post-completion process group cleanup
+  // Step 5: Restore terminal state after Claude's inherit mode
+  // Claude's TUI uses raw mode; ensure stdin is back to normal for subsequent prompts.
+  if (process.stdin.isTTY) {
+    try {
+      process.stdin.setRawMode(false);
+    } catch { /* best-effort */ }
+    process.stdin.resume();
+  }
+
+  // Step 6: Post-completion process group cleanup
   if (child.pid !== undefined) {
     const pgid = child.pid;
     if (isProcessGroupAlive(pgid)) {
