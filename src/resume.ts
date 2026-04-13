@@ -76,21 +76,36 @@ async function recoverGeneralState(
     if (existsSync(sentinelPath) && expectedAttemptId) {
       const content = readFileSync(sentinelPath, 'utf-8').trim();
       if (content === expectedAttemptId) {
-        // Fresh sentinel — complete phase inline
-        const completed = completeInteractivePhaseFromFreshSentinel(
-          phase as PhaseNumber,
-          state,
-          cwd
-        );
-        if (completed) {
-          state.phases[phaseKey] = 'completed';
-          state.currentPhase = phase + 1;
+        // Fresh sentinel — attempt inline completion
+        try {
+          const completed = completeInteractivePhaseFromFreshSentinel(
+            phase as PhaseNumber,
+            state,
+            cwd
+          );
+          if (completed) {
+            state.phases[phaseKey] = 'completed';
+            state.currentPhase = phase + 1;
+            writeState(runDir, state);
+          } else {
+            // Artifact validation failed despite fresh sentinel.
+            // This means artifacts are missing/invalid while sentinel is fresh.
+            // Treat as stale sentinel — delete it, leave phase to be respawned.
+            try {
+              unlinkSync(sentinelPath);
+            } catch { /* best-effort */ }
+          }
+        } catch (err) {
+          // normalize_artifact_commit failure during resume: preserve artifacts + sentinel,
+          // mark phase as error so user can inspect + `harness resume` to retry commit.
+          // Critically: do NOT delete sentinel (reopening would erase Phase 1/3 artifacts).
+          process.stderr.write(
+            `Failed to commit Phase ${phase} artifact on resume: ${(err as Error).message}\n` +
+            `Phase left in 'error' state; fix git state and run 'harness resume' to retry.\n`
+          );
+          state.phases[phaseKey] = 'error';
           writeState(runDir, state);
-        } else {
-          // Validation failed — treat as stale
-          try {
-            unlinkSync(sentinelPath);
-          } catch { /* best-effort */ }
+          process.exit(1);
         }
       }
     }

@@ -35,15 +35,19 @@ export function parseVerdict(
   );
   if (verdictHeaderIdx === -1) return null;
 
-  // Find first APPROVE or REJECT token after ## Verdict
+  // Find first line that is exactly APPROVE or REJECT (optionally with trailing punctuation)
+  // after ## Verdict. Must be a standalone token — prose like "Do not approve" won't match.
   let verdict: 'APPROVE' | 'REJECT' | null = null;
   for (let i = verdictHeaderIdx + 1; i < lines.length; i++) {
-    const upper = lines[i].toUpperCase();
-    if (upper.includes('APPROVE')) {
+    const trimmed = lines[i].trim().toUpperCase();
+    // Stop if we hit the next section (e.g. ## Comments) before finding a verdict
+    if (trimmed.startsWith('##')) break;
+    // Match standalone APPROVE or REJECT (allow trailing punctuation like `.` or `!`)
+    if (/^APPROVE\b[\s.!]*$/.test(trimmed)) {
       verdict = 'APPROVE';
       break;
     }
-    if (upper.includes('REJECT')) {
+    if (/^REJECT\b[\s.!]*$/.test(trimmed)) {
       verdict = 'REJECT';
       break;
     }

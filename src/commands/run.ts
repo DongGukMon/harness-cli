@@ -67,81 +67,76 @@ export async function runCommand(task: string, options: RunOptions = {}): Promis
   const runId = generateRunId(task, harnessDir);
   const runDir = join(harnessDir, runId);
 
-  // 7. Create directories
-  mkdirSync(runDir, { recursive: true });
-  mkdirSync(join(cwd, 'docs/specs'), { recursive: true });
-  mkdirSync(join(cwd, 'docs/plans'), { recursive: true });
-  mkdirSync(join(cwd, 'docs/process/evals'), { recursive: true });
+  // 7. Ensure harness parent dir exists so we can acquire the global lock
+  mkdirSync(harnessDir, { recursive: true });
 
-  // 8. .gitignore handling
-  await ensureGitignore(cwd);
-
-  // 9. Capture baseCommit after .gitignore commit
-  const baseCommit = getHead(cwd);
-
-  // 10. Create initial state
-  const state = createInitialState(runId, task, baseCommit, codexPath, options.auto ?? false);
-
-  // 11. Save task.md FIRST — must exist before any preserved-run failure path
-  // so Phase 1 resume/jump can find its required input.
-  try {
-    writeFileSync(join(runDir, 'task.md'), task, 'utf-8');
-  } catch (err) {
-    cleanupFailedInit(runDir, harnessDir, runId, false);
-    process.stderr.write(`Error: failed to write task.md: ${(err as Error).message}\n`);
-    process.exit(1);
-  }
-
-  // 12. Write state.json atomically
-  let stateWritten = false;
-  try {
-    writeState(runDir, state);
-    stateWritten = true;
-  } catch (err) {
-    // Cleanup on pre-state failure
-    cleanupFailedInit(runDir, harnessDir, runId, false);
-    process.stderr.write(`Error: failed to write state.json: ${(err as Error).message}\n`);
-    process.exit(1);
-  }
-
-  // 13. Acquire lock (O_EXCL)
+  // 8. Acquire repo-global lock FIRST — prevents concurrent `harness run`
+  // from racing on the same .harness/<runId>/ directory.
   let lockAcquired = false;
   try {
     acquireLock(harnessDir, runId);
     lockAcquired = true;
   } catch (err) {
-    // State + task.md both written — preserve run
-    process.stderr.write(
-      `Error: failed to acquire lock: ${(err as Error).message}\n` +
-      `Run initialization failed after state was created. Resume with: harness resume ${runId}\n`
-    );
+    process.stderr.write(`Error: failed to acquire lock: ${(err as Error).message}\n`);
     process.exit(1);
   }
 
-  // 14. Update current-run pointer (only after state + lock success)
-  setCurrentRun(harnessDir, runId);
-
-  // 15. Register signal handlers
-  // childPid lookup reads from the lock file (written by phase runners via updateLockChild)
-  registerSignalHandlers({
-    harnessDir,
-    runId,
-    getState: () => state,
-    setState: (s) => Object.assign(state, s),
-    getChildPid: () => readLock(harnessDir)?.childPid ?? null,
-    getCurrentPhaseType: () => {
-      const phase = state.currentPhase;
-      if (phase === 1 || phase === 3 || phase === 5) return 'interactive';
-      return 'automated';
-    },
-    cwd,
-  });
-
-  // 16. Run phase loop
   try {
+    // 9. Create directories
+    mkdirSync(runDir, { recursive: true });
+    mkdirSync(join(cwd, 'docs/specs'), { recursive: true });
+    mkdirSync(join(cwd, 'docs/plans'), { recursive: true });
+    mkdirSync(join(cwd, 'docs/process/evals'), { recursive: true });
+
+    // 10. .gitignore handling
+    await ensureGitignore(cwd);
+
+    // 11. Capture baseCommit after .gitignore commit
+    const baseCommit = getHead(cwd);
+
+    // 12. Create initial state
+    const state = createInitialState(runId, task, baseCommit, codexPath, options.auto ?? false);
+
+    // 13. Save task.md (needed before Phase 1 spawn)
+    try {
+      writeFileSync(join(runDir, 'task.md'), task, 'utf-8');
+    } catch (err) {
+      cleanupFailedInit(runDir, harnessDir, runId, false);
+      process.stderr.write(`Error: failed to write task.md: ${(err as Error).message}\n`);
+      process.exit(1);
+    }
+
+    // 14. Write state.json atomically
+    try {
+      writeState(runDir, state);
+    } catch (err) {
+      cleanupFailedInit(runDir, harnessDir, runId, false);
+      process.stderr.write(`Error: failed to write state.json: ${(err as Error).message}\n`);
+      process.exit(1);
+    }
+
+    // 16. Update current-run pointer
+    setCurrentRun(harnessDir, runId);
+
+    // 17. Register signal handlers
+    registerSignalHandlers({
+      harnessDir,
+      runId,
+      getState: () => state,
+      setState: (s) => Object.assign(state, s),
+      getChildPid: () => readLock(harnessDir)?.childPid ?? null,
+      getCurrentPhaseType: () => {
+        const phase = state.currentPhase;
+        if (phase === 1 || phase === 3 || phase === 5) return 'interactive';
+        return 'automated';
+      },
+      cwd,
+    });
+
+    // 18. Run phase loop
     await runPhaseLoop(state, harnessDir, runDir, cwd);
   } finally {
-    // 17. Release lock on exit
+    // 19. Release lock on exit (guaranteed even on errors)
     if (lockAcquired) {
       releaseLock(harnessDir, runId);
     }
