@@ -101,25 +101,38 @@ No `timeout` option → `execSync` waits indefinitely. If Claude CLI's `--print`
 
 ### 2. Advisor reminder fine-tune
 
-**Current implementation** (`src/ui.ts` + `src/phases/runner.ts:203`):
-- `printAdvisorReminder(phase)` called inside `handleInteractivePhase`, but check the exact line — if it fires after `writeState` + `spawn`, Claude has already painted its full-screen UI and the reminder is unreadable.
+**Current implementation** problem (confirmed by code inspection):
+- `printAdvisorReminder(phase)` is called at `src/phases/runner.ts:203` inside `handleInteractivePhase`, which is BEFORE `runInteractivePhase` is invoked.
+- Actual `spawn('claude', ...)` happens inside `src/phases/interactive.ts:174`, AFTER prompt file preparation and state writes.
+- Result: reminder prints early, then many lines of "state saved" etc. scroll by, and finally Claude takes the terminal — reminder is already off-screen.
 
 **Changes**:
 
-1. **Move the call site** in `src/phases/runner.ts` (or `src/phases/interactive.ts`) to be the LAST action before `spawn('claude', ...)`. A 200–300 ms `setTimeout` / `await new Promise(r => setTimeout(r, 300))` is acceptable to let the text render before Claude takes the terminal.
+1. **Move the reminder call into the spawn path.** Delete the call from `src/phases/runner.ts:203` (or the equivalent line after code search). Add it to `src/phases/interactive.ts:runInteractivePhase`, specifically:
+   - AFTER `preparePhase(...)` returns (state is written, artifacts cleaned)
+   - AFTER the init prompt file is written to disk
+   - IMMEDIATELY BEFORE the `spawn('claude', ...)` line (currently around `src/phases/interactive.ts:174`)
+   - Add `await new Promise(r => setTimeout(r, 300))` after the reminder print so the stderr line has time to render before Claude's UI takes over.
 
-2. **Correct the command text** in `src/ui.ts`. Current `/advisor on` may not match the actual Claude Code slash command. Verify and correct to the canonical invocation — if Claude Code uses `/advisor claude-opus-4-6` or similar, the reminder must match.
-   - Verification step during implementation: run `claude --help` or check the local Claude CLI docs for the exact advisor slash command syntax.
-   - If the exact syntax is unknown and cannot be verified, use the safer generic phrasing: `claude 세션에서 /advisor 를 입력해 설정을 확인하세요.`
+2. **Correct the command text** in `src/ui.ts`. Current `/advisor on` may not match the actual Claude Code slash command. Verify and correct to the canonical invocation.
+   - Verification step during implementation: check the local Claude CLI (run `claude --help` or inspect docs) for the exact advisor slash command syntax.
+   - If the exact syntax cannot be confirmed, use the safer generic phrasing: `claude 세션에서 /advisor 를 입력해 설정을 확인하세요.`
 
-3. **Phase-specific framing**: the reminder currently is one fixed string regardless of phase. Update to mention phase purpose so developer knows why to care:
+3. **Phase-specific framing**: `printAdvisorReminder(phase)` already takes a phase number; expand the text to mention phase purpose:
    - Phase 1: "Brainstorming에서 advisor가 설계 트레이드오프 자문에 유용합니다."
    - Phase 3: "Plan 작성에서 advisor가 태스크 분해 판단에 유용합니다."
    - Phase 5: "구현에서 advisor가 복잡 로직 판단에 유용합니다."
 
 4. **Do not add any file output.** Reminder is stderr-only per [ADR-2].
 
-**Testing**: existing test in `runner.test.ts` already mocks `printAdvisorReminder`. Add one test asserting `printAdvisorReminder` is called **before** the first mocked `runInteractivePhase` invocation for each of Phase 1, 3, 5.
+**Testing** — the authoritative test must prove the reminder prints at the spawn seam, not merely somewhere in the runner:
+
+- Add a new unit test in `tests/phases/interactive.test.ts`:
+  - Mock `printAdvisorReminder` AND `spawn` from `child_process` (via `vi.mock`).
+  - Track call order via `vi.fn().mock.invocationCallOrder`.
+  - Assert: `printAdvisorReminder.mock.invocationCallOrder[0] < spawn.mock.invocationCallOrder[0]`.
+  - Assert: `printAdvisorReminder` is called with the correct phase argument.
+- Additionally, update `tests/phases/runner.test.ts` to remove any assertion that `printAdvisorReminder` is called from `runner.ts` — the call site is moving, so existing tests that verify runner-level invocation must be updated.
 
 ### 3. `harness-verify.sh` resolver consolidation
 
@@ -146,10 +159,13 @@ if (scriptPath === null) {
    - If path is different, adjust.
 
 **Testing**:
-- Unit test for `resolveVerifyScriptPath()` that mocks `existsSync` to simulate:
-  - package-local present, legacy absent → returns package-local
-  - package-local absent, legacy present → returns legacy
+- Unit test for `resolveVerifyScriptPath()` that mocks BOTH `existsSync` and `accessSync` (the resolver gates on executable access via `R_OK | X_OK`, not just existence):
+  - package-local exists AND accessible, legacy irrelevant → returns package-local
+  - package-local exists but NOT accessible (accessSync throws), legacy exists + accessible → returns legacy
+  - package-local absent, legacy exists + accessible → returns legacy
   - both absent → returns null
+  - both present but neither accessible → returns null
+  Alternative to mocking: write temp files with explicit `chmod` 0o755 / 0o644 (non-executable) to drive the four cases without mocks. Either approach is acceptable; pick whichever keeps the test readable.
 - Unit test for `verify.ts` asserting it uses `resolveVerifyScriptPath()` (spy the import).
 
 ### 4. Conformance tests
@@ -232,14 +248,19 @@ expect(new Set(getPreflightItems('ui_only'))).toEqual(
 - Verify path resolution test: `tests/phases/verify.test.ts` gets one new case asserting the resolver is consulted (via spy).
 
 ### Unit tests (modified)
-- `tests/runner.test.ts` — assert `printAdvisorReminder` is called before `runInteractivePhase` for each interactive phase.
+- `tests/phases/runner.test.ts` — remove existing assertions that `printAdvisorReminder` is invoked from the runner (those assertions will be stale after the call moves into `interactive.ts`).
+- `tests/phases/interactive.test.ts` — add a new case asserting the reminder-before-spawn ordering at the actual spawn seam (described in "Advisor reminder fine-tune > Testing" above).
 
 ### Integration
 - No new integration tests. Existing `tests/integration/lifecycle.test.ts` continues to cover the CLI surface end-to-end.
 
 ### Manual smoke test (post-implementation)
-- In a clean temp directory: `git init && git commit --allow-empty -m init`, then run `harness --help`. Should print help without hang.
-- `harness run "test"` should reach Phase 1 in under 10 seconds (preflight should NOT stall). The `claudeAtFile` check must either succeed quickly or time out in 5s and warn.
+- `harness --help` — generic CLI sanity check (no hardened code paths here; just confirms binary is wired).
+- In a clean temp directory: `git init && git commit --allow-empty -m init`, then run `harness run "smoke test" --allow-dirty`. This actually exercises preflight.
+  - Must reach Phase 1 in under 10 seconds (preflight should NOT stall).
+  - The `claudeAtFile` check must either succeed quickly or time out in 5s and print the warning.
+  - After Phase 1 Claude spawns, the advisor reminder line must be the last stderr output immediately preceding Claude's UI takeover.
+  - Immediately Ctrl-C after Claude appears, verify lock + state cleanup via `harness status` and `harness list`.
 
 ---
 
