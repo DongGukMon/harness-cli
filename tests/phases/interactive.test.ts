@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -10,6 +10,56 @@ import {
 } from '../../src/phases/interactive.js';
 import { createInitialState, readState } from '../../src/state.js';
 import type { HarnessState } from '../../src/types.js';
+
+// ─── Module mocks for runInteractivePhase ordering test ─────────────────────
+
+vi.mock('../../src/ui.js', async (importActual) => {
+  const actual = await importActual<typeof import('../../src/ui.js')>();
+  return { ...actual, printAdvisorReminder: vi.fn() };
+});
+
+vi.mock('child_process', async (importActual) => {
+  const actual = await importActual<typeof import('child_process')>();
+  const mockedSpawn = vi.fn(() => {
+    const listeners: Record<string, ((...args: unknown[]) => void)[]> = {};
+    const cp = {
+      pid: 12345,
+      on: (event: string, cb: (...args: unknown[]) => void) => {
+        (listeners[event] ||= []).push(cb);
+        if (event === 'exit') {
+          // exit handler signature: (code: number | null, signal: NodeJS.Signals | null)
+          setImmediate(() => cb(0, null));
+        }
+        return cp;
+      },
+      kill: vi.fn(),
+      stdout: { on: vi.fn() },
+      stderr: { on: vi.fn() },
+      stdin: { end: vi.fn(), write: vi.fn() },
+    };
+    return cp;
+  });
+  return { ...actual, spawn: mockedSpawn };
+});
+
+vi.mock('../../src/lock.js', async (importActual) => {
+  const actual = await importActual<typeof import('../../src/lock.js')>();
+  return { ...actual, updateLockChild: vi.fn(), clearLockChild: vi.fn() };
+});
+
+vi.mock('../../src/process.js', async (importActual) => {
+  const actual = await importActual<typeof import('../../src/process.js')>();
+  return {
+    ...actual,
+    getProcessStartTime: vi.fn(() => Math.floor(Date.now() / 1000)),
+    isProcessGroupAlive: vi.fn(() => false),
+    killProcessGroup: vi.fn().mockResolvedValue(undefined),
+  };
+});
+
+vi.mock('../../src/context/assembler.js', () => ({
+  assembleInteractivePrompt: vi.fn().mockReturnValue('mocked prompt content'),
+}));
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
@@ -524,5 +574,39 @@ describe('validatePhaseArtifacts — Phase 5', () => {
     const state = makeState({ implRetryBase: head });
     const result = validatePhaseArtifacts(5, state, repoDir);
     expect(result).toBe(false);
+  });
+});
+
+// ─── runInteractivePhase: advisor reminder ordering ──────────────────────────
+
+describe('runInteractivePhase — advisor reminder fires before spawn', () => {
+  it('printAdvisorReminder is called before spawn("claude", ...)', async () => {
+    const { spawn } = await import('child_process');
+    const { printAdvisorReminder } = await import('../../src/ui.js');
+    const { runInteractivePhase } = await import('../../src/phases/interactive.js');
+
+    const runDir = makeTmpDir();
+    const harnessDir = makeTmpDir();
+    const repoDir = createTestRepo();
+
+    // Write the sentinel file so phase completion can succeed
+    const state = makeState();
+    // We need phaseAttemptId to be set so we can write the right sentinel content.
+    // preparePhase will assign a new attemptId — write the sentinel after calling runInteractivePhase starts.
+    // Instead: let the phase fail gracefully (no sentinel = failed), we only care about call ordering.
+
+    // Clear any previous call records from other tests
+    vi.mocked(printAdvisorReminder).mockClear();
+    vi.mocked(spawn as ReturnType<typeof vi.fn>).mockClear();
+
+    // Run; it will resolve as 'failed' (no sentinel) — that's fine
+    await runInteractivePhase(1, state, harnessDir, runDir, repoDir);
+
+    const reminderOrder = vi.mocked(printAdvisorReminder).mock.invocationCallOrder[0];
+    const spawnOrder = vi.mocked(spawn as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0];
+
+    expect(reminderOrder).toBeDefined();
+    expect(spawnOrder).toBeDefined();
+    expect(reminderOrder).toBeLessThan(spawnOrder);
   });
 });

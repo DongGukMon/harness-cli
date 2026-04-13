@@ -36,6 +36,7 @@ vi.mock('../../src/ui.js', () => ({
   printError: vi.fn(),
   printSuccess: vi.fn(),
   printInfo: vi.fn(),
+  printAdvisorReminder: vi.fn(),
 }));
 
 vi.mock('../../src/artifact.js', () => ({

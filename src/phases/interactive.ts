@@ -11,6 +11,7 @@ import { updateLockChild, clearLockChild } from '../lock.js';
 import { getHead } from '../git.js';
 import { getProcessStartTime, isProcessGroupAlive, killProcessGroup } from '../process.js';
 import { assembleInteractivePrompt } from '../context/assembler.js';
+import { printAdvisorReminder } from '../ui.js';
 
 export interface InteractiveResult {
   status: 'completed' | 'failed';
@@ -171,6 +172,8 @@ export async function runInteractivePhase(
   fs.writeFileSync(promptFile, prompt, 'utf-8');
 
   // Step 3: Spawn subprocess
+  printAdvisorReminder(phase);
+  await new Promise<void>((resolve) => setTimeout(resolve, 300));
   const child = spawn('claude', ['--model', PHASE_MODELS[phase], '@' + path.resolve(promptFile)], {
     stdio: 'inherit',
     detached: true,
