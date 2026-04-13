@@ -1,14 +1,33 @@
 {
   "name": "harness-cli",
   "version": "0.1.0",
+  "description": "AI agent harness orchestrator — multi-phase brainstorm/spec/plan/implement/verify lifecycle with gate reviews",
   "type": "module",
   "bin": { "harness": "./dist/bin/harness.js" },
+  "files": [
+    "dist",
+    "scripts/harness-verify.sh",
+    "README.md",
+    "README.ko.md"
+  ],
+  "engines": {
+    "node": ">=18.0.0"
+  },
   "scripts": {
     "build": "tsc && node scripts/copy-assets.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "tsc --noEmit"
   },
+  "keywords": [
+    "ai",
+    "agent",
+    "harness",
+    "claude",
+    "codex",
+    "lifecycle"
+  ],
+  "license": "MIT",
   "devDependencies": {
     "typescript": "^5.5.0",
     "vitest": "^2.0.0",

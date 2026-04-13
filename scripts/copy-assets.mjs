@@ -3,7 +3,7 @@
  * Copy non-TS assets (prompt templates, etc.) from src/ to dist/src/
  * after tsc runs. tsc does not handle non-.ts files.
  */
-import { cpSync, existsSync, mkdirSync } from 'fs';
+import { cpSync, chmodSync, existsSync, mkdirSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 
@@ -11,7 +11,8 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = join(__dirname, '..');
 
 const assets = [
-  { from: 'src/context/prompts', to: 'dist/src/context/prompts' },
+  { from: 'src/context/prompts', to: 'dist/src/context/prompts', recursive: true },
+  { from: 'scripts/harness-verify.sh', to: 'dist/scripts/harness-verify.sh', recursive: false, executable: true },
 ];
 
 for (const asset of assets) {
@@ -22,6 +23,9 @@ for (const asset of assets) {
     continue;
   }
   mkdirSync(dirname(dst), { recursive: true });
-  cpSync(src, dst, { recursive: true });
+  cpSync(src, dst, { recursive: asset.recursive });
+  if (asset.executable) {
+    chmodSync(dst, 0o755);
+  }
   console.log(`[copy-assets] copied ${asset.from} -> ${asset.to}`);
 }
