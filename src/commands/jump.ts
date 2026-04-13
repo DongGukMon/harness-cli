@@ -66,7 +66,7 @@ export async function jumpCommand(phaseArg: string, options: JumpOptions = {}): 
     // 5b. Required-input validation BEFORE state mutation (spec: harness jump preflight)
     validateJumpRequiredInputs(N, state, harnessDir, runId, cwd);
 
-    // 6. Ancestry validation
+    // 6. Ancestry validation (spec: jump git anchor validation)
     if (state.specCommit && N > 1 && !isAncestor(state.specCommit, 'HEAD', cwd)) {
       process.stderr.write(
         `Error: Spec commit is no longer in git history. Use 'harness jump 1' to re-run brainstorming.\n`
@@ -77,8 +77,30 @@ export async function jumpCommand(phaseArg: string, options: JumpOptions = {}): 
       process.stderr.write(`Error: Plan commit is no longer in git history.\n`);
       process.exit(1);
     }
-    if (state.implCommit && N > 5 && !isAncestor(state.implCommit, 'HEAD', cwd)) {
-      process.stderr.write(`Error: Implementation commit is no longer in git history.\n`);
+    // Phase 5 completed: implCommit != null → implCommit ancestry.
+    // Phase 5 skip → implCommit == null but baseCommit must still be ancestor (protects Phase 7 diff).
+    if (state.phases['5'] === 'completed' && N > 5) {
+      if (state.implCommit !== null) {
+        if (!isAncestor(state.implCommit, 'HEAD', cwd)) {
+          process.stderr.write(
+            `Error: Committed implementation work may have been lost (HEAD has diverged from implCommit). Manual recovery required.\n`
+          );
+          process.exit(1);
+        }
+      } else {
+        // Phase 5 was skipped — enforce baseCommit ancestry
+        if (!isAncestor(state.baseCommit, 'HEAD', cwd)) {
+          process.stderr.write(
+            `Error: HEAD has diverged from baseCommit. Harness diff (Phase 7) will be invalid. Use 'harness jump 1' to restart from base.\n`
+          );
+          process.exit(1);
+        }
+      }
+    }
+    if (state.evalCommit && N > 6 && !isAncestor(state.evalCommit, 'HEAD', cwd)) {
+      process.stderr.write(
+        `Error: Eval report commit is no longer in git history (HEAD has diverged from evalCommit). Use 'harness jump 6' to re-run verification.\n`
+      );
       process.exit(1);
     }
 

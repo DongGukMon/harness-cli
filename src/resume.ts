@@ -51,6 +51,13 @@ export async function resumeRun(
   // Step 6: General recovery — check for fresh sentinel / verify-result BEFORE re-entering loop
   await recoverGeneralState(state, harnessDir, runDir, cwd);
 
+  // recoverGeneralState may have set a new pendingAction (e.g., Verify ERROR → show_verify_error).
+  // Replay it before entering the phase loop.
+  if (state.pendingAction !== null) {
+    await replayPendingAction(state, harnessDir, runDir, cwd);
+    return;
+  }
+
   await runPhaseLoop(state, harnessDir, runDir, cwd);
 }
 
@@ -210,8 +217,18 @@ async function applyStoredVerifyResult(
       writeState(runDir, state);
       try { unlinkSync(evalReportPath); } catch { /* best-effort */ }
     }
+  } else {
+    // ERROR (exitCode != 0 && !hasSummary, OR exitCode==0 but eval report invalid):
+    // Set Phase 6 to error + show_verify_error pendingAction so UI re-displays on loop re-entry
+    state.phases['6'] = 'error';
+    state.pendingAction = {
+      type: 'show_verify_error',
+      targetPhase: 6,
+      sourcePhase: null,
+      feedbackPaths: [],
+    };
+    writeState(runDir, state);
   }
-  // ERROR (exitCode != 0 && !hasSummary): leave state as-is so runner re-displays ERROR UI
 }
 
 function validateCompletedArtifacts(state: HarnessState, cwd: string): void {
@@ -623,13 +640,16 @@ async function replayPendingAction(
       break;
     }
     case 'show_escalation': {
-      // Re-display the paused escalation menu directly by invoking the runner's handler.
-      // Determine gate vs verify escalation from sourcePhase.
+      // Route by pauseReason (authoritative): gate-escalation vs verify-escalation.
+      // show_escalation.targetPhase is the rejected gate (2/4/7) for gate escalation,
+      // or Phase 6 for verify escalation.
+      const wasVerifyEscalation = state.pauseReason === 'verify-escalation';
+
       state.status = 'in_progress';
       state.pendingAction = null;
       writeState(runDir, state);
 
-      // Load feedback content to show to user
+      // Load feedback content for gate handler
       let comments = '';
       if (action.feedbackPaths.length > 0) {
         try {
@@ -637,16 +657,14 @@ async function replayPendingAction(
         } catch { /* best-effort */ }
       }
 
-      if (action.sourcePhase === 5 || action.targetPhase === 6) {
-        // Verify-escalation
+      if (wasVerifyEscalation) {
         const feedbackPath = action.feedbackPaths[0] ?? join(runDir, 'verify-feedback.md');
         await handleVerifyEscalation(feedbackPath, state, runDir, cwd);
       } else {
-        // Gate-escalation: action.sourcePhase is the rejected gate phase (2/4/7)
-        const gatePhase = (action.sourcePhase ?? action.targetPhase) as 2 | 4 | 7;
+        // Gate escalation: targetPhase is the rejected gate (2/4/7)
+        const gatePhase = action.targetPhase as 2 | 4 | 7;
         await handleGateEscalation(gatePhase, comments, state, runDir, cwd);
       }
-      // handleXxxEscalation writes state + returns. If user chose Quit, state is paused again.
       if ((state.status as string) === 'paused') return;
       await runPhaseLoop(state, harnessDir, runDir, cwd);
       return;
