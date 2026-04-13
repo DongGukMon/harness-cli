@@ -4,6 +4,12 @@ export const PHASE_MODELS: Record<number, string> = {
   5: 'claude-sonnet-4-6',
 };
 
+export const PHASE_EFFORTS: Record<number, string> = {
+  1: 'max',
+  3: 'high',
+  5: 'high',
+};
+
 export const GATE_TIMEOUT_MS = 120_000;
 export const VERIFY_TIMEOUT_MS = 300_000;
 export const SIGTERM_WAIT_MS = 5_000;

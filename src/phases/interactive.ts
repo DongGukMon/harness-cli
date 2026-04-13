@@ -5,7 +5,7 @@ import { spawn } from 'child_process';
 import { execSync } from 'child_process';
 import chokidar from 'chokidar';
 import type { HarnessState, InteractivePhase, Artifacts } from '../types.js';
-import { PHASE_MODELS, PHASE_ARTIFACT_FILES, SIGTERM_WAIT_MS } from '../config.js';
+import { PHASE_MODELS, PHASE_EFFORTS, PHASE_ARTIFACT_FILES, SIGTERM_WAIT_MS } from '../config.js';
 import { writeState } from '../state.js';
 import { updateLockChild, clearLockChild } from '../lock.js';
 import { getHead } from '../git.js';
@@ -174,7 +174,12 @@ export async function runInteractivePhase(
   // Step 3: Spawn subprocess
   printAdvisorReminder(phase);
   await new Promise<void>((resolve) => setTimeout(resolve, 300));
-  const child = spawn('claude', ['--model', PHASE_MODELS[phase], '@' + path.resolve(promptFile)], {
+  const child = spawn('claude', [
+    '--dangerously-skip-permissions',
+    '--model', PHASE_MODELS[phase],
+    '--effort', PHASE_EFFORTS[phase],
+    '@' + path.resolve(promptFile),
+  ], {
     stdio: 'inherit',
     detached: true,
     cwd,
