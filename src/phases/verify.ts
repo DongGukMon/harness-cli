@@ -96,15 +96,19 @@ export async function runVerifyPhase(
   // Step 2: Run preconditions while phase is still pending
   runPhase6Preconditions(state.artifacts.evalReport, state.runId, cwd);
 
-  // Step 3: Advance phase to in_progress
-  state.phases['6'] = 'in_progress';
-  writeState(runDir, state);
-
-  // Step 4: Spawn subprocess
+  // Step 3: Resolve verify script path BEFORE advancing phase state.
+  // If the script is missing, fail fast while the phase is still pending —
+  // avoids leaving Phase 6 marked in_progress after an unrecoverable resolver miss.
   const scriptPath = resolveVerifyScriptPath();
   if (scriptPath === null) {
     throw new Error('harness-verify.sh not found. Cannot run verification.');
   }
+
+  // Step 4: Advance phase to in_progress (script path confirmed)
+  state.phases['6'] = 'in_progress';
+  writeState(runDir, state);
+
+  // Step 5: Spawn subprocess
   const child = spawn(
     scriptPath,
     [state.artifacts.checklist, state.artifacts.evalReport],
