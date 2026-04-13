@@ -3,6 +3,7 @@ import path from 'path';
 import type { HarnessState, PendingAction, PhaseNumber, InteractivePhase, GatePhase } from '../types.js';
 import {
   GATE_RETRY_LIMIT,
+  GATE_TIMEOUT_MS,
   VERIFY_RETRY_LIMIT,
   TERMINAL_PHASE,
   PHASE_ARTIFACT_FILES,
@@ -259,6 +260,7 @@ async function handleGatePhase(
   writeState(runDir, state);
 
   void checkGateSidecars; // imported for potential direct use elsewhere
+  printInfo(`Codex 리뷰 진행 중... (최대 ${Math.round(GATE_TIMEOUT_MS / 1000)}초 소요)`);
   const result = await runGatePhase(phase, state, harnessDir, runDir, cwd);
 
   if (result.type === 'verdict') {
