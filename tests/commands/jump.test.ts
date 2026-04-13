@@ -31,6 +31,15 @@ function setupRun(repo: { path: string }, options: Partial<Record<string, unknow
   writeState(runDir, state);
   setCurrentRun(harnessDir, runId);
 
+  // Create required input artifacts so jump preflight passes for any phase
+  writeFileSync(join(runDir, 'task.md'), 'test task');
+  mkdirSync(join(repo.path, 'docs/specs'), { recursive: true });
+  mkdirSync(join(repo.path, 'docs/plans'), { recursive: true });
+  mkdirSync(join(repo.path, 'docs/process/evals'), { recursive: true });
+  writeFileSync(join(repo.path, state.artifacts.spec), '# spec');
+  writeFileSync(join(repo.path, state.artifacts.plan), '# plan');
+  writeFileSync(join(repo.path, state.artifacts.evalReport), '# eval\n## Summary\nok\n');
+
   return { harnessDir, runId, runDir, state };
 }
 

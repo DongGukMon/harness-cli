@@ -43,10 +43,128 @@ export async function resumeRun(
     process.exit(1);
   }
 
-  // Step 6: General recovery — re-enter runPhaseLoop
-  // runPhaseLoop inspects state.currentPhase and state.phases[N] to decide what to do
-  // For sentinel-based recovery, the phase runners themselves check freshness
+  // Step 6: General recovery — check for fresh sentinel / verify-result BEFORE re-entering loop
+  await recoverGeneralState(state, harnessDir, runDir, cwd);
+
   await runPhaseLoop(state, harnessDir, runDir, cwd);
+}
+
+/**
+ * Handle generic crash recovery for phases without pendingAction:
+ * - Interactive in_progress/failed + fresh sentinel → complete inline (no respawn)
+ * - Phase 6 in_progress + verify-result.json present → apply stored result
+ */
+async function recoverGeneralState(
+  state: HarnessState,
+  harnessDir: string,
+  runDir: string,
+  cwd: string
+): Promise<void> {
+  void harnessDir;
+  const phase = state.currentPhase;
+  const phaseKey = String(phase);
+  const phaseStatus = state.phases[phaseKey];
+
+  // Interactive phase with fresh sentinel → complete inline
+  if (
+    (phase === 1 || phase === 3 || phase === 5) &&
+    (phaseStatus === 'in_progress' || phaseStatus === 'failed')
+  ) {
+    const sentinelPath = join(runDir, `phase-${phase}.done`);
+    const expectedAttemptId = state.phaseAttemptId[phaseKey];
+
+    if (existsSync(sentinelPath) && expectedAttemptId) {
+      const content = readFileSync(sentinelPath, 'utf-8').trim();
+      if (content === expectedAttemptId) {
+        // Fresh sentinel — complete phase inline
+        const completed = completeInteractivePhaseFromFreshSentinel(
+          phase as PhaseNumber,
+          state,
+          cwd
+        );
+        if (completed) {
+          state.phases[phaseKey] = 'completed';
+          state.currentPhase = phase + 1;
+          writeState(runDir, state);
+        } else {
+          // Validation failed — treat as stale
+          try {
+            unlinkSync(sentinelPath);
+          } catch { /* best-effort */ }
+        }
+      }
+    }
+  }
+
+  // Phase 6 in_progress + verify-result.json already written → apply stored result
+  // This handles the crash window: verify ran, sidecar written, but state not yet advanced.
+  if (phase === 6 && phaseStatus === 'in_progress') {
+    const result = readVerifyResult(runDir);
+    if (result !== null) {
+      await applyStoredVerifyResult(result, state, runDir, cwd);
+    }
+  }
+}
+
+/**
+ * Apply a stored verify-result.json outcome without re-running verify.
+ * Handles the resume recovery matrix from the spec.
+ */
+async function applyStoredVerifyResult(
+  result: { exitCode: number; hasSummary: boolean; timestamp: number },
+  state: HarnessState,
+  runDir: string,
+  cwd: string
+): Promise<void> {
+  const evalReportPath = join(cwd, state.artifacts.evalReport);
+  const { normalizeArtifactCommit: commit } = await import('./artifact.js');
+
+  if (result.exitCode === 0 && isEvalReportValid(evalReportPath)) {
+    // PASS: commit the eval report (normalize_artifact_commit), set anchors, advance
+    try {
+      commit(state.artifacts.evalReport, `harness[${state.runId}]: Phase 6 — eval report`, cwd);
+    } catch {
+      // Commit failed — leave as error for runner to handle
+      state.phases['6'] = 'error';
+      writeState(runDir, state);
+      return;
+    }
+    try {
+      const head = getHead(cwd);
+      state.evalCommit = head;
+      state.verifiedAtHead = head;
+    } catch { /* leave as-is */ }
+    state.verifyRetries = 0;
+    state.phases['6'] = 'completed';
+    state.currentPhase = 7;
+    writeState(runDir, state);
+    // Delete sidecars AFTER state advance
+    try { unlinkSync(join(runDir, 'verify-result.json')); } catch { /* best-effort */ }
+    try { unlinkSync(join(runDir, 'verify-feedback.md')); } catch { /* best-effort */ }
+  } else if (result.exitCode !== 0 && result.hasSummary) {
+    // FAIL: increment verifyRetries, save feedback, reopen Phase 5
+    state.verifyRetries += 1;
+    const feedbackPath = join(runDir, 'verify-feedback.md');
+    if (!existsSync(feedbackPath) && existsSync(evalReportPath)) {
+      try {
+        const content = readFileSync(evalReportPath, 'utf-8');
+        const { writeFileSync } = await import('fs');
+        writeFileSync(feedbackPath, content);
+      } catch { /* best-effort */ }
+    }
+    state.pendingAction = {
+      type: 'reopen_phase',
+      targetPhase: 5,
+      sourcePhase: 6,
+      feedbackPaths: [feedbackPath],
+    };
+    state.phases['5'] = 'pending';
+    state.phases['6'] = 'failed';
+    state.currentPhase = 5;
+    writeState(runDir, state);
+    try { unlinkSync(evalReportPath); } catch { /* best-effort */ }
+  }
+  // ERROR (exitCode != 0 && !hasSummary): leave state as-is so runner re-displays ERROR UI
 }
 
 function validateCompletedArtifacts(state: HarnessState, cwd: string): void {

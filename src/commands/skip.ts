@@ -14,10 +14,15 @@ export interface SkipOptions {
   root?: string;
 }
 
+/**
+ * Return the preflight type for executing the given phase.
+ * Phase 7 executes the Codex eval gate subprocess — use 'gate' preflight.
+ * The 'terminal' type is only for cases where no subprocess will spawn
+ * (e.g. skipping Phase 7 itself — run completes after skip, no Phase 8).
+ */
 function phaseType(phase: number): PhaseType {
   if (phase === 1 || phase === 3 || phase === 5) return 'interactive';
-  if (phase === 2 || phase === 4) return 'gate';
-  if (phase === 7) return 'terminal';
+  if (phase === 2 || phase === 4 || phase === 7) return 'gate';
   if (phase === 6) return 'verify';
   return 'ui_only';
 }
@@ -62,12 +67,10 @@ export async function skipCommand(options: SkipOptions = {}): Promise<void> {
     // 5. Validate required inputs for current phase
     validateRequiredInputs(phase, state, cwd);
 
-    // 6. Determine next phase type and run its preflight
-    // After skip, next phase is phase+1
-    const nextPhaseNum = phase + 1;
-    const nextType = phaseType(nextPhaseNum > 7 ? 7 : nextPhaseNum);
-    // If skipping Phase 7, next is terminal (no subprocess)
-    const preflightType = phase === 7 ? 'terminal' : nextType;
+    // 6. Determine preflight type based on what will execute next:
+    //  - Skipping Phase 7 → run terminates, terminal preflight only
+    //  - Skipping Phase N (1-6) → Phase N+1 will execute → use that phase's preflight type
+    const preflightType: PhaseType = phase === 7 ? 'terminal' : phaseType(phase + 1);
     runPreflight(getPreflightItems(preflightType), cwd);
 
     // 7. Write pendingAction = skip_phase atomically BEFORE side effects

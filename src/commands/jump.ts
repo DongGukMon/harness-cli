@@ -1,5 +1,5 @@
 import { execSync } from 'child_process';
-import { unlinkSync } from 'fs';
+import { existsSync, unlinkSync } from 'fs';
 import { join } from 'path';
 import { detectExternalCommits, getGitRoot, isAncestor } from '../git.js';
 import { acquireLock, releaseLock } from '../lock.js';
@@ -63,6 +63,9 @@ export async function jumpCommand(phaseArg: string, options: JumpOptions = {}): 
     const pt = phaseType(N);
     runPreflight(getPreflightItems(pt), cwd);
 
+    // 5b. Required-input validation BEFORE state mutation (spec: harness jump preflight)
+    validateJumpRequiredInputs(N, state, harnessDir, runId, cwd);
+
     // 6. Ancestry validation
     if (state.specCommit && N > 1 && !isAncestor(state.specCommit, 'HEAD', cwd)) {
       process.stderr.write(
@@ -107,6 +110,41 @@ export async function jumpCommand(phaseArg: string, options: JumpOptions = {}): 
   } finally {
     releaseLock(harnessDir, runId);
   }
+}
+
+/**
+ * Validate that the target phase's required input files exist before jumping.
+ * Per spec "harness jump" preflight: missing required input → error with guidance.
+ */
+function validateJumpRequiredInputs(
+  N: PhaseNumber,
+  state: HarnessState,
+  harnessDir: string,
+  runId: string,
+  cwd: string
+): void {
+  const checkFile = (relPath: string, label: string, hint: string) => {
+    const abs = join(cwd, relPath);
+    if (!existsSync(abs)) {
+      process.stderr.write(`Error: Phase ${N} requires ${label} (${relPath}). ${hint}\n`);
+      process.exit(1);
+    }
+  };
+  // Phase 1 requires task.md
+  if (N === 1) {
+    const taskMd = join(harnessDir, runId, 'task.md');
+    if (!existsSync(taskMd)) {
+      process.stderr.write(
+        `Error: task.md is missing — start a new run with 'harness run "task description"'.\n`
+      );
+      process.exit(1);
+    }
+    return;
+  }
+  // Phase 2-7 need earlier phase outputs
+  if (N >= 2) checkFile(state.artifacts.spec, 'spec', "Run 'harness jump 1' first.");
+  if (N >= 4) checkFile(state.artifacts.plan, 'plan', "Run 'harness jump 3' first.");
+  if (N === 7) checkFile(state.artifacts.evalReport, 'eval report', "Run 'harness jump 6' first.");
 }
 
 function applyJumpReset(state: HarnessState, N: PhaseNumber): void {
