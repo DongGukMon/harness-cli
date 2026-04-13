@@ -4,7 +4,7 @@
   "type": "module",
   "bin": { "harness": "./dist/bin/harness.js" },
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && node scripts/copy-assets.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "tsc --noEmit"
