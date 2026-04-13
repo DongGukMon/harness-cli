@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { PHASE_MODELS } from '../../src/config.js';
+import { PHASE_MODELS, PHASE_EFFORTS } from '../../src/config.js';
 
 describe('PHASE_MODELS conformance', () => {
   it('Phase 1 uses claude-opus-4-6', () => {
@@ -23,5 +23,23 @@ describe('PHASE_MODELS conformance', () => {
 
   it('defines exactly three entries (for phases 1, 3, 5)', () => {
     expect(Object.keys(PHASE_MODELS).sort()).toEqual(['1', '3', '5']);
+  });
+});
+
+describe('PHASE_EFFORTS conformance', () => {
+  it('Phase 1 uses max effort', () => {
+    expect(PHASE_EFFORTS[1]).toBe('max');
+  });
+
+  it('Phase 3 uses high effort', () => {
+    expect(PHASE_EFFORTS[3]).toBe('high');
+  });
+
+  it('Phase 5 uses high effort', () => {
+    expect(PHASE_EFFORTS[5]).toBe('high');
+  });
+
+  it('defines exactly three entries (for phases 1, 3, 5)', () => {
+    expect(Object.keys(PHASE_EFFORTS).sort()).toEqual(['1', '3', '5']);
   });
 });

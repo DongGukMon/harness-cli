@@ -608,5 +608,28 @@ describe('runInteractivePhase — advisor reminder fires before spawn', () => {
     expect(reminderOrder).toBeDefined();
     expect(spawnOrder).toBeDefined();
     expect(reminderOrder).toBeLessThan(spawnOrder);
+    expect(vi.mocked(printAdvisorReminder)).toHaveBeenCalledWith(1);
+  });
+
+  it('spawn args include --dangerously-skip-permissions and --effort', async () => {
+    const { spawn } = await import('child_process');
+    const { runInteractivePhase } = await import('../../src/phases/interactive.js');
+
+    const runDir = makeTmpDir();
+    const harnessDir = makeTmpDir();
+    const repoDir = createTestRepo();
+    const state = makeState();
+
+    vi.mocked(spawn as ReturnType<typeof vi.fn>).mockClear();
+
+    await runInteractivePhase(1, state, harnessDir, runDir, repoDir);
+
+    const spawnCall = vi.mocked(spawn as ReturnType<typeof vi.fn>).mock.calls[0];
+    const args: string[] = spawnCall[1];
+
+    expect(args).toContain('--dangerously-skip-permissions');
+    expect(args).toContain('--effort');
+    const effortIdx = args.indexOf('--effort');
+    expect(args[effortIdx + 1]).toBe('max');
   });
 });
