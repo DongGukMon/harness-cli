@@ -63,38 +63,38 @@
 
  RUN  v2.1.9 /Users/daniel/Desktop/projects/harness/harness-cli
 
- ✓ tests/context/assembler.test.ts (9 tests) 11ms
- ✓ tests/phases/gate.test.ts (19 tests) 14ms
- ✓ tests/phases/verify.test.ts (11 tests) 12ms
- ✓ tests/phases/runner.test.ts (24 tests) 69ms
- ✓ tests/preflight.test.ts (19 tests | 1 skipped) 163ms
- ✓ tests/state.test.ts (6 tests) 50ms
- ✓ tests/lock.test.ts (20 tests) 319ms
- ✓ tests/signal.test.ts (11 tests) 370ms
- ✓ tests/root.test.ts (10 tests) 198ms
- ✓ tests/process.test.ts (6 tests) 37ms
+ ✓ tests/context/assembler.test.ts (9 tests) 8ms
+ ✓ tests/phases/gate.test.ts (19 tests) 12ms
+ ✓ tests/phases/verify.test.ts (12 tests) 18ms
+ ✓ tests/phases/runner.test.ts (24 tests) 64ms
+ ✓ tests/preflight.test.ts (24 tests | 1 skipped) 174ms
+ ✓ tests/state.test.ts (6 tests) 58ms
+ ✓ tests/lock.test.ts (20 tests) 343ms
+ ✓ tests/signal.test.ts (11 tests) 400ms
+ ✓ tests/root.test.ts (10 tests) 180ms
+ ✓ tests/process.test.ts (6 tests) 41ms
  ✓ tests/conformance/phase-models.test.ts (5 tests) 2ms
- ✓ tests/commands/status-list.test.ts (7 tests) 702ms
- ✓ tests/resume.test.ts (6 tests) 1410ms
- ✓ tests/commands/resume-cmd.test.ts (6 tests) 862ms
- ✓ tests/commands/jump.test.ts (8 tests) 1440ms
- ✓ tests/commands/skip.test.ts (6 tests) 1371ms
-   ✓ skipCommand > Phase 5 skip blocked when impl commits exist 337ms
-   ✓ skipCommand > Phase 6 skip generates synthetic eval report 405ms
- ✓ tests/integration/lifecycle.test.ts (8 tests) 1155ms
- ✓ tests/git.test.ts (16 tests) 1441ms
- ✓ tests/phases/interactive.test.ts (32 tests) 1635ms
-   ✓ runInteractivePhase — advisor reminder fires before spawn > printAdvisorReminder is called before spawn("claude", ...) 456ms
- ✓ tests/commands/run.test.ts (10 tests) 1893ms
-   ✓ runCommand > creates run directory with state.json + task.md 344ms
-   ✓ runCommand > creates required directories 341ms
- ✓ tests/artifact.test.ts (12 tests) 2198ms
-   ✓ normalizeArtifactCommit > creates commit for new untracked file 360ms
+ ✓ tests/commands/status-list.test.ts (7 tests) 701ms
+ ✓ tests/commands/jump.test.ts (8 tests) 1378ms
+ ✓ tests/commands/resume-cmd.test.ts (6 tests) 833ms
+ ✓ tests/resume.test.ts (6 tests) 1403ms
+ ✓ tests/commands/skip.test.ts (6 tests) 1319ms
+   ✓ skipCommand > Phase 5 skip blocked when impl commits exist 349ms
+   ✓ skipCommand > Phase 6 skip generates synthetic eval report 380ms
+ ✓ tests/integration/lifecycle.test.ts (8 tests) 1103ms
+ ✓ tests/phases/interactive.test.ts (32 tests) 1546ms
+   ✓ runInteractivePhase — advisor reminder fires before spawn > printAdvisorReminder is called before spawn("claude", ...) 430ms
+ ✓ tests/git.test.ts (16 tests) 1405ms
+ ✓ tests/commands/run.test.ts (10 tests) 1814ms
+   ✓ runCommand > creates run directory with state.json + task.md 330ms
+   ✓ runCommand > creates required directories 323ms
+ ✓ tests/artifact.test.ts (12 tests) 2105ms
+   ✓ normalizeArtifactCommit > creates commit for new untracked file 377ms
 
  Test Files  21 passed (21)
-      Tests  250 passed | 1 skipped (251)
-   Start at  18:43:26
-   Duration  2.54s (transform 1.14s, setup 0ms, collect 1.80s, tests 15.35s, environment 2ms, prepare 1.10s)
+      Tests  256 passed | 1 skipped (257)
+   Start at  18:47:53
+   Duration  2.45s (transform 1.16s, setup 0ms, collect 1.82s, tests 14.91s, environment 2ms, prepare 999ms)
 ```
 
 </details>
