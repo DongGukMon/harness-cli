@@ -410,7 +410,7 @@ git commit -m "feat(interactive): move advisor reminder to spawn seam with 300ms
 - Modify: `tests/preflight.test.ts` (add resolver cases)
 - Modify: `tests/phases/verify.test.ts` (add spy assertion)
 
-No source changes — the source consolidation is already complete (confirmed by spec and by code inspection).
+**Source change scope**: a small intentional refactor — adding the optional `packageLocalRoot` parameter to `resolveVerifyScriptPath()` (Step 1 below). This is a non-breaking test seam, not behavior change. The spec's "consolidation already complete" framing covered the call-site unification; this plan adds one optional argument to make the resolver deterministically testable. Existing zero-arg callers continue to work.
 
 - [ ] **Step 1: Refactor `resolveVerifyScriptPath` for testability (small)**
 
@@ -799,8 +799,12 @@ rm -rf "$TMP"
       "command": "! grep -nE \"'\\.claude/scripts'|\\\"\\.claude/scripts\\\"\" src/phases/verify.ts" },
     { "name": "dist/scripts/harness-verify.sh exists and is executable",
       "command": "test -x dist/scripts/harness-verify.sh" },
-    { "name": "Preflight uses spawnSync with SIGKILL killSignal (proves hang fix is in source)",
-      "command": "grep -nE \"spawnSync\\(.*claudeAtFile|killSignal:\\s*'SIGKILL'\" src/preflight.ts" },
+    { "name": "Preflight imports spawnSync from child_process",
+      "command": "grep -qE \"^import \\{[^}]*\\bspawnSync\\b[^}]*\\}\\s+from\\s+'child_process'\" src/preflight.ts" },
+    { "name": "Preflight uses killSignal: 'SIGKILL' for the @file probe",
+      "command": "grep -qE \"killSignal:\\s*'SIGKILL'\" src/preflight.ts" },
+    { "name": "Preflight no longer uses execSync for claudeAtFile (proves hang fix in source)",
+      "command": "! awk '/case .claudeAtFile.:/,/return;/' src/preflight.ts | grep -q 'execSync('" },
     { "name": "Advisor reminder is invoked from interactive.ts spawn seam (not runner.ts)",
       "command": "grep -q 'printAdvisorReminder' src/phases/interactive.ts && ! grep -q 'printAdvisorReminder' src/phases/runner.ts" }
   ]
