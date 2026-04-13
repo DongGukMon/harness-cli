@@ -38,9 +38,11 @@ Additionally, the retrospective (`docs/process/reports/2026-04-13-harness-sessio
 - Current bug: `src/phases/verify.ts` hardcodes `path.join(os.homedir(), '.claude', 'scripts', 'harness-verify.sh')` even though `src/preflight.ts` already has `resolveVerifyScriptPath()` with the correct two-tier lookup.
 - Consolidation: extract `resolveVerifyScriptPath()` to a shared module or export from `preflight.ts` so `verify.ts` imports it. Single source of truth.
 
-**[ADR-4] Conformance tests cover three categories: artifact paths, `PHASE_MODELS`, and preflight item sets per phase type.**
-- These are the three places where subagent drift (as observed in retrospective Case 3) or future refactor drift is most likely to produce silent bugs.
-- Test format: read spec-defined constants from code, compare against canonical values hard-coded in the test (duplicated source of truth in test = intentional). When spec changes, both locations update together.
+**[ADR-4] Conformance test covers one new category: `PHASE_MODELS` mapping.**
+- Artifact paths are already covered by `tests/state.test.ts` exact-string assertions.
+- Preflight item sets per phase type are already covered by `tests/preflight.test.ts`.
+- `PHASE_MODELS` is the only spec-critical constants table lacking an exact-value assertion; adding it closes the subagent-drift class of bugs observed in retrospective Case 3.
+- Test format: read `PHASE_MODELS` from `src/config.ts`, compare against canonical values hard-coded in the test (duplicated source of truth in test = intentional). When spec changes, both locations update together.
 
 **[ADR-5] This work explicitly excludes npm publish.**
 - User directive: "지금 npm publish는 고려하지마"
@@ -107,7 +109,7 @@ No `timeout` option → `execSync` waits indefinitely. If Claude CLI's `--print`
 
 **Rationale**: 5 seconds is generous for a weak-signal environment probe. Any timeout here means either the installed Claude version has a bug or an environment is misbehaving — neither warrants blocking the entire run, because Phase 1/3/5 failure paths already handle runtime `@file` misbehavior.
 
-**Testing**: unit test with a mocked `execSync` that throws a timeout-shaped error, assert the function returns normally and writes to stderr.
+**Testing**: unit test that mocks `spawnSync` (via top-level `vi.mock('child_process', ...)`) to return `{ error: Object.assign(new Error('timed out'), { code: 'ETIMEDOUT' }), status: null, signal: 'SIGKILL' }`. Assert the check returns normally and writes the warning to stderr. See the full test specification under "Testing strategy > Unit tests (new)".
 
 ### 2. Advisor reminder fine-tune
 
@@ -166,18 +168,7 @@ No `timeout` option → `execSync` waits indefinitely. If Claude CLI's `--print`
 
 ### 4. Conformance tests
 
-Three new test files. Each test compares a code-level constant against a hard-coded canonical value defined inline. The intent is that if spec or code drifts, the test must be updated — making the drift visible in review.
-
-**`tests/conformance/artifacts.test.ts`**
-
-Imports `createInitialState` from `src/state.ts`. Constructs a state with `runId = 'test-run'` and asserts:
-```typescript
-expect(state.artifacts.spec).toBe('docs/specs/test-run-design.md');
-expect(state.artifacts.plan).toBe('docs/plans/test-run.md');
-expect(state.artifacts.decisionLog).toBe('.harness/test-run/decisions.md');
-expect(state.artifacts.checklist).toBe('.harness/test-run/checklist.json');
-expect(state.artifacts.evalReport).toBe('docs/process/evals/test-run-eval.md');
-```
+One new test file. The test compares a code-level constant against hard-coded canonical values defined inline. If spec or code drifts, the test must be updated — making the drift visible in review.
 
 **`tests/conformance/phase-models.test.ts`**
 
@@ -203,9 +194,8 @@ Additionally asserts no keys for gate (2, 4, 7) or verify (6) phases — these s
 - (no change required for `src/phases/verify.ts` — consolidation already complete in tree)
 
 ### Create
-- `tests/conformance/artifacts.test.ts`
 - `tests/conformance/phase-models.test.ts`
-- (preflight items already covered by `tests/preflight.test.ts` — no new conformance file needed)
+- (artifact paths already covered by `tests/state.test.ts`; preflight items already covered by `tests/preflight.test.ts` — no new files for those)
 
 ### No change
 - `scripts/copy-assets.mjs` (already correct)
@@ -251,7 +241,7 @@ Additionally asserts no keys for gate (2, 4, 7) or verify (6) phases — these s
 - Preflight `claudeAtFile` timeout is a strict improvement — previously hanging installs now proceed.
 
 ### Rollback
-- Every change is confined to four source files + three new test files. A single `git revert <commit>` removes them if issues surface.
+- Every change is confined to 3 modified source files + 1 new test file. A single `git revert <commit>` removes them if issues surface.
 
 ### No data migration required
 - No `.harness/` on-disk format changes. Existing runs remain resumable.
@@ -260,7 +250,7 @@ Additionally asserts no keys for gate (2, 4, 7) or verify (6) phases — these s
 
 ## Success criteria
 
-1. `pnpm test` passes, including 3 new conformance test files and modified existing tests.
+1. `pnpm test` passes, including the new `tests/conformance/phase-models.test.ts` file and modified existing tests.
 2. `pnpm run lint` (tsc --noEmit) passes with no errors.
 3. `pnpm run build` produces `dist/` with `dist/scripts/harness-verify.sh` executable.
 4. Manual smoke test: `harness run "test"` in a clean temp dir progresses past preflight in under 10 seconds (no hang).
@@ -274,8 +264,8 @@ Additionally asserts no keys for gate (2, 4, 7) or verify (6) phases — these s
 **R1: Claude Code's advisor slash command may have syntax we cannot confirm from this environment.**
 - Mitigation: fall back to generic phrasing ("/advisor 를 세션에서 확인하세요") rather than guess a specific command. Document assumption in `src/ui.ts` comment.
 
-**R2: `execSync` timeout error shape across Node versions.**
-- Mitigation: check `err.signal === 'SIGTERM'` OR `err.killed === true` OR `err.code === 'ETIMEDOUT'`. Accept any of the three as the timeout signal.
+**R2: `spawnSync` timeout result shape across Node versions.**
+- Mitigation: check either `result.error?.code === 'ETIMEDOUT'` OR `result.signal === 'SIGKILL'`. Accept either as the timeout signal.
 
 **R3: `resolveVerifyScriptPath()` path computation may differ when running via `pnpm link` vs `node dist/bin/harness.js`.**
 - Mitigation: implementation uses `path.dirname(fileURLToPath(import.meta.url))` which always resolves to the compiled file's directory, stable across invocation methods.
