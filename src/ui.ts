@@ -110,3 +110,23 @@ export function printSuccess(msg: string): void {
 export function printInfo(msg: string): void {
   console.error(`${BLUE}ℹ ${msg}${RESET}`);
 }
+
+const ADVISOR_PURPOSE: Record<number, string> = {
+  1: 'Brainstorming에서 advisor가 설계 트레이드오프 자문에 유용합니다.',
+  3: 'Plan 작성에서 advisor가 태스크 분해 판단에 유용합니다.',
+  5: '구현에서 advisor가 복잡 로직 판단에 유용합니다.',
+};
+
+export function printAdvisorReminder(phase: number): void {
+  const YELLOW = '\x1b[33m';
+  const RESET = '\x1b[0m';
+  const purpose = ADVISOR_PURPOSE[phase] ?? 'advisor 설정을 확인하세요.';
+
+  console.error('');
+  console.error(`${YELLOW}⚠️  Advisor Reminder (Phase ${phase})${RESET}`);
+  console.error(`${YELLOW}   ${purpose}${RESET}`);
+  console.error(`${YELLOW}   Claude 세션이 시작된 뒤 다음을 입력하세요:${RESET}`);
+  console.error(`${YELLOW}     /advisor${RESET}`);
+  console.error(`${YELLOW}   (정확한 slash command 문법은 Claude Code 버전에 따라 다를 수 있습니다.)${RESET}`);
+  console.error('');
+}
