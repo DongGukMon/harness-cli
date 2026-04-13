@@ -88,12 +88,22 @@ execSync(`claude --model claude-sonnet-4-6 @${tmpFile} --print '' 2>&1`, {
 No `timeout` option → `execSync` waits indefinitely. If Claude CLI's `--print` mode blocks (as observed), the whole preflight blocks.
 
 **Change**:
-1. Add `timeout: 5000` to the `execSync` options.
-2. On timeout (which `execSync` signals by throwing an error whose `signal` property is `SIGTERM`), do **not** throw a preflight failure. Instead:
-   - Print a one-line warning to stderr: `⚠️  preflight: claude @file check timed out (5s); skipping — runtime failure will be surfaced at phase level if @file is unsupported.`
+1. Replace `execSync` with an explicit `spawnSync` call that can be hard-killed:
+   ```typescript
+   const result = spawnSync('claude', ['--model', 'claude-sonnet-4-6', `@${tmpFile}`, '--print', ''], {
+     stdio: 'pipe',
+     encoding: 'utf-8',
+     timeout: 5000,
+     killSignal: 'SIGKILL',   // hard kill on timeout — no waiting for graceful SIGTERM exit
+   });
+   ```
+   `killSignal: 'SIGKILL'` ensures that if `claude --print` ignores SIGTERM (the root cause of the original 4-hour hang), the process is forcibly terminated after 5s with no further wait.
+2. Detection of timeout uses `result.error` with error code `'ETIMEDOUT'`, OR `result.signal === 'SIGKILL'`. On either condition, treat as timeout and:
+   - Print one-line warning to stderr: `⚠️  preflight: claude @file check timed out (5s); skipping — runtime failure will be surfaced at phase level if @file is unsupported.`
    - Return normally from the check.
-3. On non-timeout failure (e.g., `claude` binary missing — though this should already be caught by the `claude` check that runs first), retain existing error behavior.
-4. Clean up the temp file in a `finally` block (current code may leak it on throw).
+3. On non-timeout failure (`result.status !== 0` with no `error`/`signal`), retain existing warning behavior.
+4. Clean up the temp file in a `finally` block.
+5. **Not** using `execSync` — Node's `execSync` with `timeout` sends SIGTERM and still waits for graceful exit; processes that ignore SIGTERM (observed behavior of `claude --print` in the original bug) cause unbounded hangs. `spawnSync` + `killSignal: 'SIGKILL'` is the reliable hard stop.
 
 **Rationale**: 5 seconds is generous for a weak-signal environment probe. Any timeout here means either the installed Claude version has a bug or an environment is misbehaving — neither warrants blocking the entire run, because Phase 1/3/5 failure paths already handle runtime `@file` misbehavior.
 
@@ -136,27 +146,13 @@ No `timeout` option → `execSync` waits indefinitely. If Claude CLI's `--print`
 
 ### 3. `harness-verify.sh` resolver consolidation
 
-**Current state**:
-- `src/preflight.ts` exports / uses `resolveVerifyScriptPath()` with two-tier lookup: package-local (`<__dirname>/../scripts/harness-verify.sh`) → legacy `~/.claude/scripts/harness-verify.sh`.
-- `src/phases/verify.ts:104` hardcodes `path.join(os.homedir(), '.claude', 'scripts', 'harness-verify.sh')`. This fully ignores the package-local path.
+**Current state (verified via code inspection)**:
+- `src/preflight.ts` already exports `resolveVerifyScriptPath()` with two-tier lookup: package-local (`<__dirname>/../scripts/harness-verify.sh`) → legacy `~/.claude/scripts/harness-verify.sh`.
+- `src/phases/verify.ts:104` already imports and calls `resolveVerifyScriptPath()`. The hardcoded `~/.claude` path has already been removed.
+- `scripts/copy-assets.mjs` already copies `scripts/harness-verify.sh → dist/scripts/harness-verify.sh` with executable permission.
+- The source consolidation is complete. This section is therefore **verification-only**, not a code change.
 
-**Changes**:
-
-1. If `resolveVerifyScriptPath()` in `preflight.ts` is not yet exported, export it.
-2. In `src/phases/verify.ts`, import `resolveVerifyScriptPath` and replace the hardcoded path:
-```typescript
-const scriptPath = resolveVerifyScriptPath();
-if (scriptPath === null) {
-  // existing error handling
-  throw new Error('harness-verify.sh not found. Cannot run verification.');
-}
-```
-3. Confirm `scripts/copy-assets.mjs` copies `scripts/harness-verify.sh → dist/scripts/harness-verify.sh` (user mentioned this is already done — verify during implementation).
-4. Confirm the path computation in `resolveVerifyScriptPath()`:
-   - At runtime, `preflight.js` runs from `dist/src/preflight.js`.
-   - `<__dirname>` = `dist/src`.
-   - `<__dirname>/../scripts/harness-verify.sh` = `dist/scripts/harness-verify.sh` ✓
-   - If path is different, adjust.
+**Changes in this spec**: none to source code. Only add tests (below) to lock the behavior and prevent future regression.
 
 **Testing**:
 - Unit test for `resolveVerifyScriptPath()` that mocks BOTH `existsSync` and `accessSync` (the resolver gates on executable access via `R_OK | X_OK`, not just existence):
@@ -193,41 +189,23 @@ expect(PHASE_MODELS[5]).toBe('claude-sonnet-4-6');
 ```
 Additionally asserts no keys for gate (2, 4, 7) or verify (6) phases — these shouldn't spawn Claude.
 
-**`tests/conformance/preflight-items.test.ts`**
-
-Imports `getPreflightItems(phaseType)` from `src/preflight.ts` and asserts each phase type returns the spec-mandated items set. Use `Set` comparison (order-independent):
-```typescript
-expect(new Set(getPreflightItems('interactive'))).toEqual(
-  new Set(['git', 'head', 'node', 'claude', 'claudeAtFile', 'platform', 'tty'])
-);
-expect(new Set(getPreflightItems('gate'))).toEqual(
-  new Set(['git', 'head', 'node', 'codexPath', 'platform', 'tty'])
-);
-expect(new Set(getPreflightItems('verify'))).toEqual(
-  new Set(['git', 'head', 'node', 'verifyScript', 'jq', 'platform', 'tty'])
-);
-expect(new Set(getPreflightItems('terminal'))).toEqual(
-  new Set(['git', 'platform'])
-);
-expect(new Set(getPreflightItems('ui_only'))).toEqual(
-  new Set(['platform', 'tty'])
-);
-```
+**Not adding a separate preflight-items conformance test.** `tests/preflight.test.ts` already contains exact assertions for `getPreflightItems` per phase type — duplicating them under `tests/conformance/` adds maintenance cost without new protection. Artifact paths and `PHASE_MODELS` DO need conformance coverage because no such asserts currently exist.
 
 ---
 
 ## File-level change list
 
 ### Modify
-- `src/preflight.ts` — add timeout to `claudeAtFile`, demote failures to warning, temp-file cleanup in `finally`. Export `resolveVerifyScriptPath` if not already.
+- `src/preflight.ts` — replace `execSync` call for `claudeAtFile` with `spawnSync + killSignal: 'SIGKILL' + timeout: 5000`, demote timeout failures to warning, temp-file cleanup in `finally`.
 - `src/ui.ts` — update `printAdvisorReminder` message text and per-phase framing.
-- `src/phases/runner.ts` (or `src/phases/interactive.ts`, whichever calls `printAdvisorReminder`) — ensure reminder is printed immediately before `spawn`, with a short render delay.
-- `src/phases/verify.ts` — replace hardcoded `~/.claude/scripts/harness-verify.sh` with `resolveVerifyScriptPath()`.
+- `src/phases/runner.ts` — remove the existing `printAdvisorReminder(phase)` call.
+- `src/phases/interactive.ts` — add `printAdvisorReminder(phase)` immediately before `spawn('claude', ...)`, followed by a 300ms delay.
+- (no change required for `src/phases/verify.ts` — consolidation already complete in tree)
 
 ### Create
 - `tests/conformance/artifacts.test.ts`
 - `tests/conformance/phase-models.test.ts`
-- `tests/conformance/preflight-items.test.ts`
+- (preflight items already covered by `tests/preflight.test.ts` — no new conformance file needed)
 
 ### No change
 - `scripts/copy-assets.mjs` (already correct)
@@ -244,7 +222,8 @@ expect(new Set(getPreflightItems('ui_only'))).toEqual(
 
 ### Unit tests (new)
 - 3 conformance test files per "Conformance tests" section above
-- Preflight timeout test: `tests/preflight.test.ts` gets one new case using `vi.spyOn(child_process, 'execSync')` to simulate a timeout throw. Assert `runPreflight(['claudeAtFile'])` does not throw and writes to stderr.
+- Preflight timeout test: `tests/preflight.test.ts` gets one new case. In ESM, `src/preflight.ts` imports `spawnSync` directly from `child_process`, so a top-level `vi.mock('child_process', ...)` is required (vi.spyOn on the direct import does not intercept reliably in our setup). The mock makes `spawnSync` return `{ error: Object.assign(new Error('timed out'), { code: 'ETIMEDOUT' }), status: null, signal: 'SIGKILL' }`. Assert: `runPreflight(['claudeAtFile'])` does NOT throw and writes the warning to stderr.
+  - Alternative to the module-level mock: extract `spawnSync` into a thin injectable helper inside `preflight.ts` so the test can pass a fake. Pick whichever keeps the test compact.
 - Verify path resolution test: `tests/phases/verify.test.ts` gets one new case asserting the resolver is consulted (via spy).
 
 ### Unit tests (modified)
@@ -285,7 +264,7 @@ expect(new Set(getPreflightItems('ui_only'))).toEqual(
 2. `pnpm run lint` (tsc --noEmit) passes with no errors.
 3. `pnpm run build` produces `dist/` with `dist/scripts/harness-verify.sh` executable.
 4. Manual smoke test: `harness run "test"` in a clean temp dir progresses past preflight in under 10 seconds (no hang).
-5. `src/phases/verify.ts` contains no hardcoded `~/.claude` reference — searchable via grep.
+5. `src/phases/verify.ts` contains no hardcoded `~/.claude` reference — verified as already true; conformance preserved by added test.
 6. `printAdvisorReminder` message text matches actual Claude Code slash command syntax or uses the safe fallback phrasing.
 
 ---
