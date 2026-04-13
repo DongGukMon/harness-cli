@@ -53,8 +53,17 @@ All 5 evaluation checks pass. The harness-cli TypeScript implementation is compl
   process group management, phase lifecycle state machine, resume/recovery paths,
   artifact auto-commits, preflight validation, signal handlers, prompt assembly
 
+**Eval gate rev-2 fixes** (applied after first Codex review):
+- Phase 6 PASS now calls `normalizeArtifactCommit` before setting `evalCommit` (was missing — reviewer P1)
+- Phase 1/3 normalize failure now marks phase as `error` instead of swallowing (was downgrading to warning — reviewer P1)
+- Resume fresh-sentinel path now completes phase inline without respawn (was falling through to runPhaseLoop which would delete the sentinel — reviewer P1)
+- `show_escalation`/`show_verify_error` replay now re-triggers UI via phase status instead of clearing pendingAction (was silently no-op — reviewer P1)
+- `getProcessStartTime` on macOS uses `ps -o etime=` with proper format parsing (was `lstart` — reviewer P2)
+- `getProcessStartTime` on Linux uses dynamic `getconf CLK_TCK` (was hardcoded 100 — reviewer P2)
+
 **Deferred items** (noted in plan gate P2 review, to be addressed in follow-up work):
 - Broader --root flag propagation tests across all mutating commands
 - Dedicated tests for src/ui.ts (currently only exercised through integration)
-- show_escalation / show_verify_error second-stage preflight refinement
+- show_escalation / show_verify_error second-stage preflight refinement (minimal implementation present)
 - Integration test for actual Claude/Codex subprocess lifecycle (requires real binaries)
+- Phase 6 PASS end-to-end integration test with real commit flow

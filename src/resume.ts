@@ -1,7 +1,8 @@
-import { existsSync, readFileSync, unlinkSync } from 'fs';
+import { existsSync, readFileSync, statSync, unlinkSync } from 'fs';
 import { join } from 'path';
 import { getHead, isAncestor, detectExternalCommits } from './git.js';
 import { readState, writeState } from './state.js';
+import { normalizeArtifactCommit } from './artifact.js';
 import { checkGateSidecars } from './phases/gate.js';
 import { readVerifyResult, isEvalReportValid } from './phases/verify.js';
 import { runPhaseLoop } from './phases/runner.js';
@@ -159,6 +160,61 @@ function updateExternalCommitsDetected(state: HarnessState, cwd: string, runDir:
   }
 }
 
+/**
+ * Validate Phase 1/3/5 artifacts when fresh sentinel is detected on resume.
+ * Runs normalize_artifact_commit for Phase 1/3.
+ * Returns true if the phase can be treated as completed.
+ */
+function completeInteractivePhaseFromFreshSentinel(
+  phase: PhaseNumber,
+  state: HarnessState,
+  cwd: string
+): boolean {
+  try {
+    if (phase === 1 || phase === 3) {
+      // Check artifact existence + non-empty + mtime >= phaseOpenedAt
+      const artifactKeys: Array<'spec' | 'decisionLog' | 'plan' | 'checklist'> =
+        phase === 1 ? ['spec', 'decisionLog'] : ['plan', 'checklist'];
+      const openedAt = state.phaseOpenedAt[String(phase)];
+
+      for (const key of artifactKeys) {
+        const relPath = state.artifacts[key];
+        const absPath = join(cwd, relPath);
+        if (!existsSync(absPath)) return false;
+        const stat = statSync(absPath);
+        if (stat.size === 0) return false;
+        if (openedAt !== null && Math.floor(stat.mtimeMs) < openedAt) return false;
+      }
+
+      // Run normalize_artifact_commit for non-gitignored artifacts
+      for (const key of artifactKeys) {
+        const relPath = state.artifacts[key];
+        if (relPath.startsWith('.harness/')) continue;
+        const message = `harness[${state.runId}]: Phase ${phase} — ${String(key)}`;
+        normalizeArtifactCommit(relPath, message, cwd);
+      }
+
+      // Update commit anchor
+      const head = getHead(cwd);
+      if (phase === 1) state.specCommit = head;
+      if (phase === 3) state.planCommit = head;
+      return true;
+    }
+
+    if (phase === 5) {
+      // Phase 5 completion: at least 1 commit since implRetryBase + clean tree
+      // Trust the sentinel was written after those conditions were met at original exit
+      const head = getHead(cwd);
+      state.implCommit = head;
+      return true;
+    }
+  } catch {
+    return false;
+  }
+
+  return false;
+}
+
 async function replayPendingAction(
   state: HarnessState,
   harnessDir: string,
@@ -201,39 +257,7 @@ async function replayPendingAction(
       break;
     }
     case 'reopen_phase': {
-      // Check sentinel freshness for target phase
-      const sentinelPath = join(runDir, `phase-${action.targetPhase}.done`);
-      const expectedAttemptId = state.phaseAttemptId[String(action.targetPhase)];
-
-      if (existsSync(sentinelPath) && expectedAttemptId) {
-        const content = readFileSync(sentinelPath, 'utf-8').trim();
-        if (content === expectedAttemptId) {
-          // Fresh sentinel — artifact validation + advance (same as in_progress + fresh path)
-          state.pendingAction = null;
-          state.phases[String(action.targetPhase)] = 'in_progress';
-          writeState(runDir, state);
-          // Let runPhaseLoop's interactive handler validate + normalize
-        } else {
-          // Stale sentinel — delete, set to pending for respawn
-          try {
-            unlinkSync(sentinelPath);
-          } catch {
-            /* best-effort */
-          }
-          state.pendingAction = null;
-          state.phases[String(action.targetPhase)] = 'pending';
-          state.currentPhase = action.targetPhase;
-          writeState(runDir, state);
-        }
-      } else {
-        // No sentinel — spawn fresh
-        state.pendingAction = null;
-        state.phases[String(action.targetPhase)] = 'pending';
-        state.currentPhase = action.targetPhase;
-        writeState(runDir, state);
-      }
-
-      // Verify FAIL source: delete eval report if present (idempotent)
+      // Verify FAIL source: delete eval report if present (idempotent Verify FAIL step ②)
       if (action.sourcePhase === 6) {
         const evalReportPath = join(cwd, state.artifacts.evalReport);
         try {
@@ -242,6 +266,52 @@ async function replayPendingAction(
           /* best-effort */
         }
       }
+
+      // Check sentinel freshness for target phase
+      const targetPhaseKey = String(action.targetPhase);
+      const sentinelPath = join(runDir, `phase-${action.targetPhase}.done`);
+      const expectedAttemptId = state.phaseAttemptId[targetPhaseKey];
+
+      if (existsSync(sentinelPath) && expectedAttemptId) {
+        const content = readFileSync(sentinelPath, 'utf-8').trim();
+        if (content === expectedAttemptId) {
+          // Fresh sentinel — complete phase inline without respawn
+          const completed = completeInteractivePhaseFromFreshSentinel(
+            action.targetPhase,
+            state,
+            cwd
+          );
+          if (completed) {
+            state.pendingAction = null;
+            state.phases[targetPhaseKey] = 'completed';
+            state.currentPhase = action.targetPhase + 1;
+            writeState(runDir, state);
+            // Continue phase loop from the next phase
+            await runPhaseLoop(state, harnessDir, runDir, cwd);
+            return;
+          } else {
+            // Artifact validation failed — treat sentinel as stale
+            try {
+              unlinkSync(sentinelPath);
+            } catch {
+              /* best-effort */
+            }
+          }
+        } else {
+          // Stale sentinel — delete, set to pending for respawn
+          try {
+            unlinkSync(sentinelPath);
+          } catch {
+            /* best-effort */
+          }
+        }
+      }
+
+      // No fresh sentinel — spawn fresh interactive phase
+      state.pendingAction = null;
+      state.phases[targetPhaseKey] = 'pending';
+      state.currentPhase = action.targetPhase;
+      writeState(runDir, state);
       break;
     }
     case 'skip_phase': {
@@ -258,11 +328,25 @@ async function replayPendingAction(
     }
     case 'show_escalation':
     case 'show_verify_error': {
-      // UI-only: runPhaseLoop will detect paused state and show menu
-      // Note: spec has complex two-stage preflight for these, which is deferred
-      // For now, clear pendingAction and let phase loop continue (will re-trigger UI if needed)
-      state.pendingAction = null;
+      // Re-trigger the UI by re-entering the appropriate phase with retry counter at max
+      // so runPhaseLoop shows the escalation menu again.
+      // For show_escalation: the target phase is the gate that exceeded retries.
+      // For show_verify_error: Phase 6 with error status.
       state.status = 'in_progress';
+      if (action.type === 'show_verify_error') {
+        // Phase 6 stays as "error" — runPhaseLoop's verify handler will see error state
+        // and re-show the UI via handleVerifyError
+        state.phases['6'] = 'error';
+      } else {
+        // show_escalation: set phase to exceed threshold so UI re-displays
+        const tp = String(action.targetPhase);
+        if (action.targetPhase === 6) {
+          state.phases['6'] = 'failed';
+        } else {
+          state.phases[tp] = 'in_progress';
+        }
+      }
+      state.pendingAction = null;
       writeState(runDir, state);
       break;
     }

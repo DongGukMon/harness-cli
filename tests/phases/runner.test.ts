@@ -375,11 +375,11 @@ describe('Test 11: normalizeArtifactCommit called for Phase 1/3', () => {
     await runPhaseLoop(state, HDIR, runDir, CWD);
 
     const calls = vi.mocked(normalizeArtifactCommit).mock.calls;
-    // Should have been called for at least spec and decisionLog
     const paths = calls.map(([p]) => p);
-    // Check that the artifact paths from Phase 1 were normalized
+    // Phase 1 commits spec (not decisionLog — it's in .harness/ and gitignored)
     expect(paths).toContain(state.artifacts.spec);
-    expect(paths).toContain(state.artifacts.decisionLog);
+    // decisionLog is .harness/.../decisions.md, skipped
+    expect(paths).not.toContain(state.artifacts.decisionLog);
   });
 
   it('calls normalizeArtifactCommit for plan and checklist after Phase 3', async () => {
@@ -395,8 +395,9 @@ describe('Test 11: normalizeArtifactCommit called for Phase 1/3', () => {
 
     const calls = vi.mocked(normalizeArtifactCommit).mock.calls;
     const paths = calls.map(([p]) => p);
+    // Phase 3 commits plan (not checklist — it's in .harness/ and gitignored)
     expect(paths).toContain(state.artifacts.plan);
-    expect(paths).toContain(state.artifacts.checklist);
+    expect(paths).not.toContain(state.artifacts.checklist);
   });
 });
 

@@ -94,6 +94,11 @@ function saveGateFeedback(runDir: string, phase: number, comments: string): stri
 
 // ─── Normalize artifacts for Phase 1/3 ───────────────────────────────────────
 
+/**
+ * Normalize (auto-commit) Phase 1/3 artifacts.
+ * Skips artifacts in `.harness/` (gitignored — no commit needed).
+ * Throws on first commit failure so callers can mark the phase as `error`.
+ */
 function normalizeInteractiveArtifacts(
   phase: InteractivePhase,
   state: HarnessState,
@@ -105,13 +110,11 @@ function normalizeInteractiveArtifacts(
 
   for (const key of artifactKeys) {
     const relPath = state.artifacts[key];
-    const message = `harness[${state.runId}]: Phase ${phase} — normalize ${String(key)}`;
-    try {
-      normalizeArtifactCommit(relPath, message, cwd);
-    } catch {
-      // If normalize fails (e.g., other files staged), log warning but continue
-      printWarning(`normalizeArtifactCommit failed for ${String(key)}: continuing`);
-    }
+    // Skip gitignored artifacts (decisions.md, checklist.json are in .harness/)
+    if (relPath.startsWith('.harness/')) continue;
+
+    const message = `harness[${state.runId}]: Phase ${phase} — ${String(key)}`;
+    normalizeArtifactCommit(relPath, message, cwd);
   }
 }
 
@@ -199,12 +202,20 @@ async function handleInteractivePhase(
   const result = await runInteractivePhase(phase, state, harnessDir, runDir, cwd);
 
   if (result.status === 'completed') {
-    // Normalize artifact commits for Phase 1/3
+    // Normalize artifact commits for Phase 1/3. Failure → error (not completed).
     if (phase === 1 || phase === 3) {
-      normalizeInteractiveArtifacts(phase, state, cwd);
+      try {
+        normalizeInteractiveArtifacts(phase, state, cwd);
+      } catch (err) {
+        printError(`Phase ${phase} artifact commit failed: ${(err as Error).message}`);
+        state.phases[String(phase)] = 'error';
+        savePausedAtHead(state, cwd);
+        writeState(runDir, state);
+        return;
+      }
     }
 
-    // Update commit anchors
+    // Update commit anchors (only AFTER commit succeeds)
     try {
       const head = getHead(cwd);
       if (phase === 1) state.specCommit = head;
@@ -465,9 +476,29 @@ async function handleVerifyPhase(
   const outcome = await runVerifyPhase(state, harnessDir, runDir, cwd);
 
   if (outcome.type === 'pass') {
-    // Update evalCommit
+    // Commit the eval report artifact (spec requires committed eval report before Phase 7)
+    const evalReportPath = path.join(cwd, state.artifacts.evalReport);
     try {
-      state.evalCommit = getHead(cwd);
+      normalizeArtifactCommit(
+        evalReportPath,
+        `harness[${state.runId}]: Phase 6 — eval report`,
+        cwd
+      );
+    } catch (err) {
+      // Commit failure → phase goes to error, pendingAction for retry
+      printError(`Failed to commit eval report: ${(err as Error).message}`);
+      state.phases['6'] = 'error';
+      state.pendingAction = null; // error state itself is recovery trigger
+      savePausedAtHead(state, cwd);
+      writeState(runDir, state);
+      return;
+    }
+
+    // Update evalCommit + verifiedAtHead AFTER commit succeeds
+    try {
+      const head = getHead(cwd);
+      state.evalCommit = head;
+      state.verifiedAtHead = head;
     } catch {
       // leave as-is
     }

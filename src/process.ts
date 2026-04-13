@@ -2,20 +2,52 @@ import { execSync } from 'child_process';
 import { readFileSync } from 'fs';
 
 /**
+ * Parse `ps -o etime` output to seconds.
+ * Format: [[dd-]hh:]mm:ss (e.g. "01:23", "12:34:56", "2-00:00:00")
+ */
+function parseEtime(s: string): number | null {
+  // Match optional days, optional hours, mandatory mm:ss
+  const match = s.match(/^(?:(\d+)-)?(?:(\d+):)?(\d+):(\d+)$/);
+  if (!match) return null;
+  const days = match[1] ? parseInt(match[1], 10) : 0;
+  const hours = match[2] ? parseInt(match[2], 10) : 0;
+  const mins = parseInt(match[3], 10);
+  const secs = parseInt(match[4], 10);
+  if ([days, hours, mins, secs].some((v) => isNaN(v))) return null;
+  return days * 86400 + hours * 3600 + mins * 60 + secs;
+}
+
+/** Cached CLK_TCK value from `getconf CLK_TCK`. Falls back to 100 if unavailable. */
+let cachedClockTicksPerSec: number | null = null;
+function getClockTicksPerSec(): number {
+  if (cachedClockTicksPerSec !== null) return cachedClockTicksPerSec;
+  try {
+    const out = execSync('getconf CLK_TCK', { encoding: 'utf8' }).trim();
+    const val = parseInt(out, 10);
+    cachedClockTicksPerSec = isNaN(val) || val <= 0 ? 100 : val;
+  } catch {
+    cachedClockTicksPerSec = 100;
+  }
+  return cachedClockTicksPerSec;
+}
+
+/**
  * Get process start time in epoch seconds.
  * Returns null if process doesn't exist or can't be read.
- * macOS: uses `ps -o lstart= -p <pid>`
- * Linux: reads /proc/<pid>/stat field 22 + /proc/stat btime
+ * macOS: uses `ps -o etimes= -p <pid>` (elapsed seconds, per spec)
+ * Linux: reads /proc/<pid>/stat field 22 + /proc/stat btime + dynamic CLK_TCK
  */
 export function getProcessStartTime(pid: number): number | null {
   try {
     if (process.platform === 'darwin') {
-      const output = execSync(`ps -o lstart= -p ${pid}`, { encoding: 'utf8' });
+      // macOS: use `ps -o etime=` (elapsed time in [[dd-]hh:]mm:ss format — etimes unsupported)
+      const output = execSync(`ps -o etime= -p ${pid}`, { encoding: 'utf8' });
       const trimmed = output.trim();
       if (!trimmed) return null;
-      const date = new Date(trimmed);
-      if (isNaN(date.getTime())) return null;
-      return Math.floor(date.getTime() / 1000);
+      const elapsedSec = parseEtime(trimmed);
+      if (elapsedSec === null) return null;
+      const nowSec = Math.floor(Date.now() / 1000);
+      return nowSec - elapsedSec;
     } else {
       // Linux: read /proc/<pid>/stat field 22 (starttime in clock ticks since boot)
       // and /proc/stat btime (boot time in epoch seconds)
@@ -36,7 +68,7 @@ export function getProcessStartTime(pid: number): number | null {
       const btime = parseInt(btimeLine.split(' ')[1], 10);
       if (isNaN(btime)) return null;
 
-      const clockTicksPerSec = 100; // typically HZ=100 on Linux
+      const clockTicksPerSec = getClockTicksPerSec();
       return btime + Math.floor(startTimeTicks / clockTicksPerSec);
     }
   } catch {
