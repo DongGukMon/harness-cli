@@ -144,8 +144,8 @@ describe('createInitialState', () => {
     // Artifact paths derived from runId
     expect(state.artifacts.spec).toBe('docs/specs/my-run-design.md');
     expect(state.artifacts.plan).toBe('docs/plans/my-run.md');
-    expect(state.artifacts.decisionLog).toBe('docs/specs/my-run-decisions.md');
-    expect(state.artifacts.checklist).toBe('docs/plans/my-run-checklist.md');
-    expect(state.artifacts.evalReport).toBe('docs/reports/my-run-eval.md');
+    expect(state.artifacts.decisionLog).toBe('.harness/my-run/decisions.md');
+    expect(state.artifacts.checklist).toBe('.harness/my-run/checklist.json');
+    expect(state.artifacts.evalReport).toBe('docs/process/evals/my-run-eval.md');
   });
 });

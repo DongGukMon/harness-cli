@@ -76,9 +76,9 @@ export function createInitialState(
     artifacts: {
       spec: `docs/specs/${runId}-design.md`,
       plan: `docs/plans/${runId}.md`,
-      decisionLog: `docs/specs/${runId}-decisions.md`,
-      checklist: `docs/plans/${runId}-checklist.md`,
-      evalReport: `docs/reports/${runId}-eval.md`,
+      decisionLog: `.harness/${runId}/decisions.md`,
+      checklist: `.harness/${runId}/checklist.json`,
+      evalReport: `docs/process/evals/${runId}-eval.md`,
     },
     phases: {
       '1': 'pending',
