@@ -10,7 +10,7 @@ export const PHASE_EFFORTS: Record<number, string> = {
   5: 'high',
 };
 
-export const GATE_TIMEOUT_MS = 120_000;
+export const GATE_TIMEOUT_MS = 360_000;  // 6 min — Codex high-effort typically takes 2-4 min
 export const VERIFY_TIMEOUT_MS = 300_000;
 export const SIGTERM_WAIT_MS = 5_000;
 export const GROUP_DRAIN_WAIT_MS = 5_000;
