@@ -388,87 +388,166 @@ git commit -m "feat(interactive): move advisor reminder to spawn seam with 300ms
 
 No source changes — the source consolidation is already complete (confirmed by spec and by code inspection).
 
-- [ ] **Step 1: Write resolver unit tests**
+- [ ] **Step 1: Refactor `resolveVerifyScriptPath` for testability (small)**
 
-Add to `tests/preflight.test.ts` (below existing tests):
+The current resolver reads its own `__dirname` for package-local lookup, which makes deterministic per-test isolation impossible. To enable proper coverage of all four cases (package-local present/accessible, package-local present/inaccessible, legacy fallback, both absent), introduce one optional parameter that overrides the package-local lookup root. This is a non-breaking change.
+
+Edit `src/preflight.ts`. Update `resolveVerifyScriptPath` signature and body:
+
+```typescript
+import { existsSync, accessSync, constants } from 'fs';
+import * as os from 'os';
+import * as path from 'path';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const DEFAULT_PACKAGE_LOCAL_ROOT = path.dirname(__filename);
+
+/**
+ * Resolve the harness-verify.sh path.
+ * Lookup order:
+ *  1. Package-local: <packageLocalRoot>/../scripts/harness-verify.sh (after build → dist/scripts/...)
+ *  2. Legacy fallback: ~/.claude/scripts/harness-verify.sh
+ * Returns null if neither is present + executable.
+ *
+ * @param packageLocalRoot - override the package-local search root (defaults to this module's __dirname).
+ *                           Tests may pass a temp dir to deterministically exercise the package-local branch.
+ */
+export function resolveVerifyScriptPath(
+  packageLocalRoot: string = DEFAULT_PACKAGE_LOCAL_ROOT
+): string | null {
+  const packageLocal = path.join(packageLocalRoot, '..', 'scripts', 'harness-verify.sh');
+  if (existsSync(packageLocal)) {
+    try {
+      accessSync(packageLocal, constants.R_OK | constants.X_OK);
+      return packageLocal;
+    } catch {
+      /* not accessible — fall through to legacy */
+    }
+  }
+
+  const legacy = path.join(os.homedir(), '.claude', 'scripts', 'harness-verify.sh');
+  if (existsSync(legacy)) {
+    try {
+      accessSync(legacy, constants.R_OK | constants.X_OK);
+      return legacy;
+    } catch {
+      /* not accessible */
+    }
+  }
+
+  return null;
+}
+```
+
+Update any internal callers in the same file to use the default (zero-arg) call — no behavior change.
+
+- [ ] **Step 2: Run lint to confirm signature change does not break callers**
+
+```bash
+pnpm run lint
+```
+
+Expected: zero errors. Existing callers (e.g., in `src/phases/verify.ts` and inside `runPreflight`) use the zero-arg form which still resolves to the default.
+
+- [ ] **Step 3: Write deterministic resolver unit tests**
+
+Add to `tests/preflight.test.ts`:
 
 ```typescript
 import { mkdtempSync, writeFileSync, chmodSync, rmSync, mkdirSync } from 'fs';
 import { tmpdir } from 'os';
-import { join, dirname } from 'path';
+import { join } from 'path';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { resolveVerifyScriptPath } from '../src/preflight.js';
 
-describe('resolveVerifyScriptPath', () => {
-  // We test via filesystem fixtures rather than module-level mocks because the
-  // resolver reads its own __dirname (package-local) plus os.homedir() (legacy).
-  // We cannot override __dirname, so we exercise only the legacy-fallback branch
-  // by pointing HOME to a controlled temp dir.
-
+describe('resolveVerifyScriptPath — package-local branch (deterministic via override)', () => {
   let tmp: string;
-  let originalHome: string | undefined;
 
   beforeEach(() => {
-    tmp = mkdtempSync(join(tmpdir(), 'harness-resolver-'));
-    originalHome = process.env.HOME;
-    process.env.HOME = tmp;
+    tmp = mkdtempSync(join(tmpdir(), 'harness-pkglocal-'));
+    // Layout: <tmp>/lib/preflight.js (simulated package-local root) and <tmp>/scripts/harness-verify.sh (target)
+    mkdirSync(join(tmp, 'lib'), { recursive: true });
+    mkdirSync(join(tmp, 'scripts'), { recursive: true });
   });
 
   afterEach(() => {
-    process.env.HOME = originalHome;
     rmSync(tmp, { recursive: true, force: true });
   });
 
-  it('returns null when neither package-local nor legacy path exists', async () => {
-    const { resolveVerifyScriptPath } = await import('../src/preflight.js');
-    // Assuming package-local does not exist in test cwd; legacy also absent.
-    const result = resolveVerifyScriptPath();
-    // Package-local may exist in dev; to ensure we test "both absent" we'd need a
-    // harness that can hide package-local. In practice the resolver returns either
-    // the package-local path (dev machine) or null (clean CI).
-    // Assert: result is either null OR a real path that exists.
-    if (result !== null) {
-      // Dev machine — skip this assertion and rely on the legacy-only case below.
-      return;
-    }
-    expect(result).toBeNull();
+  it('returns package-local path when present and executable', () => {
+    const target = join(tmp, 'scripts', 'harness-verify.sh');
+    writeFileSync(target, '#!/bin/sh\necho ok\n');
+    chmodSync(target, 0o755);
+    const result = resolveVerifyScriptPath(join(tmp, 'lib'));
+    expect(result).toBe(target);
   });
 
-  it('returns legacy path when only legacy exists and is executable', async () => {
-    const { resolveVerifyScriptPath } = await import('../src/preflight.js');
-    const legacyDir = join(tmp, '.claude', 'scripts');
-    mkdirSync(legacyDir, { recursive: true });
-    const legacyFile = join(legacyDir, 'harness-verify.sh');
-    writeFileSync(legacyFile, '#!/bin/sh\necho ok\n');
-    chmodSync(legacyFile, 0o755);
+  it('falls through to legacy when package-local exists but is not executable', () => {
+    const pkgTarget = join(tmp, 'scripts', 'harness-verify.sh');
+    writeFileSync(pkgTarget, '#!/bin/sh\necho ok\n');
+    chmodSync(pkgTarget, 0o644); // not executable
 
-    const result = resolveVerifyScriptPath();
-    // Dev machine may still prefer package-local; in that case skip.
-    if (result !== null && result !== legacyFile) {
-      return; // package-local took precedence — acceptable on dev machines
+    // Set up a controlled legacy path via HOME override
+    const homeBackup = process.env.HOME;
+    const fakeHome = mkdtempSync(join(tmpdir(), 'harness-fake-home-'));
+    const legacyDir = join(fakeHome, '.claude', 'scripts');
+    mkdirSync(legacyDir, { recursive: true });
+    const legacyTarget = join(legacyDir, 'harness-verify.sh');
+    writeFileSync(legacyTarget, '#!/bin/sh\necho ok\n');
+    chmodSync(legacyTarget, 0o755);
+    process.env.HOME = fakeHome;
+
+    try {
+      const result = resolveVerifyScriptPath(join(tmp, 'lib'));
+      expect(result).toBe(legacyTarget);
+    } finally {
+      process.env.HOME = homeBackup;
+      rmSync(fakeHome, { recursive: true, force: true });
     }
-    expect(result).toBe(legacyFile);
   });
 
-  it('returns null when legacy exists but is not executable', async () => {
-    const { resolveVerifyScriptPath } = await import('../src/preflight.js');
-    const legacyDir = join(tmp, '.claude', 'scripts');
-    mkdirSync(legacyDir, { recursive: true });
-    const legacyFile = join(legacyDir, 'harness-verify.sh');
-    writeFileSync(legacyFile, '#!/bin/sh\necho ok\n');
-    chmodSync(legacyFile, 0o644); // not executable
-
-    const result = resolveVerifyScriptPath();
-    // Dev machine may return package-local; skip if so.
-    if (result !== null && result !== legacyFile) {
-      return;
+  it('returns null when package-local is missing and legacy is missing', () => {
+    const homeBackup = process.env.HOME;
+    const fakeHome = mkdtempSync(join(tmpdir(), 'harness-fake-home-'));
+    process.env.HOME = fakeHome;
+    try {
+      const result = resolveVerifyScriptPath(join(tmp, 'lib'));
+      expect(result).toBeNull();
+    } finally {
+      process.env.HOME = homeBackup;
+      rmSync(fakeHome, { recursive: true, force: true });
     }
-    expect(result).toBeNull();
+  });
+
+  it('returns null when both package-local and legacy exist but neither is executable', () => {
+    const pkgTarget = join(tmp, 'scripts', 'harness-verify.sh');
+    writeFileSync(pkgTarget, '#!/bin/sh\necho ok\n');
+    chmodSync(pkgTarget, 0o644);
+
+    const homeBackup = process.env.HOME;
+    const fakeHome = mkdtempSync(join(tmpdir(), 'harness-fake-home-'));
+    const legacyDir = join(fakeHome, '.claude', 'scripts');
+    mkdirSync(legacyDir, { recursive: true });
+    const legacyTarget = join(legacyDir, 'harness-verify.sh');
+    writeFileSync(legacyTarget, '#!/bin/sh\necho ok\n');
+    chmodSync(legacyTarget, 0o644);
+    process.env.HOME = fakeHome;
+
+    try {
+      const result = resolveVerifyScriptPath(join(tmp, 'lib'));
+      expect(result).toBeNull();
+    } finally {
+      process.env.HOME = homeBackup;
+      rmSync(fakeHome, { recursive: true, force: true });
+    }
   });
 });
 ```
 
-Note: we exercise only the legacy-fallback branch because `__dirname` for the package-local path is fixed at module load and cannot be overridden. The existing package-local path is already exercised implicitly by `pnpm test` running from the repo (resolver returns the real built script). The legacy-branch tests add coverage for the fallback that `npm install -g` users will depend on.
+Each case is fully deterministic — no environment-dependent skips. All four spec cases (package-local accessible / package-local inaccessible → legacy / both absent / both present-but-inaccessible) are covered.
 
-- [ ] **Step 2: Add spy assertion to `tests/phases/verify.test.ts`**
+- [ ] **Step 4: Add spy assertion to `tests/phases/verify.test.ts`**
 
 Find an existing test that calls `runVerifyPhase` and add this assertion (or add a new focused test case):
 
@@ -498,7 +577,7 @@ it('delegates script resolution to resolveVerifyScriptPath', async () => {
 
 If the existing `verify.test.ts` already uses a more ergonomic pattern (e.g., module mocks), follow that pattern instead. The only requirement is: after any path through `runVerifyPhase`, `resolveVerifyScriptPath` must have been invoked.
 
-- [ ] **Step 3: Run the tests**
+- [ ] **Step 5: Run the tests**
 
 ```bash
 pnpm test tests/preflight.test.ts
@@ -507,11 +586,11 @@ pnpm test tests/phases/verify.test.ts
 
 Expected: both pass.
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
-git add tests/preflight.test.ts tests/phases/verify.test.ts
-git commit -m "test: lock verify-script resolver behavior (legacy fallback + delegation)"
+git add src/preflight.ts tests/preflight.test.ts tests/phases/verify.test.ts
+git commit -m "test+refactor: deterministic resolveVerifyScriptPath tests via packageLocalRoot override"
 ```
 
 ---
@@ -608,7 +687,9 @@ node dist/bin/harness.js --help
 
 Expected: help text prints, process exits 0 within 1 second.
 
-- [ ] **Step 5: Manual smoke test — `harness run` in a clean temp dir**
+- [ ] **Step 5: Manual smoke test — `harness run` in a clean temp dir, with Ctrl-C interrupt**
+
+This is a real interactive smoke test. Run it in a terminal you control (not as a piped/non-TTY command).
 
 ```bash
 TMP=$(mktemp -d)
@@ -616,16 +697,40 @@ cd "$TMP"
 git init -q
 git commit --allow-empty -q -m init
 # Using the globally linked harness (assumes `pnpm link --global` was run in the repo)
-timeout 15 harness run "smoke test" --allow-dirty || true
+harness run "smoke test" --allow-dirty
 ```
 
-Expected behavior during the 15-second window:
+Observe within ~10 seconds:
 1. Preflight runs without hanging.
 2. If `claude @file` check is slow, it times out in 5s and prints the `⚠️  preflight: claude @file check timed out (5s)` warning, then preflight continues.
-3. The advisor reminder appears (yellow, phase-1 framing).
-4. Claude Code either spawns (interactive session starts) or fails with a diagnostic — in either case the CLI does NOT hang indefinitely.
+3. The advisor reminder appears (yellow, phase-1 framing) immediately before Claude takes the terminal.
+4. Claude Code spawns (interactive session starts).
 
-After the smoke test, clean up the temp run if it was created:
+Now press **Ctrl-C** to send SIGINT. The CLI should:
+- Kill the Claude child process group (SIGTERM → SIGKILL after 5s).
+- Save state with `pausedAtHead` populated.
+- Release `repo.lock` and `run.lock`.
+- Exit with code 130.
+
+Verify cleanup with `harness status` and `harness list` from the same temp dir:
+
+```bash
+harness status
+# Expected: prints the current run's state (status: in_progress, currentPhase: 1, pausedAtHead set).
+# Must NOT report "harness is already running" (that would mean lock leaked).
+
+harness list
+# Expected: shows the smoke run with status `in_progress`.
+```
+
+Confirm both lock files are gone:
+
+```bash
+ls .harness/repo.lock 2>&1 | grep -q "No such file" && echo "repo.lock cleaned ✓"
+ls .harness/*/run.lock 2>&1 | grep -q "No such file" && echo "run.lock cleaned ✓"
+```
+
+Finally clean up:
 
 ```bash
 cd /Users/daniel/Desktop/projects/harness/harness-cli
@@ -641,32 +746,44 @@ rm -rf "$TMP"
 ```json
 {
   "checks": [
-    { "name": "Type check",        "command": "pnpm run lint" },
-    { "name": "Unit + conformance tests", "command": "pnpm test" },
-    { "name": "Build",             "command": "pnpm run build" },
-    { "name": "CLI help works",    "command": "node dist/bin/harness.js --help" },
-    { "name": "No hardcoded ~/.claude in verify.ts", "command": "! grep -nE \"'\\.claude/scripts'|\\\"\\.claude/scripts\\\"\" src/phases/verify.ts" }
+    { "name": "Type check",                     "command": "pnpm run lint" },
+    { "name": "Unit + conformance tests",       "command": "pnpm test" },
+    { "name": "Build",                          "command": "pnpm run build" },
+    { "name": "CLI help works",                 "command": "node dist/bin/harness.js --help" },
+    { "name": "No hardcoded ~/.claude in verify.ts",
+      "command": "! grep -nE \"'\\.claude/scripts'|\\\"\\.claude/scripts\\\"\" src/phases/verify.ts" },
+    { "name": "dist/scripts/harness-verify.sh exists and is executable",
+      "command": "test -x dist/scripts/harness-verify.sh" },
+    { "name": "Preflight does not hang on smoke run (spawnSync timeout proves itself within 30s)",
+      "command": "bash -c 'TMP=$(mktemp -d); cd \"$TMP\"; git init -q && git commit --allow-empty -q -m smoke; ( timeout 30 node \"$OLDPWD/dist/bin/harness.js\" run smoke --allow-dirty </dev/null >/tmp/harness-smoke.out 2>&1 & SMOKE_PID=$!; sleep 25; kill -INT $SMOKE_PID 2>/dev/null; wait $SMOKE_PID 2>/dev/null; true ); cd \"$OLDPWD\"; rm -rf \"$TMP\"; grep -qE \"Phase 1|Advisor Reminder|claude @file check timed out\" /tmp/harness-smoke.out' " },
+    { "name": "Smoke run printed advisor reminder near spawn",
+      "command": "grep -q 'Advisor Reminder' /tmp/harness-smoke.out" }
   ]
 }
 ```
 
-Each check exits 0 on pass, non-zero on failure. `harness-verify.sh` runs them sequentially and appends a `## Summary` section when all checks complete.
+Notes:
+- The smoke check creates a clean temp git repo, runs `harness run smoke --allow-dirty`, gives it 25 seconds, then sends SIGINT. The success criterion is that output contains evidence the run progressed past preflight (either a Phase 1 banner, the Advisor Reminder, or the timeout warning). If the binary hangs in preflight indefinitely, none of those strings appear and the check fails.
+- Each check exits 0 on pass, non-zero on failure. `harness-verify.sh` runs them sequentially and appends `## Summary` when all checks complete.
 
 ---
 
 ## Task dependencies
 
 ```
-Task 1 (preflight timeout) ── independent
-Task 2 (reminder text)     ── independent, can run parallel with Task 1
-Task 3 (reminder call-site move) ── depends on Task 2 (safer to have the new text before moving)
-Task 4 (resolver tests)    ── independent
-Task 5 (conformance test)  ── independent
-Task 6 (verification)      ── depends on Tasks 1–5
+Task 1 (preflight timeout)        ── modifies src/preflight.ts + tests/preflight.test.ts
+Task 2 (reminder text)            ── independent (src/ui.ts only)
+Task 3 (reminder call-site move)  ── depends on Task 2 (safer to have new text before moving)
+Task 4 (resolver tests)           ── modifies src/preflight.ts + tests/preflight.test.ts (overlaps Task 1)
+Task 5 (conformance test)         ── independent (only tests/conformance/phase-models.test.ts)
+Task 6 (verification)             ── depends on Tasks 1–5
 ```
 
 Parallel execution groups (if using subagent dispatch):
 
-- Group A (parallel): Task 1, Task 2, Task 4, Task 5
-- Group B (serial after A): Task 3
-- Group C (after B): Task 6
+- Group A (parallel — disjoint files): Task 2, Task 5
+- Group B (serial — both touch tests/preflight.test.ts and src/preflight.ts): Task 1 → Task 4
+- Group C (after Task 2): Task 3
+- Group D (after all): Task 6
+
+If running purely serially: Task 1 → Task 2 → Task 3 → Task 4 → Task 5 → Task 6 is also valid and avoids any merge concerns.
