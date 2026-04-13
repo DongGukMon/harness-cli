@@ -2,11 +2,12 @@ import { execSync } from 'child_process';
 import { existsSync, unlinkSync } from 'fs';
 import { join } from 'path';
 import { detectExternalCommits, getGitRoot, isAncestor } from '../git.js';
-import { acquireLock, releaseLock } from '../lock.js';
+import { acquireLock, readLock, releaseLock } from '../lock.js';
 import { getPreflightItems, runPreflight } from '../preflight.js';
 import { findHarnessRoot, getCurrentRun } from '../root.js';
 import { readState, writeState } from '../state.js';
 import { runPhaseLoop } from '../phases/runner.js';
+import { registerSignalHandlers } from '../signal.js';
 import type { HarnessState, PhaseNumber, PhaseType } from '../types.js';
 
 export interface JumpOptions {
@@ -57,6 +58,21 @@ export async function jumpCommand(phaseArg: string, options: JumpOptions = {}): 
 
   // 4. Acquire lock
   acquireLock(harnessDir, runId);
+
+  // 4b. Register signal handlers for subsequent phase loop execution
+  registerSignalHandlers({
+    harnessDir,
+    runId,
+    getState: () => state,
+    setState: (s) => Object.assign(state, s),
+    getChildPid: () => readLock(harnessDir)?.childPid ?? null,
+    getCurrentPhaseType: () => {
+      const p = state.currentPhase;
+      if (p === 1 || p === 3 || p === 5) return 'interactive';
+      return 'automated';
+    },
+    cwd,
+  });
 
   try {
     // 5. Run phase-type preflight BEFORE any state mutation

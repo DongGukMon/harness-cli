@@ -2,12 +2,13 @@ import { execSync } from 'child_process';
 import { existsSync, readFileSync, writeFileSync, unlinkSync } from 'fs';
 import { join } from 'path';
 import { getGitRoot, getHead, isWorkingTreeClean } from '../git.js';
-import { acquireLock, releaseLock } from '../lock.js';
+import { acquireLock, readLock, releaseLock } from '../lock.js';
 import { getPreflightItems, runPreflight } from '../preflight.js';
 import { findHarnessRoot, getCurrentRun } from '../root.js';
 import { readState, writeState } from '../state.js';
 import { normalizeArtifactCommit } from '../artifact.js';
 import { runPhaseLoop } from '../phases/runner.js';
+import { registerSignalHandlers } from '../signal.js';
 import type { HarnessState, PendingAction, PhaseNumber, PhaseType } from '../types.js';
 
 export interface SkipOptions {
@@ -58,6 +59,21 @@ export async function skipCommand(options: SkipOptions = {}): Promise<void> {
 
   // 3. Acquire lock
   acquireLock(harnessDir, runId);
+
+  // 3b. Register signal handlers so Ctrl-C during subsequent phase loop cleans up child PGID + locks
+  registerSignalHandlers({
+    harnessDir,
+    runId,
+    getState: () => state,
+    setState: (s) => Object.assign(state, s),
+    getChildPid: () => readLock(harnessDir)?.childPid ?? null,
+    getCurrentPhaseType: () => {
+      const p = state.currentPhase;
+      if (p === 1 || p === 3 || p === 5) return 'interactive';
+      return 'automated';
+    },
+    cwd,
+  });
 
   try {
     // 4. Clear stale pendingAction/pauseReason

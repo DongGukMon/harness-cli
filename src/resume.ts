@@ -77,6 +77,28 @@ async function recoverGeneralState(
   const phaseKey = String(phase);
   const phaseStatus = state.phases[phaseKey];
 
+  // Interactive phase in 'error' state with valid artifacts → retry normalize_artifact_commit
+  // instead of respawning (which would delete the artifacts).
+  if ((phase === 1 || phase === 3) && phaseStatus === 'error') {
+    const completed = completeInteractivePhaseFromFreshSentinel(
+      phase as PhaseNumber,
+      state,
+      cwd
+    );
+    if (completed) {
+      state.phases[phaseKey] = 'completed';
+      state.currentPhase = phase + 1;
+      writeState(runDir, state);
+      return;
+    }
+    // Validation failed → abort with guidance; do NOT respawn (would erase artifacts)
+    process.stderr.write(
+      `Artifact validation failed for phase ${phase}. The artifact may have been modified or deleted.\n` +
+      `Use 'harness jump ${phase}' to re-run from that phase.\n`
+    );
+    process.exit(1);
+  }
+
   // Interactive phase with fresh sentinel → complete inline
   if (
     (phase === 1 || phase === 3 || phase === 5) &&
@@ -129,6 +151,41 @@ async function recoverGeneralState(
     const result = readVerifyResult(runDir);
     if (result !== null) {
       await applyStoredVerifyResult(result, state, runDir, cwd);
+    }
+  }
+
+  // Phase 6 error + eval report exists → retry normalize_artifact_commit
+  // (eval report was written, normalize failed, and we should retry the commit only)
+  if (phase === 6 && phaseStatus === 'error') {
+    const evalReportPath = join(cwd, state.artifacts.evalReport);
+    if (isEvalReportValid(evalReportPath)) {
+      const { normalizeArtifactCommit: commit } = await import('./artifact.js');
+      try {
+        commit(state.artifacts.evalReport, `harness[${state.runId}]: Phase 6 — eval report`, cwd);
+        const head = getHead(cwd);
+        state.evalCommit = head;
+        state.verifiedAtHead = head;
+        state.phases['6'] = 'completed';
+        state.currentPhase = 7;
+        writeState(runDir, state);
+        try { unlinkSync(join(runDir, 'verify-result.json')); } catch { /* best-effort */ }
+        try { unlinkSync(join(runDir, 'verify-feedback.md')); } catch { /* best-effort */ }
+      } catch (err) {
+        process.stderr.write(
+          `Phase 6 normalize_artifact_commit retry failed: ${(err as Error).message}\n` +
+          `Fix git state and run 'harness resume' again.\n`
+        );
+        process.exit(1);
+      }
+    } else {
+      // No eval report → Verify ERROR UI
+      state.pendingAction = {
+        type: 'show_verify_error',
+        targetPhase: 6,
+        sourcePhase: null,
+        feedbackPaths: [],
+      };
+      writeState(runDir, state);
     }
   }
 }

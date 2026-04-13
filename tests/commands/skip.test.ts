@@ -11,6 +11,10 @@ vi.mock('../../src/phases/runner.js', () => ({
   runPhaseLoop: vi.fn().mockResolvedValue(undefined),
 }));
 
+vi.mock('../../src/signal.js', () => ({
+  registerSignalHandlers: vi.fn(),
+}));
+
 vi.mock('../../src/preflight.js', async () => {
   const actual = await vi.importActual<typeof import('../../src/preflight.js')>('../../src/preflight.js');
   return {
