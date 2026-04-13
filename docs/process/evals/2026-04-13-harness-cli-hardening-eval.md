@@ -16,10 +16,11 @@
 | Preflight uses killSignal: 'SIGKILL' for the @file probe | pass |  |
 | Preflight no longer uses execSync for claudeAtFile (proves hang fix in source) | pass |  |
 | Advisor reminder is invoked from interactive.ts spawn seam (not runner.ts) | pass |  |
+| Smoke: harness run reaches phase 1 boundary in <10s (proves preflight hang fix end-to-end) | pass |  |
 
 ## Summary
-- Total: 10 checks
-- Pass: 10
+- Total: 11 checks
+- Pass: 11
 - Fail: 0
 
 ## Raw Output
@@ -63,38 +64,39 @@
 
  RUN  v2.1.9 /Users/daniel/Desktop/projects/harness/harness-cli
 
- ✓ tests/context/assembler.test.ts (9 tests) 8ms
- ✓ tests/phases/gate.test.ts (19 tests) 12ms
- ✓ tests/phases/verify.test.ts (12 tests) 18ms
- ✓ tests/phases/runner.test.ts (24 tests) 64ms
- ✓ tests/preflight.test.ts (24 tests | 1 skipped) 174ms
- ✓ tests/state.test.ts (6 tests) 58ms
- ✓ tests/lock.test.ts (20 tests) 343ms
- ✓ tests/signal.test.ts (11 tests) 400ms
- ✓ tests/root.test.ts (10 tests) 180ms
- ✓ tests/process.test.ts (6 tests) 41ms
+ ✓ tests/context/assembler.test.ts (9 tests) 6ms
+ ✓ tests/phases/gate.test.ts (19 tests) 13ms
+ ✓ tests/phases/verify.test.ts (12 tests) 16ms
+ ✓ tests/phases/runner.test.ts (24 tests) 58ms
+ ✓ tests/preflight.test.ts (25 tests | 1 skipped) 180ms
+ ✓ tests/state.test.ts (6 tests) 50ms
+ ✓ tests/lock.test.ts (20 tests) 326ms
+ ✓ tests/signal.test.ts (11 tests) 354ms
+ ✓ tests/root.test.ts (10 tests) 174ms
+ ✓ tests/ui.test.ts (6 tests) 2ms
+ ✓ tests/process.test.ts (6 tests) 27ms
+ ✓ tests/commands/status-list.test.ts (7 tests) 681ms
  ✓ tests/conformance/phase-models.test.ts (5 tests) 2ms
- ✓ tests/commands/status-list.test.ts (7 tests) 701ms
- ✓ tests/commands/jump.test.ts (8 tests) 1378ms
- ✓ tests/commands/resume-cmd.test.ts (6 tests) 833ms
- ✓ tests/resume.test.ts (6 tests) 1403ms
- ✓ tests/commands/skip.test.ts (6 tests) 1319ms
-   ✓ skipCommand > Phase 5 skip blocked when impl commits exist 349ms
-   ✓ skipCommand > Phase 6 skip generates synthetic eval report 380ms
- ✓ tests/integration/lifecycle.test.ts (8 tests) 1103ms
- ✓ tests/phases/interactive.test.ts (32 tests) 1546ms
-   ✓ runInteractivePhase — advisor reminder fires before spawn > printAdvisorReminder is called before spawn("claude", ...) 430ms
- ✓ tests/git.test.ts (16 tests) 1405ms
- ✓ tests/commands/run.test.ts (10 tests) 1814ms
-   ✓ runCommand > creates run directory with state.json + task.md 330ms
-   ✓ runCommand > creates required directories 323ms
- ✓ tests/artifact.test.ts (12 tests) 2105ms
-   ✓ normalizeArtifactCommit > creates commit for new untracked file 377ms
+ ✓ tests/resume.test.ts (6 tests) 1418ms
+ ✓ tests/commands/resume-cmd.test.ts (6 tests) 893ms
+ ✓ tests/commands/jump.test.ts (8 tests) 1441ms
+ ✓ tests/integration/lifecycle.test.ts (8 tests) 1107ms
+ ✓ tests/commands/skip.test.ts (6 tests) 1347ms
+   ✓ skipCommand > Phase 6 skip generates synthetic eval report 433ms
+ ✓ tests/git.test.ts (16 tests) 1439ms
+ ✓ tests/phases/interactive.test.ts (32 tests) 1628ms
+   ✓ runInteractivePhase — advisor reminder fires before spawn > printAdvisorReminder is called before spawn("claude", ...) 452ms
+ ✓ tests/commands/run.test.ts (10 tests) 1867ms
+   ✓ runCommand > creates run directory with state.json + task.md 336ms
+   ✓ runCommand > creates required directories 356ms
+ ✓ tests/artifact.test.ts (12 tests) 2178ms
+   ✓ normalizeArtifactCommit > creates commit for new untracked file 354ms
+   ✓ normalizeArtifactCommit > recovers from interrupted git add (target-only staged) 320ms
 
- Test Files  21 passed (21)
-      Tests  256 passed | 1 skipped (257)
-   Start at  18:47:53
-   Duration  2.45s (transform 1.16s, setup 0ms, collect 1.82s, tests 14.91s, environment 2ms, prepare 999ms)
+ Test Files  22 passed (22)
+      Tests  263 passed | 1 skipped (264)
+   Start at  19:15:06
+   Duration  2.53s (transform 1.15s, setup 0ms, collect 1.79s, tests 15.21s, environment 2ms, prepare 1.22s)
 ```
 
 </details>
@@ -304,6 +306,32 @@ Commands:
 
 ```
 
+```
+
+</details>
+
+<details>
+<summary>stderr (truncated to 50 lines)</summary>
+
+```
+
+```
+
+</details>
+
+### Smoke: harness run reaches phase 1 boundary in <10s (proves preflight hang fix end-to-end)
+**Command:** `bash scripts/smoke-preflight.sh "$PWD/dist/bin/harness.js"`
+**Exit code:** 0
+
+<details>
+<summary>stdout (truncated to 100 lines)</summary>
+
+```
+preflight smoke elapsed: 5s
+stderr (first 5 lines):
+  ⚠️  preflight: claude @file check timed out (5s); skipping — runtime failure will be surfaced at phase level if @file is unsupported.
+  Error: harness requires an interactive terminal (TTY).
+PASS: preflight reached phase 1 boundary in 5s (<10s)
 ```
 
 </details>

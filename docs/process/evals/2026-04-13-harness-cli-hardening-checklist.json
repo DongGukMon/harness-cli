@@ -17,6 +17,8 @@
     { "name": "Preflight no longer uses execSync for claudeAtFile (proves hang fix in source)",
       "command": "! (sed -n \"/case 'claudeAtFile'/,/^    case /p\" src/preflight.ts | grep -q 'execSync(')" },
     { "name": "Advisor reminder is invoked from interactive.ts spawn seam (not runner.ts)",
-      "command": "grep -q 'printAdvisorReminder' src/phases/interactive.ts && ! grep -q 'printAdvisorReminder' src/phases/runner.ts" }
+      "command": "grep -q 'printAdvisorReminder' src/phases/interactive.ts && ! grep -q 'printAdvisorReminder' src/phases/runner.ts" },
+    { "name": "Smoke: harness run reaches phase 1 boundary in <10s (proves preflight hang fix end-to-end)",
+      "command": "bash scripts/smoke-preflight.sh \"$PWD/dist/bin/harness.js\"" }
   ]
 }
