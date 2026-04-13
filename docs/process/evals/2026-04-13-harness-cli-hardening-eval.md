@@ -64,39 +64,38 @@
 
  RUN  v2.1.9 /Users/daniel/Desktop/projects/harness/harness-cli
 
- ✓ tests/context/assembler.test.ts (9 tests) 6ms
- ✓ tests/phases/gate.test.ts (19 tests) 13ms
- ✓ tests/phases/verify.test.ts (12 tests) 16ms
- ✓ tests/phases/runner.test.ts (24 tests) 58ms
- ✓ tests/preflight.test.ts (25 tests | 1 skipped) 180ms
- ✓ tests/state.test.ts (6 tests) 50ms
- ✓ tests/lock.test.ts (20 tests) 326ms
- ✓ tests/signal.test.ts (11 tests) 354ms
- ✓ tests/root.test.ts (10 tests) 174ms
- ✓ tests/ui.test.ts (6 tests) 2ms
- ✓ tests/process.test.ts (6 tests) 27ms
- ✓ tests/commands/status-list.test.ts (7 tests) 681ms
+ ✓ tests/context/assembler.test.ts (9 tests) 7ms
+ ✓ tests/phases/gate.test.ts (19 tests) 12ms
+ ✓ tests/phases/verify.test.ts (12 tests) 14ms
+ ✓ tests/phases/runner.test.ts (24 tests) 73ms
+ ✓ tests/preflight.test.ts (25 tests | 1 skipped) 165ms
+ ✓ tests/state.test.ts (6 tests) 56ms
+ ✓ tests/lock.test.ts (20 tests) 332ms
+ ✓ tests/signal.test.ts (11 tests) 379ms
+ ✓ tests/root.test.ts (10 tests) 204ms
+ ✓ tests/ui.test.ts (6 tests) 3ms
+ ✓ tests/process.test.ts (6 tests) 30ms
+ ✓ tests/commands/status-list.test.ts (7 tests) 703ms
  ✓ tests/conformance/phase-models.test.ts (5 tests) 2ms
- ✓ tests/resume.test.ts (6 tests) 1418ms
- ✓ tests/commands/resume-cmd.test.ts (6 tests) 893ms
- ✓ tests/commands/jump.test.ts (8 tests) 1441ms
- ✓ tests/integration/lifecycle.test.ts (8 tests) 1107ms
- ✓ tests/commands/skip.test.ts (6 tests) 1347ms
-   ✓ skipCommand > Phase 6 skip generates synthetic eval report 433ms
- ✓ tests/git.test.ts (16 tests) 1439ms
- ✓ tests/phases/interactive.test.ts (32 tests) 1628ms
-   ✓ runInteractivePhase — advisor reminder fires before spawn > printAdvisorReminder is called before spawn("claude", ...) 452ms
- ✓ tests/commands/run.test.ts (10 tests) 1867ms
-   ✓ runCommand > creates run directory with state.json + task.md 336ms
-   ✓ runCommand > creates required directories 356ms
- ✓ tests/artifact.test.ts (12 tests) 2178ms
-   ✓ normalizeArtifactCommit > creates commit for new untracked file 354ms
-   ✓ normalizeArtifactCommit > recovers from interrupted git add (target-only staged) 320ms
+ ✓ tests/resume.test.ts (6 tests) 1379ms
+ ✓ tests/commands/jump.test.ts (8 tests) 1427ms
+ ✓ tests/commands/resume-cmd.test.ts (6 tests) 866ms
+ ✓ tests/commands/skip.test.ts (6 tests) 1361ms
+   ✓ skipCommand > Phase 5 skip blocked when impl commits exist 351ms
+   ✓ skipCommand > Phase 6 skip generates synthetic eval report 378ms
+ ✓ tests/git.test.ts (16 tests) 1421ms
+ ✓ tests/phases/interactive.test.ts (32 tests) 1587ms
+   ✓ runInteractivePhase — advisor reminder fires before spawn > printAdvisorReminder is called before spawn("claude", ...) 444ms
+ ✓ tests/integration/lifecycle.test.ts (8 tests) 1143ms
+ ✓ tests/commands/run.test.ts (10 tests) 1857ms
+   ✓ runCommand > creates run directory with state.json + task.md 363ms
+ ✓ tests/artifact.test.ts (12 tests) 2146ms
+   ✓ normalizeArtifactCommit > creates commit for new untracked file 350ms
 
  Test Files  22 passed (22)
       Tests  263 passed | 1 skipped (264)
-   Start at  19:15:06
-   Duration  2.53s (transform 1.15s, setup 0ms, collect 1.79s, tests 15.21s, environment 2ms, prepare 1.22s)
+   Start at  19:22:30
+   Duration  2.47s (transform 1.11s, setup 0ms, collect 1.71s, tests 15.17s, environment 2ms, prepare 1.19s)
 ```
 
 </details>
@@ -327,11 +326,24 @@ Commands:
 <summary>stdout (truncated to 100 lines)</summary>
 
 ```
-preflight smoke elapsed: 5s
-stderr (first 5 lines):
-  ⚠️  preflight: claude @file check timed out (5s); skipping — runtime failure will be surfaced at phase level if @file is unsupported.
-  Error: harness requires an interactive terminal (TTY).
-PASS: preflight reached phase 1 boundary in 5s (<10s)
+preflight smoke elapsed until Phase 1 evidence: 6s
+output snippet (first 15 lines, ANSI stripped):
+  ^D⚠️  preflight: claude @file check timed out (5s); skipping — runtime failure will be surfaced at phase level if @file is unsupported.
+  
+  ⚠️  Advisor Reminder (Phase 1)
+     Brainstorming에서 advisor가 설계 트레이드오프 자문에 유용합니다.
+     Claude 세션이 시작된 뒤 다음을 입력하세요:
+       /advisor
+     (정확한 slash command 문법은 Claude Code 버전에 따라 다를 수 있습니다.)
+  
+  [?25l[?2004h[?1004h[?2031h[?2026h
+  ────────────────────────────────────────────────────────────────────────────────
+  Accessingworkspace:
+  
+  /private/var/folders/vx/1ln4rqh969s1ynxythgw3y8m0000gn/T/harness-smoke-XXXXXX.
+  kT9I4NeeIZ
+  
+PASS: Phase 1 reached in 6s (<10s) — Advisor Reminder confirms spawn seam
 ```
 
 </details>

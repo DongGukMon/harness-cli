@@ -1,57 +1,71 @@
 #!/usr/bin/env bash
-# smoke-preflight.sh — verify `harness run` reaches phase 1 in <10s
+# smoke-preflight.sh — verify `harness run` reaches Phase 1 spawn in <10s
 # (proves the preflight hang fix from the 2026-04-13 hardening spec)
 #
-# Strategy: run `harness run` in a non-TTY temp git repo. Preflight should
-# either complete (and then fail at the TTY check) or time out the @file
-# probe at 5s and continue. Either path proves there is no >10s hang.
+# Strategy: run `harness run` in a clean temp git repo with a pseudo-TTY
+# (via `script`), kill after 10s, and check that the Advisor Reminder
+# for Phase 1 appears in the output — proving that ALL preflight items
+# passed and the Phase 1 Claude spawn was initiated.
 #
 # PASS criteria:
-#   - Wallclock elapsed < 10s
-#   - stderr contains either the @file timeout warning OR the TTY error,
-#     proving preflight reached its terminal step.
+#   - Wallclock elapsed until Phase 1 evidence < 10s
+#   - Output contains "Advisor Reminder (Phase 1)" — this prints
+#     immediately before spawn('claude', ...) in interactive.ts,
+#     proving preflight completed and Phase 1 has been reached.
 
 set -uo pipefail
 
 HARNESS_BIN="$1"
-if [[ -z "$HARNESS_BIN" || ! -x "$HARNESS_BIN" ]] && [[ ! -f "$HARNESS_BIN" ]]; then
+if [[ ! -f "$HARNESS_BIN" ]]; then
   echo "smoke-preflight: harness binary not found at $HARNESS_BIN" >&2
   exit 2
 fi
 
 TMP=$(mktemp -d -t harness-smoke-XXXXXX)
-trap 'rm -rf "$TMP"' EXIT
+OUTPUT_LOG=$(mktemp)
+trap 'kill -9 $BGPID 2>/dev/null; wait $BGPID 2>/dev/null; rm -rf "$TMP" "$OUTPUT_LOG"' EXIT
 
 cd "$TMP"
 git init -q
 git commit --allow-empty -q -m init
 
-STDERR_LOG=$(mktemp)
 T0=$(date +%s)
-node "$HARNESS_BIN" run "preflight smoke" --allow-dirty >/dev/null 2>"$STDERR_LOG" || true
+
+# Use `script` to provide a pseudo-TTY so preflight's TTY check passes.
+# stdout+stderr are merged by `script`; capture everything into OUTPUT_LOG.
+script -q /dev/null bash -c "node '$HARNESS_BIN' run 'preflight smoke' --allow-dirty 2>&1" > "$OUTPUT_LOG" 2>&1 &
+BGPID=$!
+
+# Wait up to 10s, checking every second for the Phase 1 evidence
+FOUND=0
+for i in $(seq 1 10); do
+  sleep 1
+  if grep -q 'Advisor Reminder (Phase 1)' "$OUTPUT_LOG" 2>/dev/null; then
+    FOUND=1
+    break
+  fi
+done
+
 T1=$(date +%s)
 ELAPSED=$((T1 - T0))
 
-echo "preflight smoke elapsed: ${ELAPSED}s"
-echo "stderr (first 5 lines):"
-head -5 "$STDERR_LOG" | sed 's/^/  /'
+# Kill the background harness + Claude processes
+kill -9 $BGPID 2>/dev/null
+wait $BGPID 2>/dev/null
 
-# Pass condition 1: elapsed < 10s
+echo "preflight smoke elapsed until Phase 1 evidence: ${ELAPSED}s"
+echo "output snippet (first 15 lines, ANSI stripped):"
+head -15 "$OUTPUT_LOG" | sed 's/\x1b\[[0-9;]*[a-zA-Z]//g; s/^/  /'
+
+if [[ "$FOUND" -eq 1 && "$ELAPSED" -lt 10 ]]; then
+  echo "PASS: Phase 1 reached in ${ELAPSED}s (<10s) — Advisor Reminder confirms spawn seam"
+  exit 0
+fi
+
 if [[ "$ELAPSED" -ge 10 ]]; then
-  echo "FAIL: preflight took ${ELAPSED}s (>= 10s threshold). Original 4-hour hang regression possible."
-  rm -f "$STDERR_LOG"
+  echo "FAIL: Phase 1 evidence not found within 10s. Possible preflight hang."
   exit 1
 fi
 
-# Pass condition 2: stderr proves preflight completed (timeout warning OR TTY error)
-EXPECTED_PATTERN='claude @file check timed out|requires an interactive terminal|preflight failed'
-if ! grep -qE "$EXPECTED_PATTERN" "$STDERR_LOG"; then
-  echo "FAIL: stderr did not contain expected preflight terminal-state message."
-  echo "      Expected one of: $EXPECTED_PATTERN"
-  rm -f "$STDERR_LOG"
-  exit 1
-fi
-
-echo "PASS: preflight reached phase 1 boundary in ${ELAPSED}s (<10s)"
-rm -f "$STDERR_LOG"
-exit 0
+echo "FAIL: Phase 1 Advisor Reminder not found in output."
+exit 1
