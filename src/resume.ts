@@ -260,9 +260,15 @@ function completeInteractivePhaseFromFreshSentinel(
     }
 
     if (phase === 5) {
-      // Phase 5 completion: at least 1 commit since implRetryBase + clean tree
-      // Trust the sentinel was written after those conditions were met at original exit
+      // Phase 5 completion contract: at least 1 commit since implRetryBase + clean tree
       const head = getHead(cwd);
+      if (head === state.implRetryBase) {
+        // No commits since implRetryBase — fails completion contract
+        return false;
+      }
+      // Working tree must be clean
+      const status = execSync('git status --porcelain', { cwd, encoding: 'utf-8' }).trim();
+      if (status !== '') return false;
       state.implCommit = head;
       return true;
     }
@@ -271,6 +277,67 @@ function completeInteractivePhaseFromFreshSentinel(
   }
 
   return false;
+}
+
+/**
+ * Replay phase-specific skip side effects idempotently for crash recovery.
+ * Each phase's skip is safe to re-run: no-op if already applied.
+ */
+async function replayIncompleteSkip(
+  phase: PhaseNumber,
+  state: HarnessState,
+  runDir: string,
+  cwd: string
+): Promise<void> {
+  const { normalizeArtifactCommit: commit } = await import('./artifact.js');
+  switch (phase) {
+    case 1: {
+      const specPath = join(cwd, state.artifacts.spec);
+      if (existsSync(specPath)) {
+        commit(state.artifacts.spec, `harness[${state.runId}]: Phase 1 — spec (skip)`, cwd);
+        state.specCommit = getHead(cwd);
+      }
+      break;
+    }
+    case 3: {
+      const planPath = join(cwd, state.artifacts.plan);
+      if (existsSync(planPath)) {
+        commit(state.artifacts.plan, `harness[${state.runId}]: Phase 3 — plan (skip)`, cwd);
+        state.planCommit = getHead(cwd);
+      }
+      break;
+    }
+    case 5: {
+      // Phase 5 skip: implCommit stays null
+      state.implCommit = null;
+      break;
+    }
+    case 6: {
+      const evalReportPath = join(cwd, state.artifacts.evalReport);
+      if (!existsSync(evalReportPath)) {
+        // Generate synthetic report if missing
+        const { writeFileSync, unlinkSync: u } = await import('fs');
+        try { u(join(runDir, 'verify-feedback.md')); } catch { /* best-effort */ }
+        const timestamp = new Date().toISOString().replace('T', ' ').slice(0, 19);
+        const report =
+          `# Verification Report (SKIPPED)\n` +
+          `- Date: ${timestamp}\n` +
+          `- Run ID: ${state.runId}\n\n` +
+          `## Results\n\n| Check | Status |\n|-------|--------|\n| (skipped) | SKIPPED |\n\n` +
+          `## Summary\n\nVERIFY SKIPPED\n`;
+        writeFileSync(evalReportPath, report, 'utf-8');
+      }
+      commit(state.artifacts.evalReport, `harness[${state.runId}]: Phase 6 — eval report (skip)`, cwd);
+      state.evalCommit = getHead(cwd);
+      state.verifiedAtHead = getHead(cwd);
+      break;
+    }
+    case 2:
+    case 4:
+    case 7:
+      // Gate skips have no artifact side effects
+      break;
+  }
 }
 
 async function replayPendingAction(
@@ -373,12 +440,18 @@ async function replayPendingAction(
       break;
     }
     case 'skip_phase': {
-      if (state.phases[String(action.targetPhase)] === 'completed') {
+      const targetKey = String(action.targetPhase);
+      if (state.phases[targetKey] === 'completed') {
+        // Already completed — just clear pendingAction
         state.pendingAction = null;
         writeState(runDir, state);
       } else {
-        // Re-run skip: mark pending so skip can be reattempted via CLI
-        // For simplicity, just clear pendingAction and let user re-run skip
+        // Re-run idempotent skip side effects for the target phase, then mark completed.
+        // Phase-specific skip handlers are idempotent (no-op when already applied).
+        await replayIncompleteSkip(action.targetPhase, state, runDir, cwd);
+        state.phases[targetKey] = 'completed';
+        state.currentPhase = action.targetPhase + 1;
+        if (action.targetPhase === 7) state.status = 'completed';
         state.pendingAction = null;
         writeState(runDir, state);
       }
@@ -386,22 +459,25 @@ async function replayPendingAction(
     }
     case 'show_escalation':
     case 'show_verify_error': {
-      // Re-trigger the UI by re-entering the appropriate phase with retry counter at max
-      // so runPhaseLoop shows the escalation menu again.
-      // For show_escalation: the target phase is the gate that exceeded retries.
-      // For show_verify_error: Phase 6 with error status.
+      // Spec: these paused-UI actions must re-display the menu for the user to choose again.
+      // We delegate to the runner's escalation/error handlers by restoring the pre-pause state
+      // so the appropriate handler re-shows the UI.
       state.status = 'in_progress';
       if (action.type === 'show_verify_error') {
-        // Phase 6 stays as "error" — runPhaseLoop's verify handler will see error state
-        // and re-show the UI via handleVerifyError
+        // Restore Phase 6 error state; verify handler will show ERROR UI via runPhaseLoop
         state.phases['6'] = 'error';
       } else {
-        // show_escalation: set phase to exceed threshold so UI re-displays
-        const tp = String(action.targetPhase);
-        if (action.targetPhase === 6) {
+        // show_escalation: gate/verify escalation
+        if (action.sourcePhase === 5 || action.targetPhase === 6) {
+          // Verify-escalation: Phase 6 failed + verifyRetries at limit
           state.phases['6'] = 'failed';
+          state.verifyRetries = Math.max(state.verifyRetries, 3);
         } else {
-          state.phases[tp] = 'in_progress';
+          // Gate escalation: target gate phase at retry limit
+          const tp = String(action.targetPhase);
+          state.phases[tp] = 'pending';
+          state.gateRetries[tp] = Math.max(state.gateRetries[tp] ?? 0, 3);
+          state.currentPhase = action.targetPhase;
         }
       }
       state.pendingAction = null;

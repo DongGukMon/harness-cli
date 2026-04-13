@@ -642,17 +642,24 @@ async function forcePassVerify(
   // Write synthetic eval report
   writeSyntheticEvalReport(state.artifacts.evalReport, state.runId, cwd);
 
-  // Normalize the synthetic report
+  // Normalize the synthetic report — failure must mark phase as error (not silently skip)
   const message = `harness[${state.runId}]: Phase 6 — synthetic eval report (skip)`;
   try {
     normalizeArtifactCommit(state.artifacts.evalReport, message, cwd);
-  } catch {
-    // best-effort
+  } catch (err) {
+    printError(`Failed to commit synthetic eval report: ${(err as Error).message}`);
+    state.phases['6'] = 'error';
+    state.pendingAction = null;
+    savePausedAtHead(state, cwd);
+    writeState(runDir, state);
+    return;
   }
 
-  // Update evalCommit
+  // Update anchors AFTER commit succeeds
   try {
-    state.evalCommit = getHead(cwd);
+    const head = getHead(cwd);
+    state.evalCommit = head;
+    state.verifiedAtHead = head;
   } catch {
     // leave as-is
   }
@@ -663,6 +670,9 @@ async function forcePassVerify(
   state.currentPhase = 7;
   writeState(runDir, state);
   deleteVerifyResult(runDir);
+  try {
+    fs.unlinkSync(path.join(runDir, 'verify-feedback.md'));
+  } catch { /* best-effort */ }
 
   printInfo('Verify force-passed — advancing to Phase 7');
 }
@@ -691,10 +701,10 @@ async function handleVerifyError(
     writeState(runDir, state);
     // currentPhase stays 6
   } else {
-    // Quit
+    // Quit — Verify ERROR quit uses show_verify_error per spec
     state.phases['6'] = 'error';
     state.pendingAction = {
-      type: 'rerun_verify',
+      type: 'show_verify_error',
       targetPhase: 6,
       sourcePhase: null,
       feedbackPaths: errorPath ? [errorPath] : [],
