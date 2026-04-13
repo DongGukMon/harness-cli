@@ -263,7 +263,28 @@ Search for `spawn('claude'`. Note the function it lives in (`runInteractivePhase
 
 - [ ] **Step 3: Write the failing ordering test**
 
-Add to `tests/phases/interactive.test.ts`:
+`runInteractivePhase` touches lock APIs (`updateLockChild`, `clearLockChild`), reads process metadata (`getProcessStartTime`), and performs process-group cleanup. The new ordering test must mock these so the test runs without real lock files or PIDs. Required mocks (in addition to `child_process` and `../../src/ui.js` shown below):
+
+```typescript
+vi.mock('../../src/lock.js', async (importActual) => {
+  const actual = await importActual<typeof import('../../src/lock.js')>();
+  return { ...actual, updateLockChild: vi.fn(), clearLockChild: vi.fn() };
+});
+
+vi.mock('../../src/process.js', async (importActual) => {
+  const actual = await importActual<typeof import('../../src/process.js')>();
+  return {
+    ...actual,
+    getProcessStartTime: vi.fn(() => Math.floor(Date.now() / 1000)),
+    isProcessGroupAlive: vi.fn(() => false),  // group "dies" immediately so cleanup wait short-circuits
+    killProcessGroup: vi.fn().mockResolvedValue(undefined),
+  };
+});
+```
+
+Also ensure the test fixture writes a sentinel file matching `phaseAttemptId` so artifact validation passes (or mocks `chokidar` if the watcher is in play). Reuse helpers from existing `interactive.test.ts` cases — every required mock is already wired there for other tests; copy the pattern.
+
+Now add the ordering test to `tests/phases/interactive.test.ts`:
 
 ```typescript
 import { vi, describe, it, expect, beforeEach } from 'vitest';
@@ -276,14 +297,17 @@ vi.mock('../../src/ui.js', async (importActual) => {
 vi.mock('child_process', async (importActual) => {
   const actual = await importActual<typeof import('child_process')>();
   const mockedSpawn = vi.fn(() => {
-    // Return a minimal ChildProcess stub that immediately emits a close event.
+    // Return a minimal ChildProcess stub. CRITICAL: runInteractivePhase listens for
+    // 'exit' (not 'close'). Verify by greping src/phases/interactive.ts before relying
+    // on this stub — adjust the emitted event if implementation changes.
     const listeners: Record<string, ((...args: unknown[]) => void)[]> = {};
     const cp = {
       pid: 12345,
       on: (event: string, cb: (...args: unknown[]) => void) => {
         (listeners[event] ||= []).push(cb);
-        if (event === 'close') {
-          setImmediate(() => cb(0));
+        if (event === 'exit') {
+          // exit handler signature: (code: number | null, signal: NodeJS.Signals | null)
+          setImmediate(() => cb(0, null));
         }
         return cp;
       },
@@ -481,6 +505,27 @@ describe('resolveVerifyScriptPath — package-local branch (deterministic via ov
     chmodSync(target, 0o755);
     const result = resolveVerifyScriptPath(join(tmp, 'lib'));
     expect(result).toBe(target);
+  });
+
+  it('returns legacy path when package-local is absent and legacy is present + executable', () => {
+    // No package-local file created; pkgLocalRoot points at <tmp>/lib (which has no ../scripts/harness-verify.sh).
+
+    const homeBackup = process.env.HOME;
+    const fakeHome = mkdtempSync(join(tmpdir(), 'harness-fake-home-'));
+    const legacyDir = join(fakeHome, '.claude', 'scripts');
+    mkdirSync(legacyDir, { recursive: true });
+    const legacyTarget = join(legacyDir, 'harness-verify.sh');
+    writeFileSync(legacyTarget, '#!/bin/sh\necho ok\n');
+    chmodSync(legacyTarget, 0o755);
+    process.env.HOME = fakeHome;
+
+    try {
+      const result = resolveVerifyScriptPath(join(tmp, 'lib'));
+      expect(result).toBe(legacyTarget);
+    } finally {
+      process.env.HOME = homeBackup;
+      rmSync(fakeHome, { recursive: true, force: true });
+    }
   });
 
   it('falls through to legacy when package-local exists but is not executable', () => {
@@ -754,16 +799,18 @@ rm -rf "$TMP"
       "command": "! grep -nE \"'\\.claude/scripts'|\\\"\\.claude/scripts\\\"\" src/phases/verify.ts" },
     { "name": "dist/scripts/harness-verify.sh exists and is executable",
       "command": "test -x dist/scripts/harness-verify.sh" },
-    { "name": "Preflight does not hang on smoke run (spawnSync timeout proves itself within 30s)",
-      "command": "bash -c 'TMP=$(mktemp -d); cd \"$TMP\"; git init -q && git commit --allow-empty -q -m smoke; ( timeout 30 node \"$OLDPWD/dist/bin/harness.js\" run smoke --allow-dirty </dev/null >/tmp/harness-smoke.out 2>&1 & SMOKE_PID=$!; sleep 25; kill -INT $SMOKE_PID 2>/dev/null; wait $SMOKE_PID 2>/dev/null; true ); cd \"$OLDPWD\"; rm -rf \"$TMP\"; grep -qE \"Phase 1|Advisor Reminder|claude @file check timed out\" /tmp/harness-smoke.out' " },
-    { "name": "Smoke run printed advisor reminder near spawn",
-      "command": "grep -q 'Advisor Reminder' /tmp/harness-smoke.out" }
+    { "name": "Preflight uses spawnSync with SIGKILL killSignal (proves hang fix is in source)",
+      "command": "grep -nE \"spawnSync\\(.*claudeAtFile|killSignal:\\s*'SIGKILL'\" src/preflight.ts" },
+    { "name": "Advisor reminder is invoked from interactive.ts spawn seam (not runner.ts)",
+      "command": "grep -q 'printAdvisorReminder' src/phases/interactive.ts && ! grep -q 'printAdvisorReminder' src/phases/runner.ts" }
   ]
 }
 ```
 
 Notes:
-- The smoke check creates a clean temp git repo, runs `harness run smoke --allow-dirty`, gives it 25 seconds, then sends SIGINT. The success criterion is that output contains evidence the run progressed past preflight (either a Phase 1 banner, the Advisor Reminder, or the timeout warning). If the binary hangs in preflight indefinitely, none of those strings appear and the check fails.
+- The end-to-end smoke proof is left to the manual step in Task 6 — `harness run` requires a TTY (preflight item 10) and the eval-verifier sandbox cannot satisfy that constraint reliably across machines (and `timeout(1)` is not always available on macOS).
+- The `spawnSync killSignal` grep proves the source code change is in place. The CLI help check proves the binary boots. Together they cover the regression that caused the original 4-hour hang without requiring an interactive session.
+- The advisor-seam grep proves the call-site moved (not still in runner) and that interactive.ts now owns the call.
 - Each check exits 0 on pass, non-zero on failure. `harness-verify.sh` runs them sequentially and appends `## Summary` when all checks complete.
 
 ---
