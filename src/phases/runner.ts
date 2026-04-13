@@ -350,7 +350,7 @@ async function handleGateReject(
   }
 }
 
-async function handleGateEscalation(
+export async function handleGateEscalation(
   phase: GatePhase,
   comments: string,
   state: HarnessState,
@@ -576,7 +576,7 @@ async function handleVerifyFail(
   }
 }
 
-async function handleVerifyEscalation(
+export async function handleVerifyEscalation(
   feedbackPath: string,
   state: HarnessState,
   runDir: string,
@@ -677,7 +677,7 @@ async function forcePassVerify(
   printInfo('Verify force-passed — advancing to Phase 7');
 }
 
-async function handleVerifyError(
+export async function handleVerifyError(
   errorPath: string | undefined,
   state: HarnessState,
   _harnessDir: string,

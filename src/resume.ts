@@ -6,7 +6,12 @@ import { readState, writeState } from './state.js';
 import { normalizeArtifactCommit } from './artifact.js';
 import { checkGateSidecars } from './phases/gate.js';
 import { readVerifyResult, isEvalReportValid } from './phases/verify.js';
-import { runPhaseLoop } from './phases/runner.js';
+import {
+  runPhaseLoop,
+  handleGateEscalation,
+  handleVerifyEscalation,
+  handleVerifyError,
+} from './phases/runner.js';
 import type { HarnessState, PhaseNumber } from './types.js';
 
 /**
@@ -157,8 +162,11 @@ async function applyStoredVerifyResult(
     try { unlinkSync(join(runDir, 'verify-result.json')); } catch { /* best-effort */ }
     try { unlinkSync(join(runDir, 'verify-feedback.md')); } catch { /* best-effort */ }
   } else if (result.exitCode !== 0 && result.hasSummary) {
-    // FAIL: increment verifyRetries, save feedback, reopen Phase 5
+    // FAIL: increment verifyRetries. Check escalation threshold per spec.
     state.verifyRetries += 1;
+    const retryCount = state.verifyRetries;
+    const { VERIFY_RETRY_LIMIT } = await import('./config.js');
+
     const feedbackPath = join(runDir, 'verify-feedback.md');
     if (!existsSync(feedbackPath) && existsSync(evalReportPath)) {
       try {
@@ -167,17 +175,41 @@ async function applyStoredVerifyResult(
         writeFileSync(feedbackPath, content);
       } catch { /* best-effort */ }
     }
-    state.pendingAction = {
-      type: 'reopen_phase',
-      targetPhase: 5,
-      sourcePhase: 6,
-      feedbackPaths: [feedbackPath],
-    };
-    state.phases['5'] = 'pending';
-    state.phases['6'] = 'failed';
-    state.currentPhase = 5;
-    writeState(runDir, state);
-    try { unlinkSync(evalReportPath); } catch { /* best-effort */ }
+
+    if (retryCount >= VERIFY_RETRY_LIMIT && !state.autoMode) {
+      // Escalation: pause with show_escalation pendingAction
+      state.phases['6'] = 'failed';
+      state.pendingAction = {
+        type: 'show_escalation',
+        targetPhase: 6,
+        sourcePhase: 5,
+        feedbackPaths: [feedbackPath],
+      };
+      state.status = 'paused';
+      state.pauseReason = 'verify-escalation';
+      writeState(runDir, state);
+      try { unlinkSync(evalReportPath); } catch { /* best-effort */ }
+    } else if (retryCount >= VERIFY_RETRY_LIMIT && state.autoMode) {
+      // Auto-mode force-skip — delegate to runner's force-pass logic on next loop
+      // Mark 6 as failed so runner detects verifyRetries >= limit and force-passes
+      state.phases['6'] = 'failed';
+      state.pendingAction = null;
+      writeState(runDir, state);
+      try { unlinkSync(evalReportPath); } catch { /* best-effort */ }
+    } else {
+      // Normal retry: reopen Phase 5
+      state.pendingAction = {
+        type: 'reopen_phase',
+        targetPhase: 5,
+        sourcePhase: 6,
+        feedbackPaths: [feedbackPath],
+      };
+      state.phases['5'] = 'pending';
+      state.phases['6'] = 'failed';
+      state.currentPhase = 5;
+      writeState(runDir, state);
+      try { unlinkSync(evalReportPath); } catch { /* best-effort */ }
+    }
   }
   // ERROR (exitCode != 0 && !hasSummary): leave state as-is so runner re-displays ERROR UI
 }
@@ -590,32 +622,45 @@ async function replayPendingAction(
       }
       break;
     }
-    case 'show_escalation':
-    case 'show_verify_error': {
-      // Spec: these paused-UI actions must re-display the menu for the user to choose again.
-      // We delegate to the runner's escalation/error handlers by restoring the pre-pause state
-      // so the appropriate handler re-shows the UI.
+    case 'show_escalation': {
+      // Re-display the paused escalation menu directly by invoking the runner's handler.
+      // Determine gate vs verify escalation from sourcePhase.
       state.status = 'in_progress';
-      if (action.type === 'show_verify_error') {
-        // Restore Phase 6 error state; verify handler will show ERROR UI via runPhaseLoop
-        state.phases['6'] = 'error';
-      } else {
-        // show_escalation: gate/verify escalation
-        if (action.sourcePhase === 5 || action.targetPhase === 6) {
-          // Verify-escalation: Phase 6 failed + verifyRetries at limit
-          state.phases['6'] = 'failed';
-          state.verifyRetries = Math.max(state.verifyRetries, 3);
-        } else {
-          // Gate escalation: target gate phase at retry limit
-          const tp = String(action.targetPhase);
-          state.phases[tp] = 'pending';
-          state.gateRetries[tp] = Math.max(state.gateRetries[tp] ?? 0, 3);
-          state.currentPhase = action.targetPhase;
-        }
-      }
       state.pendingAction = null;
       writeState(runDir, state);
-      break;
+
+      // Load feedback content to show to user
+      let comments = '';
+      if (action.feedbackPaths.length > 0) {
+        try {
+          comments = readFileSync(action.feedbackPaths[0], 'utf-8');
+        } catch { /* best-effort */ }
+      }
+
+      if (action.sourcePhase === 5 || action.targetPhase === 6) {
+        // Verify-escalation
+        const feedbackPath = action.feedbackPaths[0] ?? join(runDir, 'verify-feedback.md');
+        await handleVerifyEscalation(feedbackPath, state, runDir, cwd);
+      } else {
+        // Gate-escalation: action.sourcePhase is the rejected gate phase (2/4/7)
+        const gatePhase = (action.sourcePhase ?? action.targetPhase) as 2 | 4 | 7;
+        await handleGateEscalation(gatePhase, comments, state, runDir, cwd);
+      }
+      // handleXxxEscalation writes state + returns. If user chose Quit, state is paused again.
+      if ((state.status as string) === 'paused') return;
+      await runPhaseLoop(state, harnessDir, runDir, cwd);
+      return;
+    }
+    case 'show_verify_error': {
+      state.status = 'in_progress';
+      state.pendingAction = null;
+      writeState(runDir, state);
+
+      const errorPath = action.feedbackPaths[0] ?? undefined;
+      await handleVerifyError(errorPath, state, harnessDir, runDir, cwd);
+      if ((state.status as string) === 'paused') return;
+      await runPhaseLoop(state, harnessDir, runDir, cwd);
+      return;
     }
   }
 
