@@ -1,10 +1,24 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
 
-import { readVerifyResult, isEvalReportValid } from '../../src/phases/verify.js';
-import type { VerifyResult } from '../../src/types.js';
+vi.mock('../../src/state.js', () => ({ writeState: vi.fn() }));
+vi.mock('../../src/lock.js', () => ({ updateLockChild: vi.fn(), clearLockChild: vi.fn() }));
+vi.mock('../../src/artifact.js', () => ({ runPhase6Preconditions: vi.fn() }));
+vi.mock('../../src/process.js', () => ({
+  getProcessStartTime: vi.fn(() => 0),
+  isProcessGroupAlive: vi.fn(() => false),
+  killProcessGroup: vi.fn().mockResolvedValue(undefined),
+}));
+vi.mock('child_process', async (importActual) => {
+  const actual = await importActual<typeof import('child_process')>();
+  return { ...actual, spawn: vi.fn() };
+});
+
+import { readVerifyResult, isEvalReportValid, runVerifyPhase } from '../../src/phases/verify.js';
+import * as preflightModule from '../../src/preflight.js';
+import type { HarnessState, VerifyResult } from '../../src/types.js';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -184,5 +198,27 @@ describe('classification: ERROR — verify-result.json missing (subprocess crash
     // Null result maps to ERROR classification
     const isError = parsed === null;
     expect(isError).toBe(true);
+  });
+});
+
+describe('runVerifyPhase — script resolution', () => {
+  it('delegates script resolution to resolveVerifyScriptPath', async () => {
+    const spy = vi.spyOn(preflightModule, 'resolveVerifyScriptPath').mockReturnValue(null);
+    const dir = tmpDir();
+
+    const state = {
+      runId: 'test-run',
+      phases: {},
+      artifacts: { checklist: 'checklist.json', evalReport: 'eval.md' },
+    } as unknown as HarnessState;
+
+    try {
+      await runVerifyPhase(state, dir, dir, dir);
+    } catch {
+      // expected — resolveVerifyScriptPath returns null → throws
+    }
+
+    expect(spy).toHaveBeenCalled();
+    spy.mockRestore();
   });
 });
