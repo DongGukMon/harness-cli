@@ -1,9 +1,41 @@
-import { execSync } from 'child_process';
+import { execSync, spawnSync } from 'child_process';
 import { existsSync, accessSync, readdirSync, writeFileSync, unlinkSync, constants } from 'fs';
 import os from 'os';
 import path from 'path';
+import { fileURLToPath } from 'url';
 
 import type { PreflightItem, PhaseType } from './types.js';
+
+/**
+ * Resolve the harness-verify.sh path.
+ * Priority:
+ *  1. Package-local: <package>/dist/scripts/harness-verify.sh (works after npm install)
+ *  2. Legacy fallback: ~/.claude/scripts/harness-verify.sh
+ * Returns the path if accessible (readable + executable), null otherwise.
+ */
+export function resolveVerifyScriptPath(): string | null {
+  // 1. Package-local path: dist/scripts/harness-verify.sh relative to this compiled file
+  //    At runtime: dist/src/preflight.js → ../../scripts/ = dist/scripts/
+  try {
+    const __filename = fileURLToPath(import.meta.url);
+    const packageLocal = path.join(path.dirname(__filename), '..', 'scripts', 'harness-verify.sh');
+    if (existsSync(packageLocal)) {
+      accessSync(packageLocal, constants.R_OK | constants.X_OK);
+      return packageLocal;
+    }
+  } catch {
+    // fall through to legacy
+  }
+
+  // 2. Legacy fallback: ~/.claude/scripts/harness-verify.sh
+  const legacy = path.join(os.homedir(), '.claude', 'scripts', 'harness-verify.sh');
+  try {
+    accessSync(legacy, constants.R_OK | constants.X_OK);
+    return legacy;
+  } catch {
+    return null;
+  }
+}
 
 // Map phase type → required preflight items.
 const PHASE_ITEMS: Record<PhaseType, PreflightItem[]> = {
@@ -92,34 +124,52 @@ function runItem(item: PreflightItem, cwd?: string): { codexPath?: string } {
 
     case 'claudeAtFile': {
       const tmpFile = path.join(os.tmpdir(), `harness-preflight-${process.pid}.txt`);
-      writeFileSync(tmpFile, 'harness preflight check\n');
       try {
-        execSync(`claude --model claude-sonnet-4-6 @${tmpFile} --print '' 2>&1`, {
-          stdio: 'pipe',
-        });
-      } catch {
-        throw new Error('claude @<file> syntax is required but not supported.');
+        writeFileSync(tmpFile, '', 'utf-8');
+        const result = spawnSync(
+          'claude',
+          ['--model', 'claude-sonnet-4-6', `@${tmpFile}`, '--print', ''],
+          {
+            stdio: 'pipe',
+            encoding: 'utf-8',
+            timeout: 5000,
+            killSignal: 'SIGKILL',
+          }
+        );
+
+        const timedOut =
+          (result.error as NodeJS.ErrnoException | undefined)?.code === 'ETIMEDOUT' ||
+          result.signal === 'SIGKILL';
+
+        if (timedOut) {
+          process.stderr.write(
+            '⚠️  preflight: claude @file check timed out (5s); skipping — runtime failure will be surfaced at phase level if @file is unsupported.\n'
+          );
+          return {};
+        }
+
+        if (result.status !== 0) {
+          process.stderr.write(
+            `⚠️  preflight: claude @file check exited with status ${result.status}; continuing (weak signal).\n`
+          );
+          return {};
+        }
       } finally {
         try {
           unlinkSync(tmpFile);
         } catch {
-          // best-effort cleanup
+          /* best-effort */
         }
       }
       return {};
     }
 
     case 'verifyScript': {
-      const scriptPath = path.join(
-        os.homedir(),
-        '.claude',
-        'scripts',
-        'harness-verify.sh'
-      );
-      try {
-        accessSync(scriptPath, constants.R_OK | constants.X_OK);
-      } catch {
-        throw new Error('harness-verify.sh not found.');
+      const scriptPath = resolveVerifyScriptPath();
+      if (scriptPath === null) {
+        throw new Error(
+          'harness-verify.sh not found. Run `harness setup` or install the package globally.'
+        );
       }
       return {};
     }

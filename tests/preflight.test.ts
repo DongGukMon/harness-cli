@@ -1,7 +1,15 @@
-import { describe, it, expect } from 'vitest';
+import { vi, describe, it, expect, beforeEach } from 'vitest';
 import os from 'os';
 import path from 'path';
 import { existsSync } from 'fs';
+
+// Top-level module mock — required in ESM
+vi.mock('child_process', async (importActual) => {
+  const actual = await importActual<typeof import('child_process')>();
+  return { ...actual, spawnSync: vi.fn() };
+});
+
+import { spawnSync } from 'child_process';
 import { getPreflightItems, runPreflight, resolveCodexPath } from '../src/preflight.js';
 import type { PhaseType } from '../src/types.js';
 
@@ -154,5 +162,33 @@ describe('runPreflight - multiple items', () => {
     expect(() => runPreflight(['platform', 'git', 'node'], os.tmpdir())).toThrow(
       'harness requires a git repository.'
     );
+  });
+});
+
+describe('preflight claudeAtFile timeout behavior', () => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let stderrSpy: ReturnType<typeof vi.spyOn<any, any>>;
+
+  beforeEach(() => {
+    vi.mocked(spawnSync).mockReset();
+    stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+  });
+
+  it('demotes timeout to warning and does not throw', () => {
+    const timeoutErr = Object.assign(new Error('timed out'), { code: 'ETIMEDOUT' });
+    vi.mocked(spawnSync).mockReturnValue({
+      pid: 0,
+      output: [],
+      stdout: Buffer.from(''),
+      stderr: Buffer.from(''),
+      status: null,
+      signal: 'SIGKILL',
+      error: timeoutErr,
+    } as ReturnType<typeof spawnSync>);
+
+    expect(() => runPreflight(['claudeAtFile'])).not.toThrow();
+
+    const stderrCalls = stderrSpy.mock.calls.map((c) => String(c[0])).join('');
+    expect(stderrCalls).toMatch(/claude @file check timed out/);
   });
 });
