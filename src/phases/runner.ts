@@ -233,6 +233,7 @@ async function handleInteractivePhase(
     const next = nextPhase(phase);
     state.currentPhase = next;
 
+    process.stdout.write('\x1b[2J\x1b[H');
     printPhaseTransition(phase, next, phaseLabel(phase) + ' — 완료', phaseLabel(next));
     writeState(runDir, state);
   } else {
@@ -276,6 +277,7 @@ async function handleGatePhase(
       } else {
         const next = nextPhase(phase);
         state.currentPhase = next;
+        process.stdout.write('\x1b[2J\x1b[H');
         printPhaseTransition(phase, next, phaseLabel(phase) + ' — APPROVED', phaseLabel(next));
         writeState(runDir, state);
       }
@@ -522,6 +524,7 @@ async function handleVerifyPhase(
       fs.unlinkSync(path.join(runDir, 'verify-feedback.md'));
     } catch { /* best-effort: may not exist */ }
 
+    process.stdout.write('\x1b[2J\x1b[H');
     printPhaseTransition(6, 7, phaseLabel(6) + ' — PASS', phaseLabel(7));
   } else if (outcome.type === 'fail') {
     await handleVerifyFail(outcome.feedbackPath, state, runDir, cwd);
