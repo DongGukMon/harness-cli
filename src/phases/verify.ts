@@ -1,5 +1,4 @@
 import fs from 'fs';
-import os from 'os';
 import path from 'path';
 import { spawn } from 'child_process';
 
@@ -9,6 +8,7 @@ import { writeState } from '../state.js';
 import { updateLockChild, clearLockChild } from '../lock.js';
 import { runPhase6Preconditions } from '../artifact.js';
 import { killProcessGroup, getProcessStartTime } from '../process.js';
+import { resolveVerifyScriptPath } from '../preflight.js';
 
 const VERIFY_RESULT_FILE = 'verify-result.json';
 const VERIFY_FEEDBACK_FILE = 'verify-feedback.md';
@@ -101,7 +101,10 @@ export async function runVerifyPhase(
   writeState(runDir, state);
 
   // Step 4: Spawn subprocess
-  const scriptPath = path.join(os.homedir(), '.claude', 'scripts', 'harness-verify.sh');
+  const scriptPath = resolveVerifyScriptPath();
+  if (scriptPath === null) {
+    throw new Error('harness-verify.sh not found. Cannot run verification.');
+  }
   const child = spawn(
     scriptPath,
     [state.artifacts.checklist, state.artifacts.evalReport],
