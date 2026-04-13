@@ -168,7 +168,10 @@ export async function runVerifyPhase(
     });
   });
 
-  // Step 7: Cleanup
+  // Step 7: Wait for process group to fully drain (mirror gate/interactive cleanup),
+  // then clear lock. harness-verify.sh may spawn arbitrary check subprocesses that
+  // can outlive the shell — we must confirm ESRCH before releasing concurrency guard.
+  await killProcessGroup(childPid, SIGTERM_WAIT_MS);
   clearLockChild(harnessDir);
 
   if (outcome.type === 'pass') {

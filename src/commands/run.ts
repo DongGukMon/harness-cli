@@ -82,7 +82,17 @@ export async function runCommand(task: string, options: RunOptions = {}): Promis
   // 10. Create initial state
   const state = createInitialState(runId, task, baseCommit, codexPath, options.auto ?? false);
 
-  // 11. Write state.json atomically
+  // 11. Save task.md FIRST — must exist before any preserved-run failure path
+  // so Phase 1 resume/jump can find its required input.
+  try {
+    writeFileSync(join(runDir, 'task.md'), task, 'utf-8');
+  } catch (err) {
+    cleanupFailedInit(runDir, harnessDir, runId, false);
+    process.stderr.write(`Error: failed to write task.md: ${(err as Error).message}\n`);
+    process.exit(1);
+  }
+
+  // 12. Write state.json atomically
   let stateWritten = false;
   try {
     writeState(runDir, state);
@@ -94,13 +104,13 @@ export async function runCommand(task: string, options: RunOptions = {}): Promis
     process.exit(1);
   }
 
-  // 12. Acquire lock (O_EXCL)
+  // 13. Acquire lock (O_EXCL)
   let lockAcquired = false;
   try {
     acquireLock(harnessDir, runId);
     lockAcquired = true;
   } catch (err) {
-    // State is written — preserve run
+    // State + task.md both written — preserve run
     process.stderr.write(
       `Error: failed to acquire lock: ${(err as Error).message}\n` +
       `Run initialization failed after state was created. Resume with: harness resume ${runId}\n`
@@ -108,11 +118,8 @@ export async function runCommand(task: string, options: RunOptions = {}): Promis
     process.exit(1);
   }
 
-  // 13. Update current-run pointer (only after state + lock success)
+  // 14. Update current-run pointer (only after state + lock success)
   setCurrentRun(harnessDir, runId);
-
-  // 14. Save task.md
-  writeFileSync(join(runDir, 'task.md'), task, 'utf-8');
 
   // 15. Register signal handlers
   // childPid lookup reads from the lock file (written by phase runners via updateLockChild)
