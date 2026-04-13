@@ -1,7 +1,9 @@
-import { vi, describe, it, expect, beforeEach } from 'vitest';
+import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
 import os from 'os';
 import path from 'path';
-import { existsSync } from 'fs';
+import { existsSync, mkdtempSync, mkdirSync, writeFileSync, chmodSync, rmSync } from 'fs';
+import { join } from 'path';
+import { tmpdir } from 'os';
 
 // Top-level module mock — required in ESM
 vi.mock('child_process', async (importActual) => {
@@ -10,7 +12,7 @@ vi.mock('child_process', async (importActual) => {
 });
 
 import { spawnSync } from 'child_process';
-import { getPreflightItems, runPreflight, resolveCodexPath } from '../src/preflight.js';
+import { getPreflightItems, runPreflight, resolveCodexPath, resolveVerifyScriptPath } from '../src/preflight.js';
 import type { PhaseType } from '../src/types.js';
 
 describe('getPreflightItems', () => {
@@ -167,7 +169,7 @@ describe('runPreflight - multiple items', () => {
 
 describe('preflight claudeAtFile timeout behavior', () => {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  let stderrSpy: ReturnType<typeof vi.spyOn<any, any>>;
+  let stderrSpy: any;
 
   beforeEach(() => {
     vi.mocked(spawnSync).mockReset();
@@ -190,5 +192,106 @@ describe('preflight claudeAtFile timeout behavior', () => {
 
     const stderrCalls = stderrSpy.mock.calls.map((c) => String(c[0])).join('');
     expect(stderrCalls).toMatch(/claude @file check timed out/);
+  });
+});
+
+describe('resolveVerifyScriptPath — package-local branch (deterministic via override)', () => {
+  let tmp: string;
+
+  beforeEach(() => {
+    tmp = mkdtempSync(join(tmpdir(), 'harness-pkglocal-'));
+    // Layout: <tmp>/lib (simulated package-local root) and <tmp>/scripts/ (target dir)
+    mkdirSync(join(tmp, 'lib'), { recursive: true });
+    mkdirSync(join(tmp, 'scripts'), { recursive: true });
+  });
+
+  afterEach(() => {
+    rmSync(tmp, { recursive: true, force: true });
+  });
+
+  it('returns package-local path when present and executable', () => {
+    const target = join(tmp, 'scripts', 'harness-verify.sh');
+    writeFileSync(target, '#!/bin/sh\necho ok\n');
+    chmodSync(target, 0o755);
+    const result = resolveVerifyScriptPath(join(tmp, 'lib'));
+    expect(result).toBe(target);
+  });
+
+  it('returns legacy path when package-local is absent and legacy is present + executable', () => {
+    const homeBackup = process.env.HOME;
+    const fakeHome = mkdtempSync(join(tmpdir(), 'harness-fake-home-'));
+    const legacyDir = join(fakeHome, '.claude', 'scripts');
+    mkdirSync(legacyDir, { recursive: true });
+    const legacyTarget = join(legacyDir, 'harness-verify.sh');
+    writeFileSync(legacyTarget, '#!/bin/sh\necho ok\n');
+    chmodSync(legacyTarget, 0o755);
+    process.env.HOME = fakeHome;
+
+    try {
+      const result = resolveVerifyScriptPath(join(tmp, 'lib'));
+      expect(result).toBe(legacyTarget);
+    } finally {
+      process.env.HOME = homeBackup;
+      rmSync(fakeHome, { recursive: true, force: true });
+    }
+  });
+
+  it('falls through to legacy when package-local exists but is not executable', () => {
+    const pkgTarget = join(tmp, 'scripts', 'harness-verify.sh');
+    writeFileSync(pkgTarget, '#!/bin/sh\necho ok\n');
+    chmodSync(pkgTarget, 0o644); // not executable
+
+    const homeBackup = process.env.HOME;
+    const fakeHome = mkdtempSync(join(tmpdir(), 'harness-fake-home-'));
+    const legacyDir = join(fakeHome, '.claude', 'scripts');
+    mkdirSync(legacyDir, { recursive: true });
+    const legacyTarget = join(legacyDir, 'harness-verify.sh');
+    writeFileSync(legacyTarget, '#!/bin/sh\necho ok\n');
+    chmodSync(legacyTarget, 0o755);
+    process.env.HOME = fakeHome;
+
+    try {
+      const result = resolveVerifyScriptPath(join(tmp, 'lib'));
+      expect(result).toBe(legacyTarget);
+    } finally {
+      process.env.HOME = homeBackup;
+      rmSync(fakeHome, { recursive: true, force: true });
+    }
+  });
+
+  it('returns null when package-local is missing and legacy is missing', () => {
+    const homeBackup = process.env.HOME;
+    const fakeHome = mkdtempSync(join(tmpdir(), 'harness-fake-home-'));
+    process.env.HOME = fakeHome;
+    try {
+      const result = resolveVerifyScriptPath(join(tmp, 'lib'));
+      expect(result).toBeNull();
+    } finally {
+      process.env.HOME = homeBackup;
+      rmSync(fakeHome, { recursive: true, force: true });
+    }
+  });
+
+  it('returns null when both package-local and legacy exist but neither is executable', () => {
+    const pkgTarget = join(tmp, 'scripts', 'harness-verify.sh');
+    writeFileSync(pkgTarget, '#!/bin/sh\necho ok\n');
+    chmodSync(pkgTarget, 0o644);
+
+    const homeBackup = process.env.HOME;
+    const fakeHome = mkdtempSync(join(tmpdir(), 'harness-fake-home-'));
+    const legacyDir = join(fakeHome, '.claude', 'scripts');
+    mkdirSync(legacyDir, { recursive: true });
+    const legacyTarget = join(legacyDir, 'harness-verify.sh');
+    writeFileSync(legacyTarget, '#!/bin/sh\necho ok\n');
+    chmodSync(legacyTarget, 0o644);
+    process.env.HOME = fakeHome;
+
+    try {
+      const result = resolveVerifyScriptPath(join(tmp, 'lib'));
+      expect(result).toBeNull();
+    } finally {
+      process.env.HOME = homeBackup;
+      rmSync(fakeHome, { recursive: true, force: true });
+    }
   });
 });

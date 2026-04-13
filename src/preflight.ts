@@ -6,35 +6,44 @@ import { fileURLToPath } from 'url';
 
 import type { PreflightItem, PhaseType } from './types.js';
 
+const _defaultPackageLocalRoot = path.dirname(fileURLToPath(import.meta.url));
+
 /**
  * Resolve the harness-verify.sh path.
- * Priority:
- *  1. Package-local: <package>/dist/scripts/harness-verify.sh (works after npm install)
+ * Lookup order:
+ *  1. Package-local: <packageLocalRoot>/../scripts/harness-verify.sh (after build → dist/scripts/...)
  *  2. Legacy fallback: ~/.claude/scripts/harness-verify.sh
- * Returns the path if accessible (readable + executable), null otherwise.
+ * Returns null if neither is present + executable.
+ *
+ * @param packageLocalRoot - override the package-local search root (defaults to this module's __dirname).
+ *                           Tests may pass a temp dir to deterministically exercise the package-local branch.
  */
-export function resolveVerifyScriptPath(): string | null {
-  // 1. Package-local path: dist/scripts/harness-verify.sh relative to this compiled file
-  //    At runtime: dist/src/preflight.js → ../../scripts/ = dist/scripts/
-  try {
-    const __filename = fileURLToPath(import.meta.url);
-    const packageLocal = path.join(path.dirname(__filename), '..', 'scripts', 'harness-verify.sh');
-    if (existsSync(packageLocal)) {
+export function resolveVerifyScriptPath(
+  packageLocalRoot: string = _defaultPackageLocalRoot
+): string | null {
+  // 1. Package-local path
+  const packageLocal = path.join(packageLocalRoot, '..', 'scripts', 'harness-verify.sh');
+  if (existsSync(packageLocal)) {
+    try {
       accessSync(packageLocal, constants.R_OK | constants.X_OK);
       return packageLocal;
+    } catch {
+      // not accessible — fall through to legacy
     }
-  } catch {
-    // fall through to legacy
   }
 
   // 2. Legacy fallback: ~/.claude/scripts/harness-verify.sh
   const legacy = path.join(os.homedir(), '.claude', 'scripts', 'harness-verify.sh');
-  try {
-    accessSync(legacy, constants.R_OK | constants.X_OK);
-    return legacy;
-  } catch {
-    return null;
+  if (existsSync(legacy)) {
+    try {
+      accessSync(legacy, constants.R_OK | constants.X_OK);
+      return legacy;
+    } catch {
+      // not accessible
+    }
   }
+
+  return null;
 }
 
 // Map phase type → required preflight items.
