@@ -35,6 +35,10 @@ export function preparePhase(
   const sentinelPath = path.join(runDir, `phase-${phase}.done`);
   try { fs.unlinkSync(sentinelPath); } catch { /* ignore */ }
 
+  // Delete stale interrupt flag (ADR-10: prevent immediate settle on retry)
+  const interruptFlagPath = path.join(runDir, `interrupted-${phase}.flag`);
+  try { fs.unlinkSync(interruptFlagPath); } catch { /* ignore */ }
+
   // Phase 1/3: delete output artifact files to prevent stale mtime
   const artifactKeys = PHASE_ARTIFACT_FILES[phase] as (keyof Artifacts)[] | undefined;
   if (artifactKeys) {

@@ -119,6 +119,10 @@ export function registerSignalHandlers(ctx: SignalContext): void {
       const action = JSON.parse(raw) as { action: string; phase?: number };
       const state = getState();
 
+      // Capture interrupted phase BEFORE mutation (ADR-5/ADR-10)
+      const interruptedPhase = state.currentPhase;
+      const interruptedPhaseType = getCurrentPhaseType();
+
       if (action.action === 'skip') {
         state.phases[String(state.currentPhase)] = 'completed';
         state.currentPhase = state.currentPhase + 1;
@@ -136,15 +140,13 @@ export function registerSignalHandlers(ctx: SignalContext): void {
       writeState(runDir, state);
       fs.unlinkSync(pendingPath);
 
-      // Write phase-scoped interrupt flag (immediate settle for PID-null case)
-      const currentState = getState();
-      const interruptFlagPath = path.join(runDir, `interrupted-${currentState.currentPhase}.flag`);
+      // Write interrupt flag for the INTERRUPTED phase (not the new target phase)
+      const interruptFlagPath = path.join(runDir, `interrupted-${interruptedPhase}.flag`);
       fs.writeFileSync(interruptFlagPath, '1');
 
-      // Phase-type-aware interruption
-      const phaseType = getCurrentPhaseType();
-      if (phaseType === 'interactive' && currentState.tmuxWorkspacePane) {
-        sendKeysToPane(currentState.tmuxSession, currentState.tmuxWorkspacePane, 'C-c');
+      // Interrupt the INTERRUPTED phase's process (not the next phase's)
+      if (interruptedPhaseType === 'interactive' && state.tmuxWorkspacePane) {
+        sendKeysToPane(state.tmuxSession, state.tmuxWorkspacePane, 'C-c');
       } else {
         const childPid = getChildPid();
         if (childPid) {
