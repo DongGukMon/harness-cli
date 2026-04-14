@@ -1,7 +1,7 @@
 # harness Skill 외부 배포 — Design Spec
 
 - Date: 2026-04-14
-- Status: Draft (Rev 7 — gate-2 feedback 반영)
+- Status: Draft
 - Scope: `~/.claude/skills/`에 있는 harness 스킬을 공유 가능한 Claude Code 플러그인으로 패키징
 - Related decisions: [decisions.md](../../.harness/2026-04-14-claude-harness-skill/decisions.md)
 
@@ -400,7 +400,7 @@ rm -rf ~/.claude/skills/harness ~/.claude/skills/codex-gate-review
 | `CLAUDE.md` | 플러그인 레벨 harness-lifecycle 규칙 (ADR-2) |
 | `src/commands/init.ts` | `harness init` 명령어 (ADR-4: enabledPlugins 미관여) |
 | `src/commands/verify-cmd.ts` | `harness verify` 래퍼 명령어 |
-| `src/commands/session-hook.ts` | `harness session-hook` 래퍼 명령어 (F4: 출력 계약 구현) |
+| `src/commands/session-hook.ts` | `harness session-hook` 래퍼 명령어 (F4 해소) |
 | `src/commands/gate-exec.ts` | `harness gate-exec` 래퍼 명령어 (ADR-6) |
 
 ### Modify
