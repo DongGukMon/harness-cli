@@ -78,7 +78,9 @@ Pane 기반 레이아웃으로 전환하면:
 **[ADR-10] SIGUSR1 처리 시 interrupt flag로 즉시 settle.**
 - SIGUSR1 handler가 `<runDir>/interrupted-<phase>.flag` 파일을 기록 (phase-scoped).
 - `waitForPhaseCompletion`이 sentinel과 함께 해당 phase의 flag도 감시 (500ms polling).
-- Flag 감지 시: 즉시 settle('failed'). PID 유무와 무관하게 동작.
+- Flag 감지 시: PID에 따라 동작 분기.
+  - PID null: 즉시 settle('failed') — PID polling 불가이므로 flag가 유일한 탈출구.
+  - PID known: flag 감지 + PID 사망 대기 (3초 grace). Claude가 Ctrl-C 받고 종료할 시간을 줌. Grace 후에도 alive면 settle('failed').
 - Phase 시작 전에 해당 phase의 stale flag를 삭제 (이전 phase의 flag가 남아있을 수 있으므로).
 - 이유: claudePid가 null인 상태에서 Ctrl-C로 Claude를 종료해도 sentinel이 안 쓰이고 PID polling도 불가. 10분 hang 방지. Phase-scoped이므로 gate/verify 중 skip/jump가 발생해도 다음 interactive phase에 영향 없음.
 
@@ -118,12 +120,7 @@ $ harness run "태스크"
 ```typescript
 // __inner가 시작되면:
 // 1. Lock claim (기존)
-// 2. Control pane ID 캡처
-const controlPaneId = getControlPaneId(sessionName);
-state.tmuxControlPane = controlPaneId;
-
-// 3. Pane pair validation (idempotent — control + workspace를 함께 검증)
-// Control pane ID는 --control-pane CLI 인자로 전달됨 (ADR-9: focus 독립적)
+// 2. Control pane ID: CLI 인자에서 읽음 (ADR-9: focus 독립적)
 const controlPaneId = options.controlPane;  // e.g., "%0"
 state.tmuxControlPane = controlPaneId;
 
@@ -234,16 +231,30 @@ async function waitForPhaseCompletion(
     }, 1000);
 
     // Interrupt flag watch (SIGUSR1이 기록하는 phase-scoped flag)
-    // PID 유무와 무관하게 즉시 settle → 10분 hang 방지
     const interruptFlagPath = path.join(runDir, `interrupted-${phase}.flag`);
     // Phase 시작 시 stale flag 삭제
     if (fs.existsSync(interruptFlagPath)) fs.unlinkSync(interruptFlagPath);
     const interruptPoll = setInterval(() => {
       if (settled) return;
       if (fs.existsSync(interruptFlagPath)) {
-        clearInterval(interruptPoll);
         try { fs.unlinkSync(interruptFlagPath); } catch { /* ignore */ }
-        settle('failed');
+        if (claudePid === null) {
+          // PID unknown → flag만으로 즉시 settle (유일한 탈출구)
+          clearInterval(interruptPoll);
+          settle('failed');
+        } else {
+          // PID known → flag 감지 + PID 사망 대기 (최대 3초 grace)
+          // Claude가 Ctrl-C 받고 종료할 시간을 줌
+          const graceDeadline = Date.now() + 3000;
+          const graceCheck = setInterval(() => {
+            if (settled) { clearInterval(graceCheck); return; }
+            if (!isPidAlive(claudePid!) || Date.now() > graceDeadline) {
+              clearInterval(graceCheck);
+              clearInterval(interruptPoll);
+              settle('failed');
+            }
+          }, 200);
+        }
       }
     }, 500);
 
@@ -317,10 +328,11 @@ export function paneExists(session: string, paneTarget: string): boolean;
   // Exact line match (not substring grep): output.split('\n').some(line => line.trim() === paneTarget)
   // Same pattern as existing windowExists()
 
-export function getDefaultPaneId(session: string): string;
-  // tmux list-panes -t <session> -F '#{pane_id}' | head -1
-  // Returns the first (default) pane ID of the session's active window
-  // Used by outer to determine control pane ID before sending __inner
+export function getDefaultPaneId(session: string, windowTarget?: string): string;
+  // windowTarget 지정 시: tmux list-panes -t <session>:<windowTarget> -F '#{pane_id}' | head -1
+  // windowTarget 미지정 시: tmux list-panes -t <session> -F '#{pane_id}' | head -1 (active window)
+  // Dedicated mode: getDefaultPaneId(session) — window 0의 default pane
+  // Reused mode: getDefaultPaneId(session, ctrlWindowId) — 새로 만든 window의 pane
   // Throws if tmux command fails
 ```
 
@@ -393,9 +405,9 @@ createSession(sessionName, cwd);
 const controlPaneId = getDefaultPaneId(sessionName);  // → "%0"
 sendKeys(sessionName, '0', `harness __inner ${runId} --control-pane ${controlPaneId}`);
 
-// Reused mode:
+// Reused mode (window 지정으로 올바른 pane 캡처):
 const ctrlWindowId = createWindow(sessionName, 'harness-ctrl', '');
-const controlPaneId = getDefaultPaneId(sessionName);
+const controlPaneId = getDefaultPaneId(sessionName, ctrlWindowId);
 sendKeys(sessionName, ctrlWindowId, `harness __inner ${runId} --control-pane ${controlPaneId}`);
 ```
 
@@ -404,15 +416,22 @@ sendKeys(sessionName, ctrlWindowId, `harness __inner ${runId} --control-pane ${c
 - Case 1 (session + inner alive): 기존과 동일 — re-attach만
 - Case 2 (session alive, inner dead): pane-aware 타겟팅
   - `state.tmuxControlPane`이 유효하면 (`paneExists`) 해당 pane에 `sendKeysToPane`로 inner 명령 전송. `--control-pane <paneId>` 인자에 동일 값 전달.
-  - **Control pane이 stale하면: Case 3로 fallback (세션 kill → 새 세션 생성).** 잘못된 pane에서 inner를 시작하면 복구가 불가능하므로, stale 상태에서는 깨끗하게 재시작하는 것이 안전.
+  - **Control pane이 stale하면: tmuxMode에 따라 cleanup 후 Case 3로 fallback.**
+    - Dedicated mode: `killSession(state.tmuxSession)` → Case 3 (새 세션 생성)
+    - Reused mode: `killWindow(state.tmuxSession, state.tmuxControlWindow)` → Case 3 (새 window 생성). 부모 세션은 절대 kill하지 않음 (ADR-7).
     ```typescript
     if (state.tmuxControlPane && paneExists(state.tmuxSession, state.tmuxControlPane)) {
       // Control pane valid → restart inner here
       sendKeysToPane(state.tmuxSession, state.tmuxControlPane, innerCmd);
     } else {
-      // Control pane stale → destroy and recreate (fall through to Case 3)
-      killSession(state.tmuxSession);
-      // ... Case 3 logic: createSession → sendKeys → openTerminalWindow
+      // Control pane stale → cleanup by mode, then Case 3
+      if (state.tmuxMode === 'dedicated') {
+        killSession(state.tmuxSession);
+      } else {
+        // Reused: kill harness window only, preserve parent session
+        if (state.tmuxControlWindow) killWindow(state.tmuxSession, state.tmuxControlWindow);
+      }
+      // Fall through to Case 3: createSession/createWindow → sendKeys → openTerminalWindow
     }
     ```
 - Case 3 (no session): 기존과 동일 — 새 session 생성, inner가 pane split 담당
