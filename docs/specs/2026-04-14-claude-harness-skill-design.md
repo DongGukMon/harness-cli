@@ -1,7 +1,7 @@
 # harness Skill 외부 배포 — Design Spec
 
 - Date: 2026-04-14
-- Status: Draft (Rev 6 — gate-2 feedback 반영, decisions.md 추가)
+- Status: Draft (Rev 7 — gate-2 feedback 반영)
 - Scope: `~/.claude/skills/`에 있는 harness 스킬을 공유 가능한 Claude Code 플러그인으로 패키징
 - Related decisions: [decisions.md](../../.harness/2026-04-14-claude-harness-skill/decisions.md)
 
@@ -346,7 +346,7 @@ CLI 버전 검증 추가 (ADR-7): `harness gate-exec` 호출 전 `harness --vers
 npm install -g harness-cli
 
 # Step 2. 초기 설정 — marketplace 등록 + SessionStart 훅 등록 + 의존성 진단
-#   ⚠️ enabledPlugins는 건드리지 않는다 (ADR-4)
+#   enabledPlugins는 건드리지 않는다 (ADR-4)
 harness init
 
 # Step 3. Claude Code 세션에서 플러그인 설치
