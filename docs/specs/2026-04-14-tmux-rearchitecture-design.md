@@ -61,7 +61,8 @@ harness-cli의 첫 실사용에서 근본적인 UX 문제가 드러남:
 
 **[ADR-8] Lock ownership는 atomic handoff로 이전된다.**
 - Outer가 `repo.lock` + `run.lock` 획득.
-- Lock에 `handoff: true` + `tmuxSession: <name>` 기록. 이 상태에서 lock은 "handoff in progress"로 간주 — `acquireLock()`은 이를 active로 취급하고 steal하지 않음.
+- Lock에 `handoff: true` + `tmuxSession: <name>` + `outerPid: <PID>` 기록.
+- `acquireLock()`의 handoff 판정: `handoff: true`이고 `outerPid`가 alive → active (steal 불가). `handoff: true`이고 `outerPid`가 dead → abandoned handoff → lock 회수 허용 (stale 취급).
 - Outer가 tmux 세션 생성 + `__inner` 시작 → outer는 tmux 안에서 inner PID가 lock에 기록될 때까지 대기 (최대 5초 polling). 확인 후 exit.
 - Inner가 시작 시: lock 파일의 `cliPid`를 자신의 PID로 갱신 + `handoff: false` 설정. 이 시점에서 handoff 완료.
 - Inner가 crash하면 lock의 PID가 dead + `handoff: false` → 다음 `harness resume`에서 stale lock 감지 → 정상 복구.
@@ -187,10 +188,13 @@ end tell
 ```typescript
 export async function innerCommand(runId: string, options: { root?: string }): Promise<void>;
   // 1. runDir에서 state.json 로드
-  // 2. lock 파일의 cliPid를 현재 PID로 갱신 (outer → inner ownership 이전)
-  // 3. signal handler 등록 (SIGINT/SIGTERM + SIGUSR1 for skip/jump)
-  // 4. runPhaseLoop() 실행 (기존 runner.ts 재활용)
-  // 5. 완료 시:
+  // 2. lock 파일의 cliPid를 현재 PID로 갱신 + handoff: false (outer → inner ownership 완료)
+  // 3. pending-action.json 확인 + 적용 (skip/jump가 inner 부재 중 기록한 action 소비)
+  //    - 파일 존재 시: action 읽기 → state 변경 → 파일 삭제
+  //    - 파일 부재 시: no-op
+  // 4. signal handler 등록 (SIGINT/SIGTERM + SIGUSR1 for skip/jump)
+  // 5. runPhaseLoop() 실행 (기존 runner.ts 재활용)
+  // 6. 완료 시:
   //    - dedicated mode: tmux 세션 kill
   //    - reused mode: state.tmuxWindows에 기록된 window만 kill, 부모 세션 유지
 ```
@@ -291,8 +295,9 @@ export async function resumeCommand(runId, options): Promise<void> {
     openTerminalWindow(sessionName);
   } else if (sessionExists(sessionName) && !innerAlive) {
     // Case 2: 세션은 살아있지만 inner가 죽음 → inner 재시작
-    // control window가 있으면 거기서, 없으면 새 window 생성
     sendKeys(sessionName, controlWindowId, `harness __inner ${runId}`);
+    // ADR-8 패턴 재활용: inner PID가 lock에 기록될 때까지 최대 5초 polling
+    pollForInnerPid(harnessDir, 5000);
     openTerminalWindow(sessionName);
   } else {
     // Case 3: 세션 없음 → 새로 생성
