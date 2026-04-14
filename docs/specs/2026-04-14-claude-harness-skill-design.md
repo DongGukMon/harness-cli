@@ -1,7 +1,7 @@
 # harness Skill 외부 배포 — Design Spec
 
 - Date: 2026-04-14
-- Status: Draft (Rev 2 — gate-2 feedback 반영)
+- Status: Draft (Rev 3 — gate-2 feedback 반영 완료)
 - Scope: `~/.claude/skills/`에 있는 harness 스킬을 공유 가능한 Claude Code 플러그인으로 패키징
 - Related decisions: [decisions.md](../../.harness/2026-04-14-claude-harness-skill/decisions.md)
 
@@ -23,57 +23,20 @@ harness 생태계는 현재 세 곳에 분산되어 있다:
 
 Claude Code 플러그인 시스템이 이 문제의 표준 해법이다. 플러그인으로 패키징하면 `/plugin install` 한 줄로 스킬 + 스크립트 + 행동 규칙이 모두 설치된다.
 
-### Decisions
+### Key Decisions (요약)
 
-**[ADR-1] 단일 GitHub 레포를 npm 패키지 + Claude Code 플러그인으로 동시 운영한다 (모노레포).**
-- 스킬은 CLI 명령어를 참조하고, CLI는 스킬이 정의한 프로세스를 실행한다. 양쪽이 밀결합.
-- 별도 레포로 분리하면 버전 싱크 문제 발생 (스킬 v2가 CLI v1의 존재하지 않는 명령어 참조).
-- npm publish 시 `"files"` 필드로 dist/scripts만 포함 — 플러그인 메타데이터는 npm tarball에 불포함.
-- 플러그인 install 시 GitHub 전체 레포가 캐시됨 — skills/, scripts/, CLAUDE.md 모두 포함.
-- 선례: superpowers 플러그인도 단일 레포에 skills + docs + CLAUDE.md + agents를 모두 포함.
+> 전체 Decision Log: [decisions.md](../../.harness/2026-04-14-claude-harness-skill/decisions.md)
 
-**[ADR-2] 플러그인 CLAUDE.md에 harness-lifecycle 규칙을 포함한다.**
-- Claude Code는 활성 플러그인의 루트 CLAUDE.md를 자동 로드한다.
-- 현재 사용자 글로벌 `~/.claude/CLAUDE.md`에 수동 삽입된 `harness-lifecycle` 섹션을 플러그인 CLAUDE.md로 이전.
-- 사용자가 글로벌 CLAUDE.md를 편집할 필요 없음.
-
-**[ADR-3] 스크립트 경로 해석은 CLI가 런타임에 수행한다. 심볼릭 링크나 고정 경로 불필요.**
-- `resolveVerifyScriptPath()`가 이미 패키지 로컬 → `~/.claude/scripts/` 순서로 탐색 (구현 완료).
-- npm 글로벌 설치 시 `<npm-root>/harness-cli/scripts/harness-verify.sh`에 스크립트 존재 → 패키지 로컬 경로로 발견.
-- `~/.claude/scripts/` 폴백은 하위호환용으로 유지 (기존 사용자 마이그레이션 경로).
-
-**[ADR-4] `harness init` 명령어는 marketplace 등록 + SessionStart 훅만 설정한다. `enabledPlugins`는 관여하지 않는다.**
-- **변경 사유 (gate-2 P1 피드백):** 이전 설계에서 `harness init`이 `enabledPlugins`에 플러그인을 추가한 뒤 별도 단계에서 `/plugin install`을 수행하도록 했으나, 아직 설치되지 않은 플러그인을 활성화하면 Claude Code 로드 시 오류가 발생한다.
-- `enabledPlugins`는 Claude Code의 `/plugin install` 명령어가 플러그인 fetch/캐시 성공 후 자동으로 등록한다. CLI가 이 필드를 직접 조작하지 않는다.
-- `harness init`의 역할은:
-  1. `extraKnownMarketplaces`에 harness GitHub 레포를 마켓플레이스로 등록
-  2. `hooks.SessionStart`에 `harness session-hook` CLI 명령어를 훅으로 등록
-  3. 의존성 진단 결과 출력
-- 이 순서에서는 마켓플레이스 등록 → 사용자가 `/plugin install` 실행 → Claude Code가 `enabledPlugins` 자동 관리의 흐름이 보장된다.
-
-**[ADR-5] 스킬 내 스크립트/도구 참조를 전부 CLI 명령어로 대체한다.**
-- 현재: `~/.claude/scripts/harness-verify.sh <checklist> <output>` (경로 하드코딩)
-- 변경: `harness verify <checklist> <output>` (CLI 래핑)
-- CLI가 내부적으로 `resolveVerifyScriptPath()`로 올바른 스크립트를 찾아 실행.
-- 스킬 텍스트에 절대 경로가 사라지므로 환경 의존성 제거.
-
-**[ADR-6] Codex 실행 경로도 CLI 명령어로 래핑한다. 스킬에서 캐시 경로를 직접 참조하지 않는다.**
-- **변경 사유 (gate-2 P1 피드백):** `codex-gate-review/SKILL.md`의 `node ~/.claude/plugins/cache/openai-codex/codex/*/scripts/codex-companion.mjs` 패턴은 캐시 구조나 설치 방식이 바뀌면 즉시 깨진다.
-- 변경: `harness gate-exec "<prompt>"` CLI 명령어가 내부적으로 기존 `resolveCodexPath()`(`preflight.ts`)로 올바른 codex-companion 경로를 찾아 실행.
-- 경로 해석 책임이 스킬 텍스트에서 코드로 이동. 캐시 구조 변경이나 버전 업데이트에 자동 대응.
-
-**[ADR-7] 플러그인은 `minCliVersion`을 선언하고, 스킬 시작 시 CLI 버전을 검증한다.**
-- **변경 사유 (gate-2 P1 피드백):** CLI와 플러그인이 별도 배포 단위로 독립 버전되므로, 호환성 계약 없이는 새 스킬이 구버전 CLI의 없는 명령어를 호출할 수 있다.
-- `plugin.json`에 `"minCliVersion": "X.Y.Z"` 필드를 추가한다.
-- 스킬(`harness`, `codex-gate-review`)이 CLI 명령어를 호출하기 전 `harness --version`으로 현재 CLI 버전을 확인한다. `minCliVersion` 미달 시 차단 메시지와 업그레이드 안내를 출력하고 진행을 중단한다.
-- **업데이트 순서:** CLI 먼저 업데이트(`npm update -g harness-cli`), 그 후 플러그인 업데이트(`/plugin update harness@harness`). 이 순서에서는 새 CLI가 먼저 설치되어 새 플러그인의 명령어 호출이 보장된다.
-- 호환 범위: CLI는 semver minor 범위 내에서 하위호환을 유지한다 (새 명령어 추가 O, 기존 명령어 제거/변경 X).
-
-**[ADR-8] 의존성은 문서화된 사전 요구사항으로 처리한다. 설치 시 하드 체크하지 않음.**
-- `codex@openai-codex` 플러그인: gate review에 필요. README에 설치 안내.
-- `superpowers@claude-plugins-official` 플러그인: brainstorming, writing-plans 등 참조. README에 설치 안내.
-- 시스템 도구: `tmux`, `jq`, `node >= 18`. 기존 `runPreflight()`가 런타임에 체크.
-- `harness init`가 의존성 상태를 진단하고 누락 항목을 안내한다 (설치는 하지 않음).
+| ID | 결정 | Gate-2 피드백 반영 |
+|----|------|-------------------|
+| ADR-1 | 단일 GitHub 레포를 npm 패키지 + Claude Code 플러그인으로 동시 운영 (모노레포) | — |
+| ADR-2 | 플러그인 CLAUDE.md에 harness-lifecycle 규칙 포함 | — |
+| ADR-3 | 스크립트 경로 해석은 CLI 런타임 수행 (`resolveVerifyScriptPath()`) | — |
+| ADR-4 | `harness init`은 marketplace 등록 + 훅만 설정. `enabledPlugins` 미관여 | **P1**: 설치 순서 충돌 해소 |
+| ADR-5 | 스킬 내 스크립트 참조를 CLI 명령어로 대체 | — |
+| ADR-6 | Codex 실행 경로도 CLI 명령어로 래핑 (`harness gate-exec`) | **P1**: 캐시 경로 하드코딩 제거 |
+| ADR-7 | `minCliVersion` 선언 + 스킬 시작 시 CLI 버전 검증 | **P1**: 버전 불일치 호환성 계약 |
+| ADR-8 | 의존성은 문서화된 사전 요구사항으로 처리 | — |
 
 ---
 
@@ -209,7 +172,7 @@ harness session-hook
 
 SessionStart 훅에서 호출되는 명령어.
 
-**출력 계약:**
+**출력 계약 (gate-2 P2 피드백 반영):**
 
 stdout JSON schema:
 ```json
@@ -234,7 +197,7 @@ stderr 사용 규칙:
 - stderr는 진단 목적으로만 사용한다 (디버그 로그, 에러 상세). Claude Code는 stderr를 파싱하지 않는다.
 
 비정상 상황 동작:
-- harness-cli가 설치되지 않은 경우 → 훅 명령어 자체가 실패 (exit code ≠ 0) → Claude Code가 silent skip
+- harness-cli가 설치되지 않은 경우 → 훅 명령어 자체가 실패 (exit code != 0) → Claude Code가 silent skip
 - settings.json 훅 등록이 있으나 CLI가 제거된 경우 → 동일하게 silent skip
 
 예시 payload (정상):
@@ -286,7 +249,7 @@ package.json의 `version` 필드를 stdout에 출력한다. 스킬의 CLI 버전
    harness-cli version X.Y.Z is too old for this plugin (requires >= A.B.C).
    Run: npm update -g harness-cli
    ```
-4. CLI를 찾을 수 없음 (exit code ≠ 0) → 설치 안내 출력:
+4. CLI를 찾을 수 없음 (exit code != 0) → 설치 안내 출력:
    ```
    harness-cli not found.
    Run: npm install -g harness-cli
