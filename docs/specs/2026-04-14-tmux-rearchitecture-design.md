@@ -53,10 +53,27 @@ harness-cli의 첫 실사용에서 근본적인 UX 문제가 드러남:
 - 복잡도 대비 가치가 낮음
 - 상태 업데이트 시 화면 clear + 재출력으로 충분
 
-**[ADR-7] 이미 tmux 안에서 실행 시 — 현재 tmux 서버에 새 window 생성.**
+**[ADR-7] 이미 tmux 안에서 실행 시 — 현재 tmux 서버에 새 window 생성 (reused-session mode).**
 - `$TMUX` 환경변수로 tmux 안인지 감지
-- tmux 안이면: iTerm2 새 창 대신 `tmux new-window -n "harness-ctrl"` + `tmux new-window -n "phase-N"` 사용
+- tmux 안이면: iTerm2 새 창 대신, 현재 세션에 `harness-ctrl` window 생성 후 `__inner` 실행
+- 생성한 window ID를 `state.tmuxWindows[]`에 기록. 완료 시 harness가 생성한 window만 닫고, 부모 세션은 절대 kill하지 않음.
 - tmux-in-tmux 문제 회피
+
+**[ADR-8] Lock ownership는 outer → inner로 이전된다.**
+- Outer가 `repo.lock` + `run.lock` 획득 → state에 `innerPid` placeholder 기록 → tmux 세션 생성 + `__inner` 시작 → outer exit
+- Inner가 시작 시 lock 파일의 `cliPid`를 자신의 PID로 갱신 (re-acquire). Lock 파일 자체를 재생성하지 않고 PID만 업데이트.
+- Inner가 crash하면 lock의 PID가 dead → 다음 `harness resume`에서 stale lock 감지 → 정상 복구.
+
+**[ADR-9] `skip`/`jump`/`status`/`list`는 tmux 활성 세션 중에도 동작한다.**
+- `status`/`list`: state.json 읽기 전용 — tmux와 무관. 그대로 동작.
+- `skip`/`jump`: state.json 수정 후 `__inner` 프로세스에 SIGUSR1 시그널 전송. Inner가 SIGUSR1 수신 시 state 재로드 + phase loop 재진입.
+- tmux 세션이 없는 상태에서 `skip`/`jump` 실행 시: state만 변경하고 "다음 `harness resume` 시 반영됩니다" 안내.
+
+**[ADR-10] 터미널 창 열기 실패 시 graceful fallback.**
+- iTerm2 AppleScript 실패 → Terminal.app 시도
+- Terminal.app도 실패 → tmux 세션은 살아있으므로 수동 attach 명령어 출력:
+  `"tmux attach -t harness-<runId>"` 출력 + exit(1)
+- state.json에 `tmuxSession` 저장되어 있으므로 `harness resume`로도 재연결 가능.
 
 ---
 
@@ -164,9 +181,34 @@ end tell
 ```typescript
 export async function innerCommand(runId: string, options: { root?: string }): Promise<void>;
   // 1. runDir에서 state.json 로드
-  // 2. signal handler 등록
-  // 3. runPhaseLoop() 실행 (기존 runner.ts 재활용)
-  // 4. 완료 시 tmux 세션 종료
+  // 2. lock 파일의 cliPid를 현재 PID로 갱신 (outer → inner ownership 이전)
+  // 3. signal handler 등록 (SIGINT/SIGTERM + SIGUSR1 for skip/jump)
+  // 4. runPhaseLoop() 실행 (기존 runner.ts 재활용)
+  // 5. 완료 시:
+  //    - dedicated mode: tmux 세션 kill
+  //    - reused mode: state.tmuxWindows에 기록된 window만 kill, 부모 세션 유지
+```
+
+### Execution modes: dedicated vs reused
+
+state에 `tmuxMode` 필드 추가:
+
+```typescript
+tmuxMode: 'dedicated' | 'reused';
+// dedicated: harness가 생성한 전용 세션 → 완료 시 kill-session
+// reused: 기존 tmux 안에서 window만 생성 → 완료 시 window만 kill
+```
+
+**dedicated mode** ($TMUX 미설정):
+```
+outer: createSession("harness-<runId>") → sendKeys("__inner") → openTerminalWindow → exit
+inner: 완료 시 killSession("harness-<runId>")
+```
+
+**reused mode** ($TMUX 설정됨):
+```
+outer: 현재 세션 이름 감지 → createWindow("harness-ctrl", "__inner") → selectWindow
+inner: 완료 시 state.tmuxWindows 순회 → killWindow each → selectWindow(원래 window)
 ```
 
 ### `src/phases/interactive.ts` — Claude를 tmux window로 실행
@@ -253,14 +295,28 @@ export async function resumeCommand(runId, options): Promise<void> {
 
 ## State 변경
 
-`HarnessState`에 `tmuxSession` 필드 추가:
+`HarnessState`에 tmux 관련 필드 추가:
 
 ```typescript
 interface HarnessState {
   // ... 기존 필드 ...
-  tmuxSession: string;  // tmux 세션 이름 (harness-<runId>)
+  tmuxSession: string;        // tmux 세션 이름 (dedicated: "harness-<runId>", reused: 부모 세션 이름)
+  tmuxMode: 'dedicated' | 'reused';
+  tmuxWindows: string[];      // harness가 생성한 window 이름 목록 (reused mode cleanup용)
+  tmuxOriginalWindow?: string; // reused mode에서 원래 활성 window (복구용)
 }
 ```
+
+### Control window interaction
+
+Gate/verify의 reject/error 처리에서 기존 `promptChoice` 함수가 그대로 사용됨. Window 0 (control)이 `__inner` 프로세스를 직접 실행하므로 stdin은 정상적으로 사용 가능 — Claude가 별도 window에 있어서 stdin 충돌 없음.
+
+현재 runner.ts의 `promptChoice` 호출 지점들:
+- `handleGateError` — [R]etry / [S]kip / [Q]uit
+- `handleVerifyError` — [R]etry / [Q]uit
+- `handleGateEscalation` — 사용자 판단 요청
+
+이들은 모두 control window에서 실행되므로 변경 불필요.
 
 ---
 
@@ -275,12 +331,15 @@ interface HarnessState {
 - `bin/harness.ts` — `__inner` 명령어 등록
 - `src/commands/run.ts` — outer 로직 (preflight + tmux + iTerm2 + exit)
 - `src/commands/resume.ts` — tmux re-attach
+- `src/commands/skip.ts` — SIGUSR1 시그널 전송 추가
+- `src/commands/jump.ts` — SIGUSR1 시그널 전송 추가
 - `src/phases/interactive.ts` — `spawn('claude')` → `tmux new-window`
 - `src/phases/runner.ts` — control panel 렌더링
 - `src/phases/gate.ts` — stderr 실시간 스트리밍
 - `src/phases/verify.ts` — stdout/stderr 실시간 스트리밍
-- `src/types.ts` — `tmuxSession` 필드
-- `src/state.ts` — `tmuxSession` 초기화
+- `src/types.ts` — `tmuxSession`, `tmuxMode`, `tmuxWindows` 필드
+- `src/state.ts` — tmux 필드 초기화
+- `src/lock.ts` — `updateLockPid()` 함수 추가 (inner PID 갱신용)
 
 ### Delete
 - None
@@ -297,6 +356,9 @@ interface HarnessState {
 
 ### Integration
 - `tests/integration/tmux-lifecycle.test.ts` — tmux 세션 생성 → window 생성 → 종료 (실제 tmux 필요)
+- `tests/integration/tmux-reused-mode.test.ts` — reused mode에서 window-only cleanup 검증
+- `tests/integration/lock-transfer.test.ts` — outer → inner PID 이전 + crash recovery
+- `tests/integration/terminal-fallback.test.ts` — iTerm2 실패 → Terminal.app → manual attach 폴백
 
 ### Manual smoke
 - iTerm2에서 `harness run "test"` → 새 창 열림 확인
