@@ -2,13 +2,14 @@ import { execSync } from 'child_process';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync, appendFileSync } from 'fs';
 import { join } from 'path';
 import { getGitRoot, getHead, generateRunId, hasStagedChanges, isWorkingTreeClean } from '../git.js';
-import { acquireLock, readLock, releaseLock } from '../lock.js';
+import { acquireLock, releaseLock, setLockHandoff, pollForHandoffComplete } from '../lock.js';
 import { getPreflightItems, runPreflight } from '../preflight.js';
 import { findHarnessRoot, setCurrentRun } from '../root.js';
 import { createInitialState, writeState } from '../state.js';
-import { runPhaseLoop } from '../phases/runner.js';
-import { registerSignalHandlers } from '../signal.js';
-import type { HarnessState } from '../types.js';
+import { isInsideTmux, getCurrentSessionName, getActiveWindowId, createSession, createWindow, sendKeys, killSession, selectWindow } from '../tmux.js';
+import { openTerminalWindow } from '../terminal.js';
+import { HANDOFF_TIMEOUT_MS } from '../config.js';
+import { printSuccess, printError } from '../ui.js';
 
 export interface RunOptions {
   allowDirty?: boolean;
@@ -118,23 +119,61 @@ export async function runCommand(task: string, options: RunOptions = {}): Promis
     // 16. Update current-run pointer
     setCurrentRun(harnessDir, runId);
 
-    // 17. Register signal handlers
-    registerSignalHandlers({
-      harnessDir,
-      runId,
-      getState: () => state,
-      setState: (s) => Object.assign(state, s),
-      getChildPid: () => readLock(harnessDir)?.childPid ?? null,
-      getCurrentPhaseType: () => {
-        const phase = state.currentPhase;
-        if (phase === 1 || phase === 3 || phase === 5) return 'interactive';
-        return 'automated';
-      },
-      cwd,
-    });
+    // 17. Determine tmux mode
+    const insideTmux = isInsideTmux();
+    const sessionName = insideTmux
+      ? getCurrentSessionName()!
+      : `harness-${runId}`;
 
-    // 18. Run phase loop
-    await runPhaseLoop(state, harnessDir, runDir, cwd);
+    state.tmuxSession = sessionName;
+    state.tmuxMode = insideTmux ? 'reused' : 'dedicated';
+
+    if (insideTmux) {
+      state.tmuxOriginalWindow = getActiveWindowId(sessionName) ?? undefined;
+    }
+
+    writeState(runDir, state);
+
+    // 18. Set lock handoff state
+    setLockHandoff(harnessDir, process.pid, sessionName);
+
+    // 19. Create tmux session (dedicated) or window (reused)
+    const harnessPath = process.argv[1]; // path to harness.js
+    const innerCmd = `node ${harnessPath} __inner ${runId}${options.root ? ` --root ${options.root}` : ''}`;
+
+    if (!insideTmux) {
+      createSession(sessionName, cwd);
+      sendKeys(sessionName, '0', innerCmd);
+    } else {
+      const ctrlWindowId = createWindow(sessionName, 'harness-ctrl', innerCmd);
+      state.tmuxControlWindow = ctrlWindowId;
+      state.tmuxWindows.push(ctrlWindowId);
+      writeState(runDir, state);
+      selectWindow(sessionName, ctrlWindowId);
+    }
+
+    // 20. Wait for inner to claim lock (handoff complete)
+    const handoffOk = pollForHandoffComplete(harnessDir, HANDOFF_TIMEOUT_MS);
+    if (!handoffOk) {
+      printError('Inner process failed to start within 5 seconds.');
+      if (!insideTmux) {
+        killSession(sessionName);
+      }
+      releaseLock(harnessDir, runId);
+      process.exit(1);
+    }
+
+    // 21. Open terminal window (dedicated mode only)
+    if (!insideTmux) {
+      const opened = openTerminalWindow(sessionName);
+      if (!opened) {
+        process.exit(1);
+      }
+    }
+
+    printSuccess(`Harness session started: ${sessionName}`);
+    // Do NOT release lock — inner owns it now
+    lockAcquired = false; // Prevent finally block from releasing
   } finally {
     // 19. Release lock on exit (guaranteed even on errors)
     if (lockAcquired) {
