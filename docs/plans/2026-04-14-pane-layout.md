@@ -322,7 +322,7 @@ import { createWindow, selectWindow, killWindow, windowExists } from '../tmux.js
 ```
 with:
 ```typescript
-import { sendKeysToPane, selectPane, pollForPidFile } from '../tmux.js';
+import { sendKeysToPane, pollForPidFile } from '../tmux.js';
 ```
 
 Add:
@@ -839,7 +839,7 @@ describe('pane utilities', () => {
     vi.mocked(execSync).mockReset();
   });
 
-  it('splitPane calls tmux split-window with correct args', () => {
+  it('splitPane calls tmux split-window with correct args', async () => {
     vi.mocked(execSync).mockReturnValue('%5\n');
     const { splitPane } = await import('../src/tmux.js');
     const id = splitPane('sess', '%0', 'h', 70);
@@ -850,7 +850,7 @@ describe('pane utilities', () => {
     expect(cmd).toContain('-p 70');
   });
 
-  it('sendKeysToPane sends C-c without Enter', () => {
+  it('sendKeysToPane sends C-c without Enter', async () => {
     const { sendKeysToPane } = await import('../src/tmux.js');
     sendKeysToPane('sess', '%0', 'C-c');
     const cmd = vi.mocked(execSync).mock.calls[0][0] as string;
@@ -858,14 +858,14 @@ describe('pane utilities', () => {
     expect(cmd).not.toContain('Enter');
   });
 
-  it('sendKeysToPane sends regular command with Enter', () => {
+  it('sendKeysToPane sends regular command with Enter', async () => {
     const { sendKeysToPane } = await import('../src/tmux.js');
     sendKeysToPane('sess', '%0', 'echo hi');
     const cmd = vi.mocked(execSync).mock.calls[0][0] as string;
     expect(cmd).toContain('Enter');
   });
 
-  it('paneExists returns true on exact match', () => {
+  it('paneExists returns true on exact match', async () => {
     vi.mocked(execSync).mockReturnValue('%0\n%1\n%10\n');
     const { paneExists } = await import('../src/tmux.js');
     expect(paneExists('sess', '%1')).toBe(true);
@@ -873,19 +873,19 @@ describe('pane utilities', () => {
     expect(paneExists('sess', '%100')).toBe(false);
   });
 
-  it('paneExists returns false on error', () => {
+  it('paneExists returns false on error', async () => {
     vi.mocked(execSync).mockImplementation(() => { throw new Error(); });
     const { paneExists } = await import('../src/tmux.js');
     expect(paneExists('sess', '%0')).toBe(false);
   });
 
-  it('getDefaultPaneId returns first pane', () => {
+  it('getDefaultPaneId returns first pane', async () => {
     vi.mocked(execSync).mockReturnValue('%3\n%4\n');
     const { getDefaultPaneId } = await import('../src/tmux.js');
     expect(getDefaultPaneId('sess')).toBe('%3');
   });
 
-  it('getDefaultPaneId with windowTarget includes it in command', () => {
+  it('getDefaultPaneId with windowTarget includes it in command', async () => {
     vi.mocked(execSync).mockReturnValue('%7\n');
     const { getDefaultPaneId } = await import('../src/tmux.js');
     expect(getDefaultPaneId('sess', '@2')).toBe('%7');
@@ -893,7 +893,7 @@ describe('pane utilities', () => {
     expect(cmd).toContain('@2');
   });
 
-  it('getDefaultPaneId throws on empty output', () => {
+  it('getDefaultPaneId throws on empty output', async () => {
     vi.mocked(execSync).mockReturnValue('\n');
     const { getDefaultPaneId } = await import('../src/tmux.js');
     expect(() => getDefaultPaneId('sess')).toThrow('No panes found');
