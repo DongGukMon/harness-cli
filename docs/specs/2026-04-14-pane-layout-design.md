@@ -69,6 +69,18 @@ Pane 기반 레이아웃으로 전환하면:
 **[ADR-8] Dedicated mode cleanup은 기존과 동일 (`killSession`).**
 - Dedicated 세션 전체를 kill. 내부 pane 구조는 무관.
 
+**[ADR-9] Control pane 식별은 CLI 인자로 명시 전달한다. tmux focus에 의존하지 않음.**
+- `harness __inner <runId> --control-pane <paneId>` 형식.
+- Outer(run.ts): 세션 생성 시 default pane ID를 `tmux display-message -t <session> -p '#{pane_id}'`로 캡처 후 전달.
+- Resume Case 2: `state.tmuxControlPane`에서 읽어서 전달.
+- 이유: 사용자가 마우스로 workspace pane을 클릭한 상태에서도 control pane을 정확히 식별해야 함.
+
+**[ADR-10] SIGUSR1 처리 시 interrupt flag로 즉시 settle.**
+- SIGUSR1 handler가 `<runDir>/interrupted.flag` 파일을 기록.
+- `waitForPhaseCompletion`이 sentinel과 함께 이 flag도 감시 (chokidar 또는 polling).
+- Flag 감지 시: 즉시 settle('failed'). PID 유무와 무관하게 동작.
+- 이유: claudePid가 null인 상태에서 Ctrl-C로 Claude를 종료해도 sentinel이 안 쓰이고 PID polling도 불가. 10분 hang 방지.
+
 ---
 
 ## Architecture
@@ -81,8 +93,8 @@ $ harness run "태스크"
   │
   ├── 1. preflight
   ├── 2. state 초기화
-  ├── 3. tmux new-session -d -s harness-<runId>
-  ├── 4. tmux send-keys "harness __inner ..." Enter
+  ├── 3. tmux new-session -d -s harness-<runId>  → default pane %0 생성
+  ├── 4. tmux send-keys "harness __inner <runId> --control-pane %0" Enter
   ├── 5. openTerminalWindow()
   └── 6. exit(0)
 
@@ -110,11 +122,9 @@ const controlPaneId = getControlPaneId(sessionName);
 state.tmuxControlPane = controlPaneId;
 
 // 3. Pane pair validation (idempotent — control + workspace를 함께 검증)
-const controlPaneId = getControlPaneId(sessionName);
-if (!controlPaneId) {
-  process.stderr.write('Fatal: cannot determine control pane ID.\n');
-  process.exit(1);
-}
+// Control pane ID는 CLI 인자로 명시 전달됨 (focus 독립적)
+// harness __inner <runId> --control-pane %4
+const controlPaneId = options.controlPane;  // CLI arg, 절대 tmux focus에서 읽지 않음
 state.tmuxControlPane = controlPaneId;
 
 const controlValid = paneExists(sessionName, state.tmuxControlPane);
@@ -188,6 +198,7 @@ async function waitForPhaseCompletion(
       settled = true;
       if (watcher) { void watcher.close(); watcher = null; }
       clearInterval(pollInterval);
+      clearInterval(interruptPoll);
       if (timeoutTimer) clearTimeout(timeoutTimer);
       // NOTE: workspace pane은 kill하지 않음 (영구 shell)
       resolve({ status });
@@ -222,9 +233,19 @@ async function waitForPhaseCompletion(
       }
     }, 1000);
 
-    // Sentinel-only timeout (PID 캡처 실패 시 안전망)
-    // claudePid가 null이면 PID polling이 동작하지 않으므로,
-    // sentinel만으로 완료를 감지해야 한다. 10분 타임아웃 설정.
+    // Interrupt flag watch (SIGUSR1이 기록하는 interrupted.flag)
+    // PID 유무와 무관하게 즉시 settle → 10분 hang 방지
+    const interruptFlagPath = path.join(runDir, 'interrupted.flag');
+    const interruptPoll = setInterval(() => {
+      if (settled) return;
+      if (fs.existsSync(interruptFlagPath)) {
+        clearInterval(interruptPoll);
+        try { fs.unlinkSync(interruptFlagPath); } catch { /* ignore */ }
+        settle('failed');
+      }
+    }, 500);
+
+    // Sentinel-only timeout (PID 캡처 실패 시 최종 안전망)
     const SENTINEL_ONLY_TIMEOUT_MS = 10 * 60 * 1000;
     const timeoutTimer = claudePid === null
       ? setTimeout(() => {
@@ -249,6 +270,10 @@ async function waitForPhaseCompletion(
 // signal.ts — SIGUSR1 handler 내부
 // Phase-type에 따라 다르게 동작
 const phaseType = getCurrentPhaseType();
+
+// Interrupt flag 기록 (PID null인 경우에도 즉시 settle 보장)
+fs.writeFileSync(path.join(runDir, 'interrupted.flag'), '1');
+
 if (phaseType === 'interactive' && currentState.tmuxWorkspacePane) {
   // Interactive phase: workspace pane의 Claude에 Ctrl-C 전송
   sendKeysToPane(currentState.tmuxSession, currentState.tmuxWorkspacePane, 'C-c');
@@ -281,16 +306,19 @@ export function pollForPidFile(pidFilePath: string, timeoutMs: number): Promise<
   // PID file이 생성될 때까지 polling (200ms 간격)
   // 파일이 생기면 parseInt 후 반환
   // 타임아웃 시 null 반환
-  // Claude launch wrapper가 `echo $! > <pidFile>` 로 PID 기록
+  // Claude launch wrapper가 `echo $$ > <pidFile>; exec claude` 로 PID 기록
+  // (exec 후 PID file의 값 = Claude의 실제 PID)
 
 export function paneExists(session: string, paneTarget: string): boolean;
-  // tmux list-panes -t <session> -F '#{pane_id}' | grep <paneTarget>
-  // Returns true if pane ID exists in session
+  // tmux list-panes -t <session> -F '#{pane_id}'
+  // Exact line match (not substring grep): output.split('\n').some(line => line.trim() === paneTarget)
+  // Same pattern as existing windowExists()
 
-export function getControlPaneId(session: string): string;
-  // tmux display-message -t <session> -p '#{pane_id}'
-  // Returns current pane ID (control pane, since __inner runs here)
-  // Throws if tmux command fails (session not found or not inside tmux)
+export function getDefaultPaneId(session: string): string;
+  // tmux list-panes -t <session> -F '#{pane_id}' | head -1
+  // Returns the first (default) pane ID of the session's active window
+  // Used by outer to determine control pane ID before sending __inner
+  // Throws if tmux command fails
 ```
 
 ### Pane target syntax (canonical format)
@@ -352,9 +380,21 @@ interface HarnessState {
 - `innerCommand` 시작 시 workspace pane 생성 (`splitPane`)
 - Cleanup: dedicated mode는 `killSession` (변경 없음), reused mode는 `killWindow` (변경 없음)
 
-### `src/commands/run.ts` — 변경 없음
+### `src/commands/run.ts` — 최소 변경
 
-Outer 로직은 동일: session 생성 → `sendKeys`로 inner 시작 → iTerm2 열기. Pane 분할은 inner 책임.
+Outer 로직은 기본 동일. 추가: 세션 생성 후 default pane ID를 캡처하여 `__inner --control-pane` 인자로 전달.
+
+```typescript
+// Dedicated mode:
+createSession(sessionName, cwd);
+const controlPaneId = getDefaultPaneId(sessionName);  // → "%0"
+sendKeys(sessionName, '0', `harness __inner ${runId} --control-pane ${controlPaneId}`);
+
+// Reused mode:
+const ctrlWindowId = createWindow(sessionName, 'harness-ctrl', '');
+const controlPaneId = getDefaultPaneId(sessionName);
+sendKeys(sessionName, ctrlWindowId, `harness __inner ${runId} --control-pane ${controlPaneId}`);
+```
 
 ### `src/commands/resume.ts` — pane-aware 재시작
 
@@ -376,7 +416,7 @@ Outer 로직은 동일: session 생성 → `sendKeys`로 inner 시작 → iTerm2
 ## File-level change list
 
 ### Modify
-- `src/tmux.ts` — `splitPane`, `sendKeysToPane`, `selectPane`, `paneExists`, `getControlPaneId`, `pollForPidFile` 추가
+- `src/tmux.ts` — `splitPane`, `sendKeysToPane`, `selectPane`, `paneExists`, `getDefaultPaneId`, `pollForPidFile` 추가
 - `src/types.ts` — `tmuxWorkspacePane`, `tmuxControlPane` 필드 추가
 - `src/state.ts` — 새 필드 초기화
 - `src/commands/inner.ts` — workspace pane 생성 로직 추가
