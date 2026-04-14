@@ -45,6 +45,11 @@ export interface HarnessState {
   pendingAction: PendingAction | null;
   phaseOpenedAt: Record<string, number | null>; // keys "1","3","5" — epoch ms
   phaseAttemptId: Record<string, string | null>; // keys "1","3","5" — UUID v4
+  tmuxSession: string;
+  tmuxMode: 'dedicated' | 'reused';
+  tmuxWindows: string[];
+  tmuxControlWindow: string;
+  tmuxOriginalWindow?: string;
 }
 
 export interface LockData {
@@ -54,6 +59,9 @@ export interface LockData {
   runId: string;
   startedAt: number | null; // epoch seconds
   childStartedAt: number | null; // epoch seconds
+  handoff?: boolean;
+  outerPid?: number;
+  tmuxSession?: string;
 }
 
 export interface GateResult {
@@ -89,6 +97,6 @@ export type VerifyOutcome =
   | { type: 'fail'; feedbackPath: string }
   | { type: 'error'; errorPath?: string };
 
-export type PreflightItem = 'git' | 'head' | 'node' | 'claude' | 'claudeAtFile' | 'verifyScript' | 'jq' | 'codexPath' | 'platform' | 'tty';
+export type PreflightItem = 'git' | 'head' | 'node' | 'claude' | 'claudeAtFile' | 'verifyScript' | 'jq' | 'codexPath' | 'platform' | 'tty' | 'tmux';
 
 export type PhaseType = 'interactive' | 'gate' | 'verify' | 'terminal' | 'ui_only';

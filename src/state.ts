@@ -113,5 +113,9 @@ export function createInitialState(
       '3': null,
       '5': null,
     },
+    tmuxSession: '',
+    tmuxMode: 'dedicated',
+    tmuxWindows: [],
+    tmuxControlWindow: '',
   };
 }
