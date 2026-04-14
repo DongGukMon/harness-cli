@@ -6,7 +6,7 @@ import { acquireLock, releaseLock, setLockHandoff, pollForHandoffComplete } from
 import { getPreflightItems, runPreflight } from '../preflight.js';
 import { findHarnessRoot, setCurrentRun } from '../root.js';
 import { createInitialState, writeState } from '../state.js';
-import { isInsideTmux, getCurrentSessionName, getActiveWindowId, createSession, createWindow, sendKeys, killSession, selectWindow } from '../tmux.js';
+import { isInsideTmux, getCurrentSessionName, getActiveWindowId, createSession, createWindow, sendKeys, killSession, selectWindow, getDefaultPaneId } from '../tmux.js';
 import { openTerminalWindow } from '../terminal.js';
 import { HANDOFF_TIMEOUT_MS } from '../config.js';
 import { printSuccess, printError } from '../ui.js';
@@ -143,9 +143,13 @@ export async function runCommand(task: string, options: RunOptions = {}): Promis
 
     if (!insideTmux) {
       createSession(sessionName, cwd);
-      sendKeys(sessionName, '0', innerCmd);
+      const controlPaneId = getDefaultPaneId(sessionName);
+      const innerCmdWithPane = `${innerCmd} --control-pane ${controlPaneId}`;
+      sendKeys(sessionName, '0', innerCmdWithPane);
     } else {
-      const ctrlWindowId = createWindow(sessionName, 'harness-ctrl', innerCmd);
+      const ctrlWindowId = createWindow(sessionName, 'harness-ctrl', '');
+      const controlPaneId = getDefaultPaneId(sessionName, ctrlWindowId);
+      sendKeys(sessionName, ctrlWindowId, `${innerCmd} --control-pane ${controlPaneId}`);
       state.tmuxControlWindow = ctrlWindowId;
       state.tmuxWindows.push(ctrlWindowId);
       writeState(runDir, state);
