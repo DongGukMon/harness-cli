@@ -1,7 +1,7 @@
 # harness Skill 외부 배포 — Design Spec
 
 - Date: 2026-04-14
-- Status: Draft (Rev 5 — gate-2 feedback 반영)
+- Status: Draft (Rev 6 — gate-2 feedback 반영, decisions.md 추가)
 - Scope: `~/.claude/skills/`에 있는 harness 스킬을 공유 가능한 Claude Code 플러그인으로 패키징
 - Related decisions: [decisions.md](../../.harness/2026-04-14-claude-harness-skill/decisions.md)
 
