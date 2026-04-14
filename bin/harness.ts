@@ -6,6 +6,7 @@ import { statusCommand } from '../src/commands/status.js';
 import { listCommand } from '../src/commands/list.js';
 import { skipCommand } from '../src/commands/skip.js';
 import { jumpCommand } from '../src/commands/jump.js';
+import { innerCommand } from '../src/commands/inner.js';
 
 const program = new Command();
 
@@ -64,6 +65,15 @@ program
   .action(async (phase: string) => {
     const globalOpts = program.opts();
     await jumpCommand(phase, { root: globalOpts.root });
+  });
+
+program
+  .command('__inner <runId>', { hidden: true })
+  .description('(internal) run phase loop inside tmux session')
+  .option('--root <dir>', 'explicit .harness/ parent directory')
+  .action(async (runId: string, opts: { root?: string }) => {
+    const globalOpts = program.opts();
+    await innerCommand(runId, { root: opts.root ?? globalOpts.root });
   });
 
 program.parseAsync(process.argv).catch((err) => {
