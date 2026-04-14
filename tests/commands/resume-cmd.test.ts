@@ -7,19 +7,46 @@ import { resumeCommand } from '../../src/commands/resume.js';
 import { createInitialState, writeState } from '../../src/state.js';
 import { setCurrentRun } from '../../src/root.js';
 
-vi.mock('../../src/resume.js', () => ({
-  resumeRun: vi.fn().mockResolvedValue(undefined),
-}));
-
-vi.mock('../../src/signal.js', async () => {
-  const actual = await vi.importActual<typeof import('../../src/signal.js')>('../../src/signal.js');
-  return { ...actual, registerSignalHandlers: vi.fn() };
-});
-
 vi.mock('../../src/preflight.js', async () => {
   const actual = await vi.importActual<typeof import('../../src/preflight.js')>('../../src/preflight.js');
-  return { ...actual, runPreflight: vi.fn(() => ({})), resolveCodexPath: vi.fn(() => '/fake/codex') };
+  return {
+    ...actual,
+    runPreflight: vi.fn(() => ({})),
+    resolveCodexPath: vi.fn(() => '/fake/codex'),
+  };
 });
+
+vi.mock('../../src/tmux.js', () => ({
+  sessionExists: vi.fn(() => false),
+  isInsideTmux: vi.fn(() => false),
+  getCurrentSessionName: vi.fn(() => null),
+  getActiveWindowId: vi.fn(() => null),
+  createSession: vi.fn(),
+  createWindow: vi.fn(() => '@0'),
+  sendKeys: vi.fn(),
+  killSession: vi.fn(),
+  selectWindow: vi.fn(),
+}));
+
+vi.mock('../../src/terminal.js', () => ({
+  openTerminalWindow: vi.fn(() => true),
+}));
+
+vi.mock('../../src/lock.js', () => ({
+  acquireLock: vi.fn(() => ({})),
+  readLock: vi.fn(() => null),
+  releaseLock: vi.fn(),
+  setLockHandoff: vi.fn(),
+  pollForHandoffComplete: vi.fn(() => true),
+}));
+
+vi.mock('../../src/process.js', () => ({
+  isPidAlive: vi.fn(() => false),
+}));
+
+vi.mock('../../src/ui.js', () => ({
+  printError: vi.fn(),
+}));
 
 function setupRun(repo: { path: string }, overrides: Partial<Record<string, unknown>> = {}) {
   writeFileSync(join(repo.path, '.gitignore'), '.harness/\n');
@@ -95,7 +122,7 @@ describe('resumeCommand', () => {
   it('resumes with explicit runId', async () => {
     setupRun(repo);
     await resumeCommand('2026-04-12-test', { root: repo.path });
-    // Resume ran successfully (mocked resumeRun resolved)
+    // Resume ran successfully (no error thrown)
   });
 
   it('resumes with implicit current-run', async () => {

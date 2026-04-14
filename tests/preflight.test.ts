@@ -18,7 +18,7 @@ import type { PhaseType } from '../src/types.js';
 describe('getPreflightItems', () => {
   it('returns correct items for interactive phases', () => {
     const items = getPreflightItems('interactive');
-    expect(items).toEqual(['git', 'head', 'node', 'claude', 'claudeAtFile', 'platform', 'tty']);
+    expect(items).toEqual(['git', 'head', 'node', 'claude', 'claudeAtFile', 'platform', 'tty', 'tmux']);
   });
 
   it('returns correct items for gate phases', () => {
@@ -192,6 +192,23 @@ describe('preflight claudeAtFile timeout behavior', () => {
 
     const stderrCalls = stderrSpy.mock.calls.map((c: unknown[]) => String(c[0])).join('');
     expect(stderrCalls).toMatch(/claude @file check timed out/);
+  });
+
+  it('demotes non-zero exit (non-timeout) to warning and does not throw', () => {
+    vi.mocked(spawnSync).mockReturnValue({
+      pid: 0,
+      output: [],
+      stdout: Buffer.from(''),
+      stderr: Buffer.from('some error'),
+      status: 1,
+      signal: null,
+      error: undefined,
+    } as ReturnType<typeof spawnSync>);
+
+    expect(() => runPreflight(['claudeAtFile'])).not.toThrow();
+
+    const stderrCalls = stderrSpy.mock.calls.map((c: unknown[]) => String(c[0])).join('');
+    expect(stderrCalls).toMatch(/claude @file check exited with status 1/);
   });
 });
 

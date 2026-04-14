@@ -5,18 +5,6 @@ import { join } from 'path';
 import { createTestRepo } from '../helpers/test-repo.js';
 import { runCommand } from '../../src/commands/run.js';
 
-vi.mock('../../src/phases/runner.js', () => ({
-  runPhaseLoop: vi.fn().mockResolvedValue(undefined),
-}));
-
-vi.mock('../../src/signal.js', async () => {
-  const actual = await vi.importActual<typeof import('../../src/signal.js')>('../../src/signal.js');
-  return {
-    ...actual,
-    registerSignalHandlers: vi.fn(),
-  };
-});
-
 vi.mock('../../src/preflight.js', async () => {
   const actual = await vi.importActual<typeof import('../../src/preflight.js')>('../../src/preflight.js');
   return {
@@ -27,6 +15,33 @@ vi.mock('../../src/preflight.js', async () => {
     }),
   };
 });
+
+vi.mock('../../src/tmux.js', () => ({
+  isInsideTmux: vi.fn(() => false),
+  getCurrentSessionName: vi.fn(() => null),
+  getActiveWindowId: vi.fn(() => null),
+  createSession: vi.fn(),
+  createWindow: vi.fn(() => '@0'),
+  sendKeys: vi.fn(),
+  killSession: vi.fn(),
+  selectWindow: vi.fn(),
+}));
+
+vi.mock('../../src/terminal.js', () => ({
+  openTerminalWindow: vi.fn(() => true),
+}));
+
+vi.mock('../../src/lock.js', () => ({
+  acquireLock: vi.fn(() => ({})),
+  releaseLock: vi.fn(),
+  setLockHandoff: vi.fn(),
+  pollForHandoffComplete: vi.fn(() => true),
+}));
+
+vi.mock('../../src/ui.js', () => ({
+  printSuccess: vi.fn(),
+  printError: vi.fn(),
+}));
 
 describe('runCommand', () => {
   let repo: { path: string; cleanup: () => void };
