@@ -36,13 +36,16 @@ Pane 기반 레이아웃으로 전환하면:
 - Phase 전환 시 workspace pane을 kill하거나 respawn하지 않음.
 
 **[ADR-3] Claude 프로세스 완료 감지: sentinel + PID file polling.**
-- Claude 시작 시 wrapper script가 Claude PID를 `<runDir>/claude.pid`에 기록.
+- Claude 시작: `sh -c 'echo $$ > <pidFile>; exec claude ...'` wrapper 사용.
+  - `echo $$`: shell PID를 파일에 기록. `exec claude`: shell을 Claude로 교체 (같은 PID).
+  - 결과: PID file에 기록된 값 = Claude의 실제 PID.
+- PID file은 phase/attempt scoped: `<runDir>/claude-<phase>-<attemptId>.pid`. 시작 전 삭제.
 - 감지 방식: chokidar sentinel 감시 + PID file polling (1초 간격).
 - PID 사망 + sentinel fresh → completed.
 - PID 사망 + no sentinel → failed.
 - Sentinel detected (PID 아직 alive) → completed (PID polling 중단).
 - **PID 캡처 실패 (파일 없음/PID null)**: sentinel-only 모드 + 10분 타임아웃. 타임아웃 시 settle('failed').
-- PID file 방식을 쓰는 이유: workspace pane은 사용자가 자유롭게 사용하므로 `pgrep -P`로 shell 자식을 찾으면 Claude가 아닌 다른 프로세스를 잡을 수 있음.
+- `exec` 패턴의 이점: Claude가 foreground process이므로 `Ctrl-C` → SIGINT가 직접 전달됨. Background `&` + `wait` 패턴의 시그널 전달 문제 없음.
 
 **[ADR-4] Phase 전환 시 workspace pane 정리: `Ctrl-C` 선전송.**
 - 새 interactive phase 시작 전, workspace pane에 `Ctrl-C`를 send-keys하여 진행 중인 입력을 정리.
@@ -106,11 +109,23 @@ $ harness run "태스크"
 const controlPaneId = getControlPaneId(sessionName);
 state.tmuxControlPane = controlPaneId;
 
-// 3. Workspace pane: validate existing or create new (idempotent)
-if (state.tmuxWorkspacePane && paneExists(sessionName, state.tmuxWorkspacePane)) {
-  // Reuse existing workspace pane (resume Case 2)
+// 3. Pane pair validation (idempotent — control + workspace를 함께 검증)
+const controlPaneId = getControlPaneId(sessionName);
+if (!controlPaneId) {
+  process.stderr.write('Fatal: cannot determine control pane ID.\n');
+  process.exit(1);
+}
+state.tmuxControlPane = controlPaneId;
+
+const controlValid = paneExists(sessionName, state.tmuxControlPane);
+const workspaceValid = state.tmuxWorkspacePane
+  && paneExists(sessionName, state.tmuxWorkspacePane)
+  && state.tmuxWorkspacePane !== state.tmuxControlPane;  // 반드시 서로 다른 pane
+
+if (controlValid && workspaceValid) {
+  // Both panes valid and distinct → reuse (resume Case 2)
 } else {
-  // Create new workspace pane
+  // Control is current pane. Create fresh workspace split.
   const workspacePaneId = splitPane(sessionName, controlPaneId, 'h', 70);
   state.tmuxWorkspacePane = workspacePaneId;
 }
@@ -119,8 +134,9 @@ writeState(runDir, state);
 ```
 
 이 알고리즘은 inner 최초 실행과 resume 재시작 모두에서 동일하게 동작한다:
-- 저장된 pane ID가 유효하면 재사용 → 중복 split 방지
-- 저장된 pane ID가 stale하거나 없으면 새로 split → crash recovery
+- Control + workspace 두 pane이 모두 유효하고 서로 다르면 재사용 → 중복 split 방지
+- 어느 하나라도 stale/동일하면 workspace를 새로 split → crash recovery
+- Control pane ID 캡처 실패 시 fatal exit (tmux 세션이 비정상)
 
 ### Interactive phase (1/3/5) — Claude spawn
 
@@ -129,12 +145,20 @@ writeState(runDir, state);
 sendKeysToPane(sessionName, workspacePaneId, 'C-c');
 await sleep(300);
 
-// 2. Claude 명령 전송 (wrapper가 PID를 파일에 기록)
-const pidFile = path.join(runDir, 'claude.pid');
-const claudeCmd = `claude --dangerously-skip-permissions --model ${model} --effort ${effort} @${promptFile} & echo $! > ${pidFile}; wait $!`;
-sendKeysToPane(sessionName, workspacePaneId, claudeCmd);
+// 2. PID file 준비 (phase/attempt scoped → stale 방지)
+const pidFile = path.join(runDir, `claude-${phase}-${attemptId}.pid`);
+if (fs.existsSync(pidFile)) fs.unlinkSync(pidFile);  // 이전 값 제거
 
-// 3. Claude PID 읽기 (PID file polling, 최대 5초)
+// 3. Claude 명령 전송 (exec wrapper: PID 기록 후 Claude로 교체)
+//    sh -c 'echo $$ > pidfile; exec claude ...' 패턴:
+//    - echo $$: shell PID를 파일에 기록
+//    - exec claude: shell을 Claude로 교체 (같은 PID 유지)
+//    - Ctrl-C → SIGINT가 Claude에 직접 전달됨 (foreground process)
+const claudeArgs = `--dangerously-skip-permissions --model ${model} --effort ${effort} @${path.resolve(promptFile)}`;
+const wrappedCmd = `sh -c 'echo $$ > ${pidFile}; exec claude ${claudeArgs}'`;
+sendKeysToPane(sessionName, workspacePaneId, wrappedCmd);
+
+// 4. Claude PID 읽기 (PID file polling, 최대 5초)
 const claudePid = await pollForPidFile(pidFile, 5000);
 
 // 4. 완료 대기 (sentinel + PID polling)
@@ -263,9 +287,10 @@ export function paneExists(session: string, paneTarget: string): boolean;
   // tmux list-panes -t <session> -F '#{pane_id}' | grep <paneTarget>
   // Returns true if pane ID exists in session
 
-export function getControlPaneId(session: string): string | null;
+export function getControlPaneId(session: string): string;
   // tmux display-message -t <session> -p '#{pane_id}'
   // Returns current pane ID (control pane, since __inner runs here)
+  // Throws if tmux command fails (session not found or not inside tmux)
 ```
 
 ### Pane target syntax (canonical format)
@@ -334,10 +359,11 @@ Outer 로직은 동일: session 생성 → `sendKeys`로 inner 시작 → iTerm2
 ### `src/commands/resume.ts` — pane-aware 재시작
 
 - Case 1 (session + inner alive): 기존과 동일 — re-attach만
-- Case 2 (session alive, inner dead): pane-aware 타겟팅 필요
-  - `state.tmuxControlPane`이 유효하면 해당 pane에 `sendKeysToPane`로 inner 명령 전송
-  - Control pane이 stale하면: window 내 첫 번째 pane에 전송 (fallback)
-  - Inner가 시작되면 idempotent pane validation (위 알고리즘)으로 workspace pane 복구
+- Case 2 (session alive, inner dead): pane-aware 타겟팅
+  - `state.tmuxControlPane`이 유효하면 (`paneExists`) 해당 pane에 `sendKeysToPane`로 inner 명령 전송
+  - Control pane이 stale하면: `tmux list-panes -t <session> -F '#{pane_id}' | head -1`로 첫 번째 pane에 전송 (fallback)
+  - Inner가 시작되면 idempotent pane pair validation (control + workspace 모두 검증)으로 양쪽 pane 복구
+  - 핵심: inner의 pane validation이 control+workspace를 pair로 검증하므로, resume에서 잘못된 pane에 전송되더라도 inner가 시작 즉시 올바른 구조를 복구함
 - Case 3 (no session): 기존과 동일 — 새 session 생성, inner가 pane split 담당
 
 ### `src/signal.ts` — SIGUSR1 phase-aware 변경
@@ -369,8 +395,9 @@ Outer 로직은 동일: session 생성 → `sendKeys`로 inner 시작 → iTerm2
 ## Testing
 
 ### Unit tests
-- `tests/tmux.test.ts` — `splitPane`, `sendKeysToPane`, `selectPane`, `getPaneForegroundPid` mock 검증 추가
-- `tests/phases/interactive.test.ts` — `sendKeysToPane` mock으로 전환, PID polling 테스트
+- `tests/tmux.test.ts` — `splitPane`, `sendKeysToPane`, `selectPane`, `paneExists`, `pollForPidFile` mock 검증 추가
+- `tests/phases/interactive.test.ts` — `sendKeysToPane` mock으로 전환, PID file freshness 테스트, sentinel-only timeout 테스트
+- `tests/commands/inner.test.ts` — idempotent pane pair validation (control+workspace 모두 valid, control stale, workspace stale, 양쪽 모두 stale)
 
 ### Manual smoke
 - `harness run "test"` → iTerm2 새 창, 왼쪽 control + 오른쪽 shell 확인
