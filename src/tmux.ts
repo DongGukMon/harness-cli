@@ -6,6 +6,8 @@ import { execSync } from 'child_process';
  */
 export function createSession(name: string, cwd: string): void {
   execSync(`tmux new-session -d -s ${esc(name)} -c ${esc(cwd)}`, { stdio: 'pipe' });
+  // Enable mouse support (scroll, click, resize)
+  execSync(`tmux set-option -t ${esc(name)} mouse on`, { stdio: 'pipe' });
 }
 
 /**
@@ -72,6 +74,102 @@ export function sendKeys(session: string, windowTarget: string, keys: string): v
   execSync(`tmux send-keys -t ${esc(session)}:${esc(windowTarget)} ${esc(keys)} Enter`, {
     stdio: 'pipe',
   });
+}
+
+/**
+ * Split a pane horizontally or vertically. Returns the new pane ID (e.g., "%5").
+ */
+export function splitPane(
+  session: string,
+  targetPane: string,
+  direction: 'h' | 'v',
+  percent: number
+): string {
+  const flag = direction === 'h' ? '-h' : '-v';
+  const output = execSync(
+    `tmux split-window -t ${esc(session)}:${esc(targetPane)} ${flag} -p ${percent} -P -F '#{pane_id}'`,
+    { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] }
+  );
+  return output.trim();
+}
+
+/**
+ * Send keys to a specific pane.
+ * Special: if keys is 'C-c', sends Ctrl-C without Enter.
+ */
+export function sendKeysToPane(session: string, paneTarget: string, keys: string): void {
+  if (keys === 'C-c') {
+    execSync(`tmux send-keys -t ${esc(session)}:${esc(paneTarget)} C-c`, { stdio: 'pipe' });
+  } else {
+    execSync(`tmux send-keys -t ${esc(session)}:${esc(paneTarget)} ${esc(keys)} Enter`, {
+      stdio: 'pipe',
+    });
+  }
+}
+
+/**
+ * Focus a specific pane.
+ */
+export function selectPane(session: string, paneTarget: string): void {
+  try {
+    execSync(`tmux select-pane -t ${esc(session)}:${esc(paneTarget)}`, { stdio: 'pipe' });
+  } catch {
+    // Pane may already be gone — best-effort
+  }
+}
+
+/**
+ * Check if a pane exists in a session (exact match, read-only).
+ */
+export function paneExists(session: string, paneTarget: string): boolean {
+  try {
+    const output = execSync(
+      `tmux list-panes -t ${esc(session)} -F '#{pane_id}'`,
+      { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] }
+    );
+    return output.split('\n').some((line) => line.trim() === paneTarget);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Get the first pane ID of a window (or active window if windowTarget omitted).
+ */
+export function getDefaultPaneId(session: string, windowTarget?: string): string {
+  const target = windowTarget
+    ? `${esc(session)}:${esc(windowTarget)}`
+    : esc(session);
+  const output = execSync(
+    `tmux list-panes -t ${target} -F '#{pane_id}'`,
+    { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] }
+  );
+  const firstLine = output.split('\n')[0]?.trim();
+  if (!firstLine) {
+    throw new Error(`No panes found in session ${session}`);
+  }
+  return firstLine;
+}
+
+/**
+ * Poll for a PID file to appear and contain a valid PID.
+ * The file is written by: sh -c 'echo $$ > <pidFile>; exec claude ...'
+ * Returns the PID or null on timeout.
+ */
+export async function pollForPidFile(pidFilePath: string, timeoutMs: number): Promise<number | null> {
+  const fs = await import('fs');
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      const content = fs.readFileSync(pidFilePath, 'utf-8').trim();
+      const pid = parseInt(content, 10);
+      if (!isNaN(pid) && pid > 0) return pid;
+    } catch {
+      // File doesn't exist yet
+    }
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+  return null;
 }
 
 /**
