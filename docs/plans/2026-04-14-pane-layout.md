@@ -492,10 +492,9 @@ The existing code after `waitForPhaseCompletion` call that does `killWindow`/`se
 
 ```bash
 pnpm run lint
-pnpm test tests/phases/interactive.test.ts
 ```
 
-Expected: lint clean. Tests will fail until Task 8 updates mocks — that's expected. Run to confirm lint passes.
+Expected: lint clean. Tests are updated in Task 8.
 
 - [ ] **Step 7: Commit**
 
@@ -808,6 +807,26 @@ Replace the `createWindow command includes --dangerously-skip-permissions` test 
     expect(command).toContain('--effort');
     expect(command).toContain('exec claude');
   });
+
+  it('Ctrl-C pre-send happens before Claude command (ADR-4)', async () => {
+    const { sendKeysToPane } = await import('../../src/tmux.js');
+    const { runInteractivePhase } = await import('../../src/phases/interactive.js');
+
+    vi.mocked(sendKeysToPane).mockClear();
+
+    const runDir = makeTmpDir();
+    const harnessDir = makeTmpDir();
+    const repoDir = createTestRepo();
+    const state = makeState();
+
+    await runInteractivePhase(1, state, harnessDir, runDir, repoDir);
+
+    const calls = vi.mocked(sendKeysToPane).mock.calls;
+    // First call should be C-c, second should be the Claude command
+    expect(calls.length).toBeGreaterThanOrEqual(2);
+    expect(calls[0][2]).toBe('C-c');
+    expect(calls[1][2]).toContain('exec claude');
+  });
 ```
 
 - [ ] **Step 5: Add pane tests to tests/tmux.test.ts**
@@ -822,7 +841,7 @@ describe('pane utilities', () => {
 
   it('splitPane calls tmux split-window with correct args', () => {
     vi.mocked(execSync).mockReturnValue('%5\n');
-    const { splitPane } = require('../src/tmux.js');
+    const { splitPane } = await import('../src/tmux.js');
     const id = splitPane('sess', '%0', 'h', 70);
     expect(id).toBe('%5');
     const cmd = vi.mocked(execSync).mock.calls[0][0] as string;
@@ -832,7 +851,7 @@ describe('pane utilities', () => {
   });
 
   it('sendKeysToPane sends C-c without Enter', () => {
-    const { sendKeysToPane } = require('../src/tmux.js');
+    const { sendKeysToPane } = await import('../src/tmux.js');
     sendKeysToPane('sess', '%0', 'C-c');
     const cmd = vi.mocked(execSync).mock.calls[0][0] as string;
     expect(cmd).toContain('C-c');
@@ -840,7 +859,7 @@ describe('pane utilities', () => {
   });
 
   it('sendKeysToPane sends regular command with Enter', () => {
-    const { sendKeysToPane } = require('../src/tmux.js');
+    const { sendKeysToPane } = await import('../src/tmux.js');
     sendKeysToPane('sess', '%0', 'echo hi');
     const cmd = vi.mocked(execSync).mock.calls[0][0] as string;
     expect(cmd).toContain('Enter');
@@ -848,7 +867,7 @@ describe('pane utilities', () => {
 
   it('paneExists returns true on exact match', () => {
     vi.mocked(execSync).mockReturnValue('%0\n%1\n%10\n');
-    const { paneExists } = require('../src/tmux.js');
+    const { paneExists } = await import('../src/tmux.js');
     expect(paneExists('sess', '%1')).toBe(true);
     expect(paneExists('sess', '%10')).toBe(true);
     expect(paneExists('sess', '%100')).toBe(false);
@@ -856,19 +875,19 @@ describe('pane utilities', () => {
 
   it('paneExists returns false on error', () => {
     vi.mocked(execSync).mockImplementation(() => { throw new Error(); });
-    const { paneExists } = require('../src/tmux.js');
+    const { paneExists } = await import('../src/tmux.js');
     expect(paneExists('sess', '%0')).toBe(false);
   });
 
   it('getDefaultPaneId returns first pane', () => {
     vi.mocked(execSync).mockReturnValue('%3\n%4\n');
-    const { getDefaultPaneId } = require('../src/tmux.js');
+    const { getDefaultPaneId } = await import('../src/tmux.js');
     expect(getDefaultPaneId('sess')).toBe('%3');
   });
 
   it('getDefaultPaneId with windowTarget includes it in command', () => {
     vi.mocked(execSync).mockReturnValue('%7\n');
-    const { getDefaultPaneId } = require('../src/tmux.js');
+    const { getDefaultPaneId } = await import('../src/tmux.js');
     expect(getDefaultPaneId('sess', '@2')).toBe('%7');
     const cmd = vi.mocked(execSync).mock.calls[0][0] as string;
     expect(cmd).toContain('@2');
@@ -876,7 +895,7 @@ describe('pane utilities', () => {
 
   it('getDefaultPaneId throws on empty output', () => {
     vi.mocked(execSync).mockReturnValue('\n');
-    const { getDefaultPaneId } = require('../src/tmux.js');
+    const { getDefaultPaneId } = await import('../src/tmux.js');
     expect(() => getDefaultPaneId('sess')).toThrow('No panes found');
   });
 });
@@ -892,13 +911,22 @@ vi.mock('../src/tmux.js', () => ({
 }));
 ```
 
-Update any test that asserts `killWindow` was called to assert `sendKeysToPane` with `'C-c'` instead. Add a test verifying interrupt flag is written:
+Update any test that asserts `killWindow` was called to assert `sendKeysToPane` with `'C-c'` instead. Add tests for both phase types:
 
 ```typescript
-it('SIGUSR1 writes phase-scoped interrupt flag', () => {
+it('SIGUSR1 during interactive phase: writes interrupt flag + sends Ctrl-C to workspace', () => {
+  // Set getCurrentPhaseType → 'interactive', state has tmuxWorkspacePane
   // Trigger SIGUSR1 handler with pending-action.json present
   // Assert: fs.existsSync(`interrupted-${phase}.flag`) === true
-  // Assert: sendKeysToPane called with 'C-c' for interactive phase
+  // Assert: sendKeysToPane called with (session, workspacePane, 'C-c')
+});
+
+it('SIGUSR1 during gate phase: writes interrupt flag + kills child process (no workspace Ctrl-C)', () => {
+  // Set getCurrentPhaseType → 'automated', childPid = 12345
+  // Trigger SIGUSR1 handler with pending-action.json present
+  // Assert: fs.existsSync(`interrupted-${phase}.flag`) === true
+  // Assert: sendKeysToPane NOT called
+  // Assert: process.kill(12345, 'SIGTERM') called
 });
 ```
 
