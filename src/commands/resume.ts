@@ -5,7 +5,7 @@ import { acquireLock, readLock, releaseLock, setLockHandoff, pollForHandoffCompl
 import { getPreflightItems, runPreflight, resolveCodexPath } from '../preflight.js';
 import { findHarnessRoot, getCurrentRun, setCurrentRun } from '../root.js';
 import { readState, writeState } from '../state.js';
-import { sessionExists, createSession, sendKeys, selectWindow, isInsideTmux, getCurrentSessionName, getActiveWindowId, createWindow, killSession } from '../tmux.js';
+import { sessionExists, createSession, sendKeys, selectWindow, isInsideTmux, getCurrentSessionName, getActiveWindowId, createWindow, killSession, killWindow, paneExists, getDefaultPaneId, sendKeysToPane } from '../tmux.js';
 import { openTerminalWindow } from '../terminal.js';
 import { isPidAlive } from '../process.js';
 import { HANDOFF_TIMEOUT_MS } from '../config.js';
@@ -117,13 +117,28 @@ export async function resumeCommand(runId?: string, options: ResumeOptions = {})
   }
 
   if (tmuxAlive && !innerAlive) {
-    // Case 2: Session alive, inner dead → restart inner
+    // Case 2: Session alive, inner dead → pane-aware restart
+    setCurrentRun(harnessDir, targetRunId);
     acquireLock(harnessDir, targetRunId);
     setLockHandoff(harnessDir, process.pid, state.tmuxSession);
 
     const harnessPath = process.argv[1];
-    const ctrlWindow = state.tmuxControlWindow || '0';
-    sendKeys(state.tmuxSession, ctrlWindow, `node ${harnessPath} __inner ${targetRunId}`);
+
+    if (state.tmuxControlPane && paneExists(state.tmuxSession, state.tmuxControlPane)) {
+      // Control pane valid → restart inner here
+      const innerCmd = `node ${harnessPath} __inner ${targetRunId} --control-pane ${state.tmuxControlPane}`;
+      sendKeysToPane(state.tmuxSession, state.tmuxControlPane, innerCmd);
+    } else {
+      // Control pane stale → cleanup by mode, then fall through to Case 3
+      if (state.tmuxMode === 'dedicated') {
+        killSession(state.tmuxSession);
+      } else if (state.tmuxControlWindow) {
+        killWindow(state.tmuxSession, state.tmuxControlWindow);
+      }
+      releaseLock(harnessDir, targetRunId);
+      // Re-enter resume which will hit Case 3
+      return resumeCommand(runId, options);
+    }
 
     const handoffOk = pollForHandoffComplete(harnessDir, HANDOFF_TIMEOUT_MS);
     if (!handoffOk) {
@@ -159,9 +174,12 @@ export async function resumeCommand(runId?: string, options: ResumeOptions = {})
 
   if (!insideTmux) {
     createSession(sessionName, cwd);
-    sendKeys(sessionName, '0', innerCmd);
+    const controlPaneId = getDefaultPaneId(sessionName);
+    sendKeys(sessionName, '0', `${innerCmd} --control-pane ${controlPaneId}`);
   } else {
-    const ctrlWindowId = createWindow(sessionName, 'harness-ctrl', innerCmd);
+    const ctrlWindowId = createWindow(sessionName, 'harness-ctrl', '');
+    const controlPaneId = getDefaultPaneId(sessionName, ctrlWindowId);
+    sendKeys(sessionName, ctrlWindowId, `${innerCmd} --control-pane ${controlPaneId}`);
     state.tmuxControlWindow = ctrlWindowId;
     state.tmuxWindows.push(ctrlWindowId);
     writeState(runDir, state);
