@@ -19,6 +19,8 @@ vi.mock('../../src/tmux.js', () => ({
   killSession: vi.fn(),
   killWindow: vi.fn(),
   selectWindow: vi.fn(),
+  splitPane: vi.fn(() => '%1'),
+  paneExists: vi.fn(() => false),
 }));
 vi.mock('../../src/root.js', () => ({
   findHarnessRoot: vi.fn(),
@@ -30,7 +32,7 @@ vi.mock('../../src/git.js', () => ({
 import { updateLockPid, releaseLock } from '../../src/lock.js';
 import { runPhaseLoop } from '../../src/phases/runner.js';
 import { registerSignalHandlers } from '../../src/signal.js';
-import { killSession, killWindow, selectWindow } from '../../src/tmux.js';
+import { killSession, killWindow, selectWindow, splitPane, paneExists } from '../../src/tmux.js';
 import { findHarnessRoot } from '../../src/root.js';
 
 describe('inner.ts: consumePendingAction behavior', () => {
@@ -51,6 +53,8 @@ describe('inner.ts: consumePendingAction behavior', () => {
       tmuxMode: 'dedicated',
       tmuxWindows: [],
       tmuxControlWindow: '',
+      tmuxWorkspacePane: '',
+      tmuxControlPane: '',
       artifacts: { spec: 's', plan: 'p', decisionLog: 'd', checklist: 'c', evalReport: 'e' },
       phases: { '1': 'completed', '2': 'completed', '3': 'pending', '4': 'pending', '5': 'pending', '6': 'pending', '7': 'pending' },
       gateRetries: { '2': 0, '4': 0, '7': 0 },

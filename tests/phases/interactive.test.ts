@@ -19,10 +19,12 @@ vi.mock('../../src/ui.js', async (importActual) => {
 });
 
 vi.mock('../../src/tmux.js', () => ({
-  createWindow: vi.fn(() => '@99'),
-  selectWindow: vi.fn(),
-  killWindow: vi.fn(),
-  windowExists: vi.fn(() => false), // Window dies immediately in tests
+  sendKeysToPane: vi.fn(),
+  pollForPidFile: vi.fn().mockResolvedValue(12345),
+}));
+
+vi.mock('../../src/process.js', () => ({
+  isPidAlive: vi.fn(() => false),
 }));
 
 vi.mock('../../src/context/assembler.js', () => ({
@@ -54,7 +56,12 @@ function makeState(overrides: Partial<HarnessState> = {}): HarnessState {
     '/usr/local/bin/codex',
     false
   );
-  return { ...base, ...overrides };
+  return {
+    ...base,
+    tmuxWorkspacePane: '%1',
+    tmuxControlPane: '%0',
+    ...overrides,
+  };
 }
 
 /** Create a minimal git repo and return its path (registered for cleanup). */
@@ -547,9 +554,9 @@ describe('validatePhaseArtifacts — Phase 5', () => {
 
 // ─── runInteractivePhase: advisor reminder ordering ──────────────────────────
 
-describe('runInteractivePhase — advisor reminder fires before createWindow', () => {
-  it('printAdvisorReminder is called before createWindow', async () => {
-    const { createWindow } = await import('../../src/tmux.js');
+describe('runInteractivePhase — advisor reminder fires before sendKeysToPane', () => {
+  it('printAdvisorReminder is called before sendKeysToPane', async () => {
+    const { sendKeysToPane } = await import('../../src/tmux.js');
     const { printAdvisorReminder } = await import('../../src/ui.js');
     const { runInteractivePhase } = await import('../../src/phases/interactive.js');
 
@@ -557,39 +564,43 @@ describe('runInteractivePhase — advisor reminder fires before createWindow', (
     const harnessDir = makeTmpDir();
     const repoDir = createTestRepo();
 
-    const state = makeState({ tmuxSession: 'test-session', tmuxControlWindow: 'ctrl-0' });
+    const state = makeState({ tmuxSession: 'test-session', tmuxWorkspacePane: '%1', tmuxControlPane: '%0' });
 
     // Clear any previous call records from other tests
     vi.mocked(printAdvisorReminder).mockClear();
-    vi.mocked(createWindow).mockClear();
+    vi.mocked(sendKeysToPane).mockClear();
 
-    // Run; it will resolve as 'failed' (no sentinel, window dies immediately) — that's fine
+    // Run; it will resolve as 'failed' (no sentinel, PID dies immediately) — that's fine
     await runInteractivePhase(1, state, harnessDir, runDir, repoDir);
 
     const reminderOrder = vi.mocked(printAdvisorReminder).mock.invocationCallOrder[0];
-    const createWindowOrder = vi.mocked(createWindow).mock.invocationCallOrder[0];
+    // sendKeysToPane is called twice: C-c pre-clear, then the actual command
+    const sendKeysToPaneOrder = vi.mocked(sendKeysToPane).mock.invocationCallOrder[0];
 
     expect(reminderOrder).toBeDefined();
-    expect(createWindowOrder).toBeDefined();
-    expect(reminderOrder).toBeLessThan(createWindowOrder);
+    expect(sendKeysToPaneOrder).toBeDefined();
+    expect(reminderOrder).toBeLessThan(sendKeysToPaneOrder);
     expect(vi.mocked(printAdvisorReminder)).toHaveBeenCalledWith(1);
   });
 
-  it('createWindow command includes --dangerously-skip-permissions and --effort', async () => {
-    const { createWindow } = await import('../../src/tmux.js');
+  it('sendKeysToPane command includes --dangerously-skip-permissions and --effort', async () => {
+    const { sendKeysToPane } = await import('../../src/tmux.js');
     const { runInteractivePhase } = await import('../../src/phases/interactive.js');
 
     const runDir = makeTmpDir();
     const harnessDir = makeTmpDir();
     const repoDir = createTestRepo();
-    const state = makeState({ tmuxSession: 'test-session', tmuxControlWindow: 'ctrl-0' });
+    const state = makeState({ tmuxSession: 'test-session', tmuxWorkspacePane: '%1', tmuxControlPane: '%0' });
 
-    vi.mocked(createWindow).mockClear();
+    vi.mocked(sendKeysToPane).mockClear();
 
     await runInteractivePhase(1, state, harnessDir, runDir, repoDir);
 
-    const createWindowCall = vi.mocked(createWindow).mock.calls[0];
-    const command: string = createWindowCall[2]; // 3rd arg is the command string
+    // The second call is the actual Claude command (first call is C-c pre-clear)
+    const calls = vi.mocked(sendKeysToPane).mock.calls;
+    const claudeCallIdx = calls.findIndex((c) => c[2] !== 'C-c');
+    expect(claudeCallIdx).toBeGreaterThanOrEqual(0);
+    const command: string = calls[claudeCallIdx][2];
 
     expect(command).toContain('--dangerously-skip-permissions');
     expect(command).toContain('--effort');

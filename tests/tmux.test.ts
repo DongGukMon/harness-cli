@@ -1,4 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
 
 vi.mock('child_process', async (importActual) => {
   const actual = await importActual<typeof import('child_process')>();
@@ -6,7 +9,7 @@ vi.mock('child_process', async (importActual) => {
 });
 
 import { execSync } from 'child_process';
-import { createSession, sessionExists, createWindow, killWindow, killSession, sendKeys, isInsideTmux, getCurrentSessionName, getActiveWindowId, windowExists, selectWindow } from '../src/tmux.js';
+import { createSession, sessionExists, createWindow, killWindow, killSession, sendKeys, isInsideTmux, getCurrentSessionName, getActiveWindowId, windowExists, selectWindow, splitPane, sendKeysToPane, selectPane, paneExists, getDefaultPaneId, pollForPidFile } from '../src/tmux.js';
 
 describe('tmux utilities', () => {
   beforeEach(() => {
@@ -116,4 +119,124 @@ describe('tmux utilities', () => {
     vi.mocked(execSync).mockImplementation(() => { throw new Error('no session'); });
     expect(windowExists('sess', '@1')).toBe(false);
   });
+
+  // ─── Pane utility tests ──────────────────────────────────────────────────────
+
+  it('splitPane returns new pane ID', () => {
+    vi.mocked(execSync).mockReturnValue('%5\n');
+    const id = splitPane('sess', '%0', 'h', 70);
+    expect(id).toBe('%5');
+  });
+
+  it('splitPane command includes -h flag for horizontal split', () => {
+    vi.mocked(execSync).mockReturnValue('%1\n');
+    splitPane('my-session', '%0', 'h', 70);
+    const cmd = vi.mocked(execSync).mock.calls[0][0] as string;
+    expect(cmd).toContain('split-window');
+    expect(cmd).toContain('-h');
+    expect(cmd).toContain('70');
+  });
+
+  it('splitPane command includes -v flag for vertical split', () => {
+    vi.mocked(execSync).mockReturnValue('%2\n');
+    splitPane('my-session', '%0', 'v', 30);
+    const cmd = vi.mocked(execSync).mock.calls[0][0] as string;
+    expect(cmd).toContain('split-window');
+    expect(cmd).toContain('-v');
+    expect(cmd).toContain('30');
+  });
+
+  it('sendKeysToPane sends C-c without Enter', () => {
+    sendKeysToPane('sess', '%0', 'C-c');
+    const cmd = vi.mocked(execSync).mock.calls[0][0] as string;
+    expect(cmd).toContain('send-keys');
+    expect(cmd).toContain('C-c');
+    expect(cmd).not.toContain('Enter');
+  });
+
+  it('sendKeysToPane sends regular keys with Enter', () => {
+    sendKeysToPane('sess', '%0', 'echo hello');
+    const cmd = vi.mocked(execSync).mock.calls[0][0] as string;
+    expect(cmd).toContain('send-keys');
+    expect(cmd).toContain('echo hello');
+    expect(cmd).toContain('Enter');
+  });
+
+  it('selectPane is best-effort (no throw on error)', () => {
+    vi.mocked(execSync).mockImplementation(() => { throw new Error('no pane'); });
+    expect(() => selectPane('sess', '%1')).not.toThrow();
+  });
+
+  it('selectPane builds correct command', () => {
+    selectPane('sess', '%3');
+    const cmd = vi.mocked(execSync).mock.calls[0][0] as string;
+    expect(cmd).toContain('select-pane');
+    expect(cmd).toContain('sess');
+    expect(cmd).toContain('%3');
+  });
+
+  it('paneExists returns true when pane ID is in list-panes output', () => {
+    vi.mocked(execSync).mockReturnValue('%0\n%1\n%2\n');
+    expect(paneExists('sess', '%1')).toBe(true);
+  });
+
+  it('paneExists returns false when pane ID is not in output', () => {
+    vi.mocked(execSync).mockReturnValue('%0\n%2\n');
+    expect(paneExists('sess', '%1')).toBe(false);
+  });
+
+  it('paneExists returns false on error', () => {
+    vi.mocked(execSync).mockImplementation(() => { throw new Error('no session'); });
+    expect(paneExists('sess', '%1')).toBe(false);
+  });
+
+  it('getDefaultPaneId returns first pane ID', () => {
+    vi.mocked(execSync).mockReturnValue('%0\n%1\n');
+    expect(getDefaultPaneId('sess')).toBe('%0');
+  });
+
+  it('getDefaultPaneId throws when no panes found', () => {
+    vi.mocked(execSync).mockReturnValue('\n');
+    expect(() => getDefaultPaneId('sess')).toThrow('No panes found');
+  });
+
+  it('getDefaultPaneId uses window target when provided', () => {
+    vi.mocked(execSync).mockReturnValue('%3\n');
+    getDefaultPaneId('sess', '@1');
+    const cmd = vi.mocked(execSync).mock.calls[0][0] as string;
+    expect(cmd).toContain('list-panes');
+    expect(cmd).toContain('sess');
+    expect(cmd).toContain('@1');
+  });
+});
+
+describe('pollForPidFile', () => {
+  it('returns PID when file contains a valid PID', async () => {
+    const tmpFile = path.join(os.tmpdir(), `pid-test-${Date.now()}.pid`);
+    fs.writeFileSync(tmpFile, '42\n');
+    try {
+      const result = await pollForPidFile(tmpFile, 1000);
+      expect(result).toBe(42);
+    } finally {
+      fs.unlinkSync(tmpFile);
+    }
+  });
+
+  it('returns null on timeout when file never appears', async () => {
+    const tmpFile = path.join(os.tmpdir(), `pid-missing-${Date.now()}.pid`);
+    // Do not create the file
+    const result = await pollForPidFile(tmpFile, 300);
+    expect(result).toBeNull();
+  }, 2000);
+
+  it('returns null when file contains non-numeric content', async () => {
+    const tmpFile = path.join(os.tmpdir(), `pid-invalid-${Date.now()}.pid`);
+    fs.writeFileSync(tmpFile, 'not-a-number\n');
+    try {
+      const result = await pollForPidFile(tmpFile, 400);
+      expect(result).toBeNull();
+    } finally {
+      fs.unlinkSync(tmpFile);
+    }
+  }, 2000);
 });

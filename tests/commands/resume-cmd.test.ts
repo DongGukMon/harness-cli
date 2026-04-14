@@ -25,7 +25,11 @@ vi.mock('../../src/tmux.js', () => ({
   createWindow: vi.fn(() => '@0'),
   sendKeys: vi.fn(),
   killSession: vi.fn(),
+  killWindow: vi.fn(),
   selectWindow: vi.fn(),
+  paneExists: vi.fn(() => false),
+  getDefaultPaneId: vi.fn(() => '%0'),
+  sendKeysToPane: vi.fn(),
 }));
 
 vi.mock('../../src/terminal.js', () => ({
@@ -165,8 +169,8 @@ describe('resumeCommand', () => {
     expect(vi.mocked(tmux.sendKeys)).not.toHaveBeenCalled();
   });
 
-  it('Case 2: session alive + inner dead → restart inner', async () => {
-    const { harnessDir, runId } = setupRun(repo, { tmuxSession: 'harness-test', tmuxControlWindow: '@0' });
+  it('Case 2: session alive + inner dead → restart inner via control pane', async () => {
+    const { harnessDir, runId } = setupRun(repo, { tmuxSession: 'harness-test', tmuxControlPane: '%0' });
     setCurrentRun(harnessDir, runId);
 
     const tmux = await import('../../src/tmux.js');
@@ -176,12 +180,13 @@ describe('resumeCommand', () => {
 
     // Clear all mocks from previous tests
     vi.mocked(tmux.createSession).mockClear();
-    vi.mocked(tmux.sendKeys).mockClear();
+    vi.mocked(tmux.sendKeysToPane).mockClear();
     vi.mocked(terminal.openTerminalWindow).mockClear();
     vi.mocked(lock.setLockHandoff).mockClear();
     vi.mocked(lock.pollForHandoffComplete).mockClear();
 
     vi.mocked(tmux.sessionExists).mockReturnValue(true);
+    vi.mocked(tmux.paneExists).mockReturnValue(true); // control pane is valid
     vi.mocked(lock.readLock).mockReturnValue({ cliPid: 999, handoff: false, childPid: null, childPhase: null, runId, startedAt: null, childStartedAt: null });
     vi.mocked(proc.isPidAlive).mockReturnValue(false);
     vi.mocked(lock.pollForHandoffComplete).mockReturnValue(true);
@@ -189,7 +194,7 @@ describe('resumeCommand', () => {
     await resumeCommand(undefined, { root: repo.path });
 
     expect(vi.mocked(lock.setLockHandoff)).toHaveBeenCalled();
-    expect(vi.mocked(tmux.sendKeys)).toHaveBeenCalledWith('harness-test', '@0', expect.stringContaining('__inner'));
+    expect(vi.mocked(tmux.sendKeysToPane)).toHaveBeenCalledWith('harness-test', '%0', expect.stringContaining('__inner'));
     expect(vi.mocked(lock.pollForHandoffComplete)).toHaveBeenCalled();
     expect(vi.mocked(terminal.openTerminalWindow)).toHaveBeenCalledWith('harness-test');
     expect(vi.mocked(tmux.createSession)).not.toHaveBeenCalled();

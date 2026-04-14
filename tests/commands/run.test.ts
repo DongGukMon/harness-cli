@@ -25,6 +25,7 @@ vi.mock('../../src/tmux.js', () => ({
   sendKeys: vi.fn(),
   killSession: vi.fn(),
   selectWindow: vi.fn(),
+  getDefaultPaneId: vi.fn(() => '%0'),
 }));
 
 vi.mock('../../src/terminal.js', () => ({

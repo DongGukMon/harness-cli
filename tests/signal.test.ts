@@ -4,7 +4,7 @@ import os from 'os';
 import path from 'path';
 
 vi.mock('../src/tmux.js', () => ({
-  killWindow: vi.fn(),
+  sendKeysToPane: vi.fn(),
 }));
 
 import { registerSignalHandlers, handleShutdown } from '../src/signal.js';
@@ -404,6 +404,8 @@ describe('SIGUSR1 handler', () => {
     baseState.phases['3'] = 'in_progress';
     baseState.tmuxSession = 'test-session';
     baseState.tmuxWindows = ['@5'];
+    baseState.tmuxWorkspacePane = '%1';
+    baseState.tmuxControlPane = '%0';
 
     let currentState = { ...baseState };
     // Write initial state.json so writeState can work
@@ -453,6 +455,8 @@ describe('SIGUSR1 handler', () => {
     baseState.phases['5'] = 'in_progress';
     baseState.tmuxSession = 'test-session';
     baseState.tmuxWindows = ['@7'];
+    baseState.tmuxWorkspacePane = '%1';
+    baseState.tmuxControlPane = '%0';
 
     let currentState = { ...baseState };
     fs.writeFileSync(path.join(runDir, 'state.json'), JSON.stringify(currentState, null, 2));
