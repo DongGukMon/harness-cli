@@ -29,6 +29,15 @@ function runLockPath(harnessDir: string, runId: string): string {
  *  - cliPid dead + kill(-childPid, 0) alive → active
  */
 function assessLiveness(lock: LockData): 'active' | 'stale' {
+  // Handoff check: if lock is in handoff state, check outerPid
+  if (lock.handoff === true) {
+    if (lock.outerPid !== undefined && isPidAlive(lock.outerPid)) {
+      return 'active'; // Outer process is still alive, handoff in progress
+    }
+    // outerPid dead → abandoned handoff → stale
+    return 'stale';
+  }
+
   const cliAlive = isPidAlive(lock.cliPid);
 
   if (cliAlive) {
@@ -226,6 +235,65 @@ export function clearLockChild(harnessDir: string): void {
   }
 
   fs.renameSync(tmpPath, lockPath);
+}
+
+/**
+ * Update cliPid and clear handoff flag. Used by __inner to claim lock ownership.
+ */
+export function updateLockPid(harnessDir: string, newPid: number): void {
+  const lockPath = repoLockPath(harnessDir);
+  const tmpPath = repoLockTmpPath(harnessDir);
+
+  const raw = fs.readFileSync(lockPath, 'utf-8');
+  const lock = JSON.parse(raw) as LockData;
+
+  lock.cliPid = newPid;
+  lock.startedAt = getProcessStartTime(newPid);
+  lock.handoff = false;
+  lock.outerPid = undefined;
+
+  fs.writeFileSync(tmpPath, JSON.stringify(lock, null, 2));
+  const fd = fs.openSync(tmpPath, 'r+');
+  try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+  fs.renameSync(tmpPath, lockPath);
+}
+
+/**
+ * Set handoff state in lock. Used by outer before spawning __inner.
+ */
+export function setLockHandoff(harnessDir: string, outerPid: number, tmuxSession: string): void {
+  const lockPath = repoLockPath(harnessDir);
+  const tmpPath = repoLockTmpPath(harnessDir);
+
+  const raw = fs.readFileSync(lockPath, 'utf-8');
+  const lock = JSON.parse(raw) as LockData;
+
+  lock.handoff = true;
+  lock.outerPid = outerPid;
+  lock.tmuxSession = tmuxSession;
+
+  fs.writeFileSync(tmpPath, JSON.stringify(lock, null, 2));
+  const fd = fs.openSync(tmpPath, 'r+');
+  try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+  fs.renameSync(tmpPath, lockPath);
+}
+
+/**
+ * Poll until lock's handoff flag changes to false (handoff completed).
+ * Returns true if handoff completed, false on timeout.
+ */
+export function pollForHandoffComplete(harnessDir: string, timeoutMs: number): boolean {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const lock = readLock(harnessDir);
+    if (lock && lock.handoff === false) {
+      return true;
+    }
+    // Busy-wait 200ms
+    const waitUntil = Date.now() + 200;
+    while (Date.now() < waitUntil) { /* spin */ }
+  }
+  return false;
 }
 
 /**
