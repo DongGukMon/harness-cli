@@ -80,44 +80,44 @@
 
  RUN  v2.1.9 /Users/daniel/Desktop/projects/harness/harness-cli
 
- ✓ tests/phases/verify.test.ts (12 tests) 12ms
- ✓ tests/phases/gate.test.ts (19 tests) 18ms
- ✓ tests/phases/runner.test.ts (24 tests) 63ms
- ✓ tests/commands/inner.test.ts (5 tests) 16ms
- ✓ tests/preflight.test.ts (25 tests | 1 skipped) 191ms
+ ✓ tests/phases/verify.test.ts (12 tests) 16ms
+ ✓ tests/phases/gate.test.ts (19 tests) 13ms
+ ✓ tests/phases/runner.test.ts (24 tests) 66ms
+ ✓ tests/commands/inner.test.ts (5 tests) 8ms
  ✓ tests/context/assembler.test.ts (9 tests) 13ms
- ✓ tests/lock.test.ts (20 tests) 348ms
- ✓ tests/signal.test.ts (15 tests) 436ms
- ✓ tests/state.test.ts (6 tests) 22ms
- ✓ tests/tmux.test.ts (33 tests) 813ms
-   ✓ pollForPidFile > returns null on timeout when file never appears 404ms
-   ✓ pollForPidFile > returns null when file contains non-numeric content 403ms
- ✓ tests/root.test.ts (10 tests) 179ms
+ ✓ tests/preflight.test.ts (25 tests | 1 skipped) 315ms
+ ✓ tests/lock.test.ts (20 tests) 438ms
+ ✓ tests/state.test.ts (6 tests) 26ms
+ ✓ tests/signal.test.ts (15 tests) 538ms
+ ✓ tests/tmux.test.ts (33 tests) 824ms
+   ✓ pollForPidFile > returns null on timeout when file never appears 411ms
+   ✓ pollForPidFile > returns null when file contains non-numeric content 406ms
+ ✓ tests/root.test.ts (10 tests) 170ms
  ✓ tests/terminal.test.ts (5 tests) 2ms
- ✓ tests/commands/status-list.test.ts (7 tests) 677ms
- ✓ tests/ui.test.ts (6 tests) 3ms
- ✓ tests/commands/jump.test.ts (5 tests) 659ms
- ✓ tests/commands/resume-cmd.test.ts (8 tests) 1432ms
- ✓ tests/resume.test.ts (6 tests) 1476ms
+ ✓ tests/commands/status-list.test.ts (7 tests) 687ms
+ ✓ tests/ui.test.ts (6 tests) 10ms
+ ✓ tests/commands/jump.test.ts (5 tests) 740ms
+ ✓ tests/commands/resume-cmd.test.ts (8 tests) 1452ms
+ ✓ tests/resume.test.ts (6 tests) 1526ms
+   ✓ resumeRun > errors on paused run with null pendingAction 365ms
+ ✓ tests/process.test.ts (6 tests) 70ms
+ ✓ tests/commands/skip.test.ts (4 tests) 561ms
  ✓ tests/conformance/phase-models.test.ts (9 tests) 2ms
- ✓ tests/process.test.ts (6 tests) 44ms
- ✓ tests/commands/skip.test.ts (4 tests) 607ms
- ✓ tests/git.test.ts (16 tests) 1452ms
- ✓ tests/integration/lifecycle.test.ts (8 tests) 1077ms
- ✓ tests/commands/run.test.ts (10 tests) 1789ms
-   ✓ runCommand > creates run directory with state.json + task.md 330ms
-   ✓ runCommand > creates required directories 327ms
-   ✓ runCommand > adds .harness/ to .gitignore 301ms
- ✓ tests/artifact.test.ts (12 tests) 2354ms
-   ✓ normalizeArtifactCommit > creates commit for new untracked file 393ms
- ✓ tests/phases/interactive.test.ts (33 tests) 4473ms
-   ✓ runInteractivePhase — advisor reminder fires before sendKeysToPane > printAdvisorReminder is called before sendKeysToPane 1706ms
+ ✓ tests/integration/lifecycle.test.ts (8 tests) 1118ms
+ ✓ tests/git.test.ts (16 tests) 1510ms
+ ✓ tests/commands/run.test.ts (10 tests) 1925ms
+   ✓ runCommand > creates run directory with state.json + task.md 339ms
+   ✓ runCommand > creates required directories 370ms
+ ✓ tests/artifact.test.ts (12 tests) 2455ms
+   ✓ normalizeArtifactCommit > creates commit for new untracked file 465ms
+ ✓ tests/phases/interactive.test.ts (33 tests) 4512ms
+   ✓ runInteractivePhase — advisor reminder fires before sendKeysToPane > printAdvisorReminder is called before sendKeysToPane 1709ms
    ✓ runInteractivePhase — advisor reminder fires before sendKeysToPane > sendKeysToPane command includes --dangerously-skip-permissions and --effort 1651ms
 
  Test Files  25 passed (25)
       Tests  312 passed | 1 skipped (313)
-   Start at  23:36:36
-   Duration  4.91s (transform 1.55s, setup 0ms, collect 2.73s, tests 18.16s, environment 2ms, prepare 1.54s)
+   Start at  23:42:27
+   Duration  5.02s (transform 1.69s, setup 0ms, collect 2.62s, tests 19.00s, environment 2ms, prepare 2.04s)
 ```
 
 </details>
