@@ -7,7 +7,8 @@ import type { HarnessState, InteractivePhase, Artifacts } from '../types.js';
 import { PHASE_MODELS, PHASE_EFFORTS, PHASE_ARTIFACT_FILES } from '../config.js';
 import { writeState } from '../state.js';
 import { getHead } from '../git.js';
-import { createWindow, selectWindow, killWindow, windowExists } from '../tmux.js';
+import { sendKeysToPane, pollForPidFile } from '../tmux.js';
+import { isPidAlive } from '../process.js';
 import { assembleInteractivePrompt } from '../context/assembler.js';
 import { printAdvisorReminder } from '../ui.js';
 
@@ -169,57 +170,59 @@ export async function runInteractivePhase(
   const promptFile = path.join(runDir, `phase-${phase}-init-prompt.md`);
   fs.writeFileSync(promptFile, prompt, 'utf-8');
 
-  // Step 3: Spawn Claude in a tmux window
+  // Step 3: Spawn Claude in workspace pane via send-keys
   printAdvisorReminder(phase);
   await new Promise<void>((resolve) => setTimeout(resolve, 300));
 
-  const sessionName = state.tmuxSession;
-  const windowName = `phase-${phase}`;
-  const claudeCmd = [
-    'claude',
-    '--dangerously-skip-permissions',
-    '--model', PHASE_MODELS[phase],
-    '--effort', PHASE_EFFORTS[phase],
-    '@' + path.resolve(promptFile),
-  ].join(' ');
+  const sessionName = updatedState.tmuxSession;
+  const workspacePane = updatedState.tmuxWorkspacePane;
 
-  const windowId = createWindow(sessionName, windowName, claudeCmd);
-  state.tmuxWindows.push(windowId);
-  writeState(runDir, state);
-  selectWindow(sessionName, windowId);
+  // Ctrl-C pre-send to clear any in-progress input (ADR-4)
+  sendKeysToPane(sessionName, workspacePane, 'C-c');
+  await new Promise<void>((resolve) => setTimeout(resolve, 300));
+
+  // PID file (phase/attempt scoped)
+  const pidFile = path.join(runDir, `claude-${phase}-${updatedState.phaseAttemptId[String(phase)]}.pid`);
+  if (fs.existsSync(pidFile)) fs.unlinkSync(pidFile);
+
+  // Launch Claude via exec wrapper (PID file = Claude's PID)
+  const claudeArgs = `--dangerously-skip-permissions --model ${PHASE_MODELS[phase]} --effort ${PHASE_EFFORTS[phase]} @${path.resolve(promptFile)}`;
+  const wrappedCmd = `sh -c 'echo $$ > ${pidFile}; exec claude ${claudeArgs}'`;
+  sendKeysToPane(sessionName, workspacePane, wrappedCmd);
+
+  // Capture Claude PID
+  const claudePid = await pollForPidFile(pidFile, 5000);
 
   const sentinelPath = path.join(runDir, `phase-${phase}.done`);
   const attemptId = updatedState.phaseAttemptId[String(phase)] ?? '';
 
   const phaseResult = await waitForPhaseCompletion(
-    sessionName,
-    windowId,
-    sentinelPath,
-    attemptId,
-    phase,
-    updatedState,
-    cwd
+    sentinelPath, attemptId, claudePid, phase, updatedState, cwd, runDir
   );
 
   return phaseResult;
 }
 
 /**
- * Wait for sentinel file or tmux window death.
- * Uses chokidar for filesystem watching plus polling for window existence.
+ * Wait for sentinel file or Claude PID death.
+ * Uses chokidar for filesystem watching plus polling for PID liveness.
+ * Also responds to interrupt flags written by SIGUSR1 (skip/jump control).
  */
 async function waitForPhaseCompletion(
-  sessionName: string,
-  windowId: string,
   sentinelPath: string,
   attemptId: string,
+  claudePid: number | null,
   phase: InteractivePhase,
   state: HarnessState,
-  cwd: string
+  cwd: string,
+  runDir: string
 ): Promise<InteractiveResult> {
   return new Promise<InteractiveResult>((resolve) => {
     let settled = false;
     let watcher: ReturnType<typeof chokidar.watch> | null = null;
+    let pidPollInterval: ReturnType<typeof setInterval> | null = null;
+    let interruptPollInterval: ReturnType<typeof setInterval> | null = null;
+    let nullPidTimeout: ReturnType<typeof setTimeout> | null = null;
 
     function settle(status: 'completed' | 'failed'): void {
       if (settled) return;
@@ -228,13 +231,23 @@ async function waitForPhaseCompletion(
         void watcher.close();
         watcher = null;
       }
-      // Kill the Claude window + return focus to control
-      killWindow(sessionName, windowId);
-      selectWindow(sessionName, state.tmuxControlWindow || '0');
+      if (pidPollInterval !== null) {
+        clearInterval(pidPollInterval);
+        pidPollInterval = null;
+      }
+      if (interruptPollInterval !== null) {
+        clearInterval(interruptPollInterval);
+        interruptPollInterval = null;
+      }
+      if (nullPidTimeout !== null) {
+        clearTimeout(nullPidTimeout);
+        nullPidTimeout = null;
+      }
+      // Workspace pane persists — no kill/select needed
       resolve({ status });
     }
 
-    // Sentinel detection → kill window → evaluate
+    // Sentinel detection → evaluate artifacts
     function onSentinelDetected(): void {
       if (settled) return;
       const freshness = checkSentinelFreshness(sentinelPath, attemptId);
@@ -254,24 +267,65 @@ async function waitForPhaseCompletion(
     watcher.on('add', onSentinelDetected);
     watcher.on('change', onSentinelDetected);
 
-    // Also poll for tmux window death (user did /exit without sentinel)
-    const pollInterval = setInterval(() => {
+    // PID death polling (1s): when Claude exits, check sentinel one last time
+    if (claudePid !== null) {
+      pidPollInterval = setInterval(() => {
+        if (settled) {
+          clearInterval(pidPollInterval!);
+          pidPollInterval = null;
+          return;
+        }
+        if (!isPidAlive(claudePid)) {
+          clearInterval(pidPollInterval!);
+          pidPollInterval = null;
+          // PID died — check sentinel one last time
+          const freshness = checkSentinelFreshness(sentinelPath, attemptId);
+          if (freshness === 'fresh') {
+            const valid = validatePhaseArtifacts(phase, state, cwd);
+            settle(valid ? 'completed' : 'failed');
+          } else {
+            settle('failed');
+          }
+        }
+      }, 1000);
+    }
+
+    // Interrupt flag polling (500ms): SIGUSR1-driven skip/jump
+    const interruptFlagPath = path.join(runDir, `interrupted-${phase}.flag`);
+    interruptPollInterval = setInterval(() => {
       if (settled) {
-        clearInterval(pollInterval);
+        clearInterval(interruptPollInterval!);
+        interruptPollInterval = null;
         return;
       }
-      if (!windowExists(sessionName, windowId)) {
-        clearInterval(pollInterval);
-        // Window died — check sentinel one last time
-        const freshness = checkSentinelFreshness(sentinelPath, attemptId);
-        if (freshness === 'fresh') {
-          const valid = validatePhaseArtifacts(phase, state, cwd);
-          settle(valid ? 'completed' : 'failed');
-        } else {
+      if (fs.existsSync(interruptFlagPath)) {
+        try { fs.unlinkSync(interruptFlagPath); } catch { /* ignore */ }
+        if (claudePid === null) {
+          // No known PID — settle immediately
           settle('failed');
+        } else {
+          // Grace period: wait up to 3s for PID to die naturally, then settle
+          const graceStart = Date.now();
+          const graceInterval = setInterval(() => {
+            if (settled) {
+              clearInterval(graceInterval);
+              return;
+            }
+            if (!isPidAlive(claudePid) || Date.now() - graceStart >= 3000) {
+              clearInterval(graceInterval);
+              settle('failed');
+            }
+          }, 100);
         }
       }
-    }, 1000);
+    }, 500);
+
+    // Sentinel-only timeout: 10 minutes when claudePid is null
+    if (claudePid === null) {
+      nullPidTimeout = setTimeout(() => {
+        settle('failed');
+      }, 10 * 60 * 1000);
+    }
 
     // Immediate check
     if (fs.existsSync(sentinelPath)) {
