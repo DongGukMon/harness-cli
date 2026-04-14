@@ -242,17 +242,29 @@ At the beginning of `innerCommand`, after loading state (line 28), add pane setu
   // 2. Claim lock ownership (outer → inner handoff)
   updateLockPid(harnessDir, process.pid);
 
-  // 2.5 Pane setup — split workspace from control pane
-  const controlPaneId = options.controlPane || '';
+  // 2.5 Pane setup — idempotent pair validation (ADR-9, spec exact algorithm)
+  const controlPaneId = options.controlPane;
+  if (!controlPaneId) {
+    process.stderr.write('Fatal: --control-pane argument is required for __inner.\n');
+    process.exit(1);
+  }
   state.tmuxControlPane = controlPaneId;
 
-  if (controlPaneId && state.tmuxWorkspacePane && paneExists(state.tmuxSession, state.tmuxWorkspacePane)
-      && state.tmuxWorkspacePane !== controlPaneId) {
-    // Both panes valid and distinct — reuse (resume Case 2)
-  } else if (controlPaneId) {
-    // Create fresh workspace pane
+  const controlValid = paneExists(state.tmuxSession, controlPaneId);
+  const workspaceValid = !!state.tmuxWorkspacePane
+    && paneExists(state.tmuxSession, state.tmuxWorkspacePane)
+    && state.tmuxWorkspacePane !== controlPaneId;
+
+  if (controlValid && workspaceValid) {
+    // Both panes valid and distinct → reuse (resume Case 2)
+  } else if (controlValid) {
+    // Control exists but workspace missing/stale → create fresh workspace
     const workspacePaneId = splitPane(state.tmuxSession, controlPaneId, 'h', 70);
     state.tmuxWorkspacePane = workspacePaneId;
+  } else {
+    // Control pane invalid — fatal (should not happen; outer guarantees it)
+    process.stderr.write(`Fatal: control pane ${controlPaneId} does not exist.\n`);
+    process.exit(1);
   }
   writeState(runDir, state);
 ```
@@ -476,11 +488,14 @@ async function waitForPhaseCompletion(
 
 The existing code after `waitForPhaseCompletion` call that does `killWindow`/`selectWindow` should be removed. Settle no longer kills windows. If there's a cleanup block in the caller (the step 5/6 section), remove `killWindow` references.
 
-- [ ] **Step 6: Run lint**
+- [ ] **Step 6: Run lint + targeted tests**
 
 ```bash
 pnpm run lint
+pnpm test tests/phases/interactive.test.ts
 ```
+
+Expected: lint clean. Tests will fail until Task 8 updates mocks — that's expected. Run to confirm lint passes.
 
 - [ ] **Step 7: Commit**
 
@@ -693,11 +708,15 @@ git commit -m "feat(pane): resume with pane-aware Case 2 and --control-pane in C
 
 ---
 
-## Task 8: Tests — Update mocks + add pane tests
+## Task 8: Tests — Update all affected test files
 
 **Files:**
 - Modify: `tests/phases/interactive.test.ts`
 - Modify: `tests/tmux.test.ts`
+- Modify: `tests/signal.test.ts`
+- Modify: `tests/commands/run.test.ts`
+- Modify: `tests/commands/resume-cmd.test.ts`
+- Modify: `tests/commands/inner.test.ts`
 
 - [ ] **Step 1: Update interactive.test.ts mocks**
 
@@ -863,7 +882,88 @@ describe('pane utilities', () => {
 });
 ```
 
-- [ ] **Step 6: Run full test suite**
+- [ ] **Step 6: Update `tests/signal.test.ts`**
+
+Replace the `killWindow` mock with `sendKeysToPane`:
+
+```typescript
+vi.mock('../src/tmux.js', () => ({
+  sendKeysToPane: vi.fn(),
+}));
+```
+
+Update any test that asserts `killWindow` was called to assert `sendKeysToPane` with `'C-c'` instead. Add a test verifying interrupt flag is written:
+
+```typescript
+it('SIGUSR1 writes phase-scoped interrupt flag', () => {
+  // Trigger SIGUSR1 handler with pending-action.json present
+  // Assert: fs.existsSync(`interrupted-${phase}.flag`) === true
+  // Assert: sendKeysToPane called with 'C-c' for interactive phase
+});
+```
+
+- [ ] **Step 7: Update `tests/commands/run.test.ts`**
+
+Update mocks to include `getDefaultPaneId`:
+
+```typescript
+vi.mock('../../src/tmux.js', () => ({
+  // ... existing mocks ...
+  getDefaultPaneId: vi.fn(() => '%0'),
+}));
+```
+
+Update assertions that check `sendKeys` call to verify `--control-pane` is included in the inner command string.
+
+- [ ] **Step 8: Update `tests/commands/resume-cmd.test.ts`**
+
+Add `paneExists` and `sendKeysToPane` to the tmux mock:
+
+```typescript
+vi.mock('../../src/tmux.js', () => ({
+  // ... existing mocks ...
+  paneExists: vi.fn(() => true),
+  sendKeysToPane: vi.fn(),
+  getDefaultPaneId: vi.fn(() => '%0'),
+}));
+```
+
+Update Case 2 test to verify `sendKeysToPane` is called (instead of `sendKeys` to window). Add test for stale control pane → fallback to Case 3.
+
+- [ ] **Step 9: Update `tests/commands/inner.test.ts`**
+
+Add `splitPane` and `paneExists` to the tmux mock:
+
+```typescript
+vi.mock('../../src/tmux.js', () => ({
+  killSession: vi.fn(),
+  killWindow: vi.fn(),
+  selectWindow: vi.fn(),
+  splitPane: vi.fn(() => '%1'),
+  paneExists: vi.fn(() => false),
+}));
+```
+
+Add tests for pane pair validation:
+```typescript
+it('creates workspace pane when controlPane provided and no existing workspace', async () => {
+  // controlPane='%0', no tmuxWorkspacePane in state
+  // Assert: splitPane called with '%0', 'h', 70
+});
+
+it('reuses workspace pane when both panes valid and distinct', async () => {
+  vi.mocked(paneExists).mockReturnValue(true);
+  // state has tmuxControlPane='%0', tmuxWorkspacePane='%1'
+  // Assert: splitPane NOT called
+});
+
+it('exits fatally when no controlPane arg provided', async () => {
+  // Call innerCommand without controlPane option
+  // Assert: process.exit(1) called
+});
+```
+
+- [ ] **Step 10: Run full test suite**
 
 ```bash
 pnpm test
@@ -871,7 +971,7 @@ pnpm test
 
 Expected: all tests pass.
 
-- [ ] **Step 7: Run lint + build**
+- [ ] **Step 11: Run lint + build**
 
 ```bash
 pnpm run lint
@@ -880,11 +980,11 @@ pnpm run build
 
 Expected: both clean.
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 12: Commit**
 
 ```bash
-git add tests/phases/interactive.test.ts tests/tmux.test.ts
-git commit -m "test: update mocks for pane architecture + add pane utility tests"
+git add tests/phases/interactive.test.ts tests/tmux.test.ts tests/signal.test.ts tests/commands/run.test.ts tests/commands/resume-cmd.test.ts tests/commands/inner.test.ts
+git commit -m "test: update all test mocks for pane architecture + add pane utility tests"
 ```
 
 ---
@@ -914,9 +1014,33 @@ git commit -m "test: update mocks for pane architecture + add pane utility tests
     { "name": "HarnessState has tmuxWorkspacePane", "command": "grep -q 'tmuxWorkspacePane' src/types.ts" },
     { "name": "HarnessState has tmuxControlPane", "command": "grep -q 'tmuxControlPane' src/types.ts" },
     { "name": "__inner command has --control-pane option", "command": "grep -q 'control-pane' bin/harness.ts" },
-    { "name": "tmux pane tests exist", "command": "grep -q 'splitPane' tests/tmux.test.ts" }
+    { "name": "tmux pane tests exist", "command": "grep -q 'splitPane' tests/tmux.test.ts" },
+    { "name": "signal test updated for pane", "command": "grep -q 'sendKeysToPane\\|interrupted-' tests/signal.test.ts" },
+    { "name": "run test updated for --control-pane", "command": "grep -q 'control-pane\\|getDefaultPaneId' tests/commands/run.test.ts" },
+    { "name": "resume test updated for paneExists", "command": "grep -q 'paneExists\\|sendKeysToPane' tests/commands/resume-cmd.test.ts" },
+    { "name": "inner test updated for splitPane", "command": "grep -q 'splitPane\\|controlPane' tests/commands/inner.test.ts" },
+    { "name": "gate.ts does NOT use workspace pane (ADR-6)", "command": "! grep -q 'tmuxWorkspacePane\\|sendKeysToPane' src/phases/gate.ts" },
+    { "name": "verify.ts does NOT use workspace pane (ADR-6)", "command": "! grep -q 'tmuxWorkspacePane\\|sendKeysToPane' src/phases/verify.ts" }
   ]
 }
+```
+
+### Manual smoke tests (runtime behavioral verification)
+
+These cannot be automated in CI but must be verified before merge:
+
+| # | Test | Expected behavior | Pass/Fail |
+|---|------|-------------------|-----------|
+| 1 | `harness run "test"` from outside tmux | iTerm2 opens. Window has left 30% control + right 70% shell. | |
+| 2 | Phase 1 starts | Claude command appears in right pane. Left pane shows phase status. | |
+| 3 | Claude exits (sentinel) | Right pane returns to shell prompt. Left pane shows "Phase 1 ✓". | |
+| 4 | Type command in right pane after Claude | Shell accepts input, command executes. | |
+| 5 | Gate phase (2/4) | Left pane shows Codex logs. Right pane remains idle (user can type). | |
+| 6 | Mouse click to switch panes | Clicking left/right pane switches focus. | |
+| 7 | Pane border drag | Dragging the vertical divider resizes panes. | |
+| 8 | `harness skip` from another terminal | Right pane: Claude receives Ctrl-C, exits. Left pane: next phase starts. | |
+| 9 | `harness resume` after iTerm2 close | iTerm2 reopens with existing tmux session, panes intact. | |
+| 10 | Inside existing tmux: `harness run "test"` | New window created with two-pane layout, no tmux-in-tmux. | 
 ```
 
 ---
