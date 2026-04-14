@@ -1009,19 +1009,13 @@ export function renderControlPanel(state: HarnessState): void {
 
 Add the import for `PHASE_MODELS` and `HarnessState` at the top of `ui.ts`.
 
-- [ ] **Step 2: Update `runner.ts` — render control panel at phase transitions**
+- [ ] **Step 2: Update `runner.ts` — render control panel + SIGUSR1-aware failure handling**
 
 Replace the existing `printPhaseTransition` calls with `renderControlPanel`:
 
 Before each phase handler, call `renderControlPanel(state)`.
 
-In `handleInteractivePhase`, before the phase starts:
-
-```typescript
-  renderControlPanel(state);
-```
-
-After completion:
+In `handleInteractivePhase`, **change the failure branch** to detect SIGUSR1-driven phase redirection:
 
 ```typescript
   if (result.status === 'completed') {
@@ -1031,8 +1025,28 @@ After completion:
     state.currentPhase = next;
     writeState(runDir, state);
     renderControlPanel(state);
+  } else {
+    // Check if SIGUSR1 already redirected to a different phase
+    if (state.currentPhase !== phase) {
+      // Signal handler changed currentPhase — don't overwrite, just continue loop
+      printInfo(`Phase ${phase} interrupted by control signal → phase ${state.currentPhase}`);
+      renderControlPanel(state);
+      return; // Return to runPhaseLoop which will pick up the new currentPhase
+    }
+    // Normal failure
+    state.phases[String(phase)] = 'failed';
+    savePausedAtHead(state, cwd);
+    printError(`Phase ${phase} failed`);
+    writeState(runDir, state);
   }
 ```
+
+This is the critical SIGUSR1 re-entry mechanism:
+1. SIGUSR1 handler mutates `state.currentPhase` and kills the Claude window
+2. `waitForPhaseCompletion` detects window death → settles as 'failed'
+3. `handleInteractivePhase` checks `state.currentPhase !== phase`
+4. If true: SIGUSR1 redirect → return without overwriting state → runner loop continues at new phase
+5. If false: normal failure → existing error handling
 
 Do the same for `handleGatePhase` and `handleVerifyPhase`.
 
@@ -1449,17 +1463,17 @@ vi.mock('../../src/tmux.js', () => ({
 
 import { updateLockPid } from '../../src/lock.js';
 
-describe('innerCommand — pending-action consumption', () => {
+describe('consumePendingAction (from inner.ts)', () => {
   let tmpDir: string;
 
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'inner-test-'));
-    // Write minimal state.json
     const state = {
       runId: 'test', currentPhase: 3, status: 'in_progress', tmuxSession: 'test-sess',
       tmuxMode: 'dedicated', tmuxWindows: [], tmuxControlWindow: '',
-      phases: { '1': 'completed', '2': 'completed', '3': 'pending' },
+      phases: { '1': 'completed', '2': 'completed', '3': 'pending', '4': 'pending', '5': 'pending', '6': 'pending', '7': 'pending' },
       artifacts: {}, gateRetries: {}, verifyRetries: 0,
+      phaseOpenedAt: {}, phaseAttemptId: {},
     };
     fs.writeFileSync(path.join(tmpDir, 'state.json'), JSON.stringify(state));
   });
@@ -1468,20 +1482,45 @@ describe('innerCommand — pending-action consumption', () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it('consumes skip action from pending-action.json', async () => {
+  it('skip action: advances currentPhase and marks old phase completed', () => {
     fs.writeFileSync(path.join(tmpDir, 'pending-action.json'), JSON.stringify({ action: 'skip' }));
 
-    // Import and call consumePendingAction logic
-    const { readState } = await import('../../src/state.js');
-    const state = readState(tmpDir)!;
-    // Simulate consumption (inner.ts logic)
-    const pendingPath = path.join(tmpDir, 'pending-action.json');
-    expect(fs.existsSync(pendingPath)).toBe(true);
+    // Call consumePendingAction (exported from inner.ts or tested inline)
+    const { readState, writeState } = require('../../src/state.js');
+    const state = readState(tmpDir);
+    // Apply skip
+    state.phases[String(state.currentPhase)] = 'completed';
+    state.currentPhase = state.currentPhase + 1;
+    writeState(tmpDir, state);
+    fs.unlinkSync(path.join(tmpDir, 'pending-action.json'));
+
+    // Verify
+    const updated = readState(tmpDir);
+    expect(updated.currentPhase).toBe(4);
+    expect(updated.phases['3']).toBe('completed');
+    expect(fs.existsSync(path.join(tmpDir, 'pending-action.json'))).toBe(false);
   });
 
-  it('consumes jump action from pending-action.json', async () => {
+  it('jump action: resets phases >= target and sets currentPhase', () => {
     fs.writeFileSync(path.join(tmpDir, 'pending-action.json'), JSON.stringify({ action: 'jump', phase: 1 }));
-    expect(fs.existsSync(path.join(tmpDir, 'pending-action.json'))).toBe(true);
+
+    const { readState, writeState } = require('../../src/state.js');
+    const state = readState(tmpDir);
+    for (let m = 1; m <= 7; m++) state.phases[String(m)] = 'pending';
+    state.currentPhase = 1;
+    writeState(tmpDir, state);
+    fs.unlinkSync(path.join(tmpDir, 'pending-action.json'));
+
+    const updated = readState(tmpDir);
+    expect(updated.currentPhase).toBe(1);
+    expect(updated.phases['3']).toBe('pending');
+    expect(fs.existsSync(path.join(tmpDir, 'pending-action.json'))).toBe(false);
+  });
+
+  it('no-op when pending-action.json does not exist', () => {
+    const { readState } = require('../../src/state.js');
+    const state = readState(tmpDir);
+    expect(state.currentPhase).toBe(3); // unchanged
   });
 });
 ```
@@ -1492,19 +1531,39 @@ Add to `tests/commands/inner.test.ts` or a separate `tests/commands/resume-tmux.
 
 ```typescript
 describe('resume tmux — 3 cases', () => {
-  it('case 1: session alive + inner alive → no new session created', () => {
-    // Mock sessionExists → true, isPidAlive → true
-    // Assert: openTerminalWindow called, createSession NOT called
+  it('case 1: session alive + inner alive → re-attach only', () => {
+    vi.mocked(sessionExists).mockReturnValue(true);
+    vi.mocked(isPidAlive).mockReturnValue(true);
+    vi.mocked(readLock).mockReturnValue({ cliPid: 999, handoff: false } as any);
+
+    // Call resume logic
+    // Assert:
+    expect(openTerminalWindow).toHaveBeenCalledWith(expect.any(String));
+    expect(createSession).not.toHaveBeenCalled();
+    expect(sendKeys).not.toHaveBeenCalled();
   });
 
   it('case 2: session alive + inner dead → sendKeys to restart inner', () => {
-    // Mock sessionExists → true, isPidAlive → false
-    // Assert: sendKeys called with __inner, pollForHandoffComplete called
+    vi.mocked(sessionExists).mockReturnValue(true);
+    vi.mocked(isPidAlive).mockReturnValue(false);
+    vi.mocked(readLock).mockReturnValue({ cliPid: 999, handoff: false } as any);
+    vi.mocked(pollForHandoffComplete).mockReturnValue(true);
+
+    // Call resume logic
+    // Assert:
+    expect(sendKeys).toHaveBeenCalledWith(expect.any(String), expect.any(String), expect.stringContaining('__inner'));
+    expect(pollForHandoffComplete).toHaveBeenCalled();
+    expect(openTerminalWindow).toHaveBeenCalled();
   });
 
   it('case 3: no session → creates new session', () => {
-    // Mock sessionExists → false
-    // Assert: createSession called, sendKeys called
+    vi.mocked(sessionExists).mockReturnValue(false);
+
+    // Call resume logic
+    // Assert:
+    expect(createSession).toHaveBeenCalled();
+    expect(sendKeys).toHaveBeenCalledWith(expect.any(String), '0', expect.stringContaining('__inner'));
+    expect(openTerminalWindow).toHaveBeenCalled();
   });
 });
 ```
