@@ -1055,17 +1055,42 @@ After the existing `child.stderr.on('data', ...)` line (line 209), modify to pri
   });
 ```
 
-- [ ] **Step 4: Run lint**
+- [ ] **Step 4: Add verify.ts stderr streaming**
+
+In `src/phases/verify.ts`, add stderr streaming for the harness-verify.sh subprocess. Find the existing `child.stderr.on('data', ...)` line and ensure it outputs to the control panel:
+
+```typescript
+  child.stderr.on('data', (chunk: Buffer) => {
+    stderrChunks.push(chunk);
+    // Stream verify progress to control panel
+    process.stderr.write(chunk.toString());
+  });
+```
+
+Similarly for stdout:
+
+```typescript
+  child.stdout.on('data', (chunk: Buffer) => {
+    stdoutChunks.push(chunk);
+    // Stream check results to control panel
+    const text = chunk.toString();
+    if (text.includes('Running:') || text.includes('PASS') || text.includes('FAIL')) {
+      process.stderr.write(`  ${text}`);
+    }
+  });
+```
+
+- [ ] **Step 5: Run lint**
 
 ```bash
 pnpm run lint
 ```
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
 git add src/ui.ts src/phases/runner.ts src/phases/gate.ts src/phases/verify.ts
-git commit -m "feat: control panel rendering + gate stderr streaming"
+git commit -m "feat: control panel rendering + gate/verify stderr streaming"
 ```
 
 ---
@@ -1125,11 +1150,44 @@ In `registerSignalHandlers`, add after the existing SIGINT/SIGTERM handlers:
 
 ```typescript
   // SIGUSR1: control-plane signal for skip/jump
+  // Import consumePendingAction from inner.ts (or inline the logic)
   process.on('SIGUSR1', () => {
-    // The inner command's consumePendingAction will pick up the file
-    // on next phase boundary. For immediate effect during a running phase,
-    // we set a flag that the runner checks.
-    process.stderr.write('ℹ Received control signal (SIGUSR1). Pending action will apply at next phase boundary.\n');
+    process.stderr.write('ℹ Received control signal (SIGUSR1). Applying pending action...\n');
+
+    // Read and apply pending-action.json immediately
+    const runDir = path.join(harnessDir, runId);
+    const pendingPath = path.join(runDir, 'pending-action.json');
+    if (!fs.existsSync(pendingPath)) return;
+
+    try {
+      const raw = fs.readFileSync(pendingPath, 'utf-8');
+      const action = JSON.parse(raw) as { action: string; phase?: number };
+      const state = getState();
+
+      if (action.action === 'skip') {
+        state.phases[String(state.currentPhase)] = 'completed';
+        state.currentPhase = state.currentPhase + 1;
+        state.pendingAction = null;
+      } else if (action.action === 'jump' && typeof action.phase === 'number') {
+        for (let m = action.phase; m <= 7; m++) {
+          state.phases[String(m)] = 'pending';
+        }
+        state.currentPhase = action.phase;
+        state.pendingAction = null;
+        state.pauseReason = null;
+      }
+
+      setState(state);
+      writeState(runDir, state);
+      fs.unlinkSync(pendingPath);
+
+      // Interrupt the current phase — the runner will pick up the new state
+      // on its next iteration. For interactive phases (Claude in tmux window),
+      // kill the window to force re-evaluation.
+      process.stderr.write(`✓ Applied: ${action.action}${action.phase ? ` → phase ${action.phase}` : ''}. Phase loop will re-enter.\n`);
+    } catch {
+      process.stderr.write('⚠️  Failed to apply pending action.\n');
+    }
   });
 ```
 
@@ -1398,7 +1456,23 @@ git commit -m "test: tmux + terminal unit tests"
     { "name": "tmux preflight item exists",
       "command": "grep -q \"'tmux'\" src/preflight.ts" },
     { "name": "Gate stderr streaming present",
-      "command": "grep -q 'codex' src/phases/gate.ts" }
+      "command": "grep -q 'codex' src/phases/gate.ts" },
+    { "name": "Verify stderr streaming present",
+      "command": "grep -q 'process.stderr.write' src/phases/verify.ts" },
+    { "name": "SIGUSR1 handler consumes pending-action",
+      "command": "grep -q 'pending-action.json' src/signal.ts" },
+    { "name": "skip.ts writes pending-action for active inner",
+      "command": "grep -q 'pending-action.json' src/commands/skip.ts" },
+    { "name": "jump.ts writes pending-action for active inner",
+      "command": "grep -q 'pending-action.json' src/commands/jump.ts" },
+    { "name": "resume.ts handles 3 cases (session+inner, session+dead, none)",
+      "command": "grep -c 'sessionExists\\|innerAlive\\|Case' src/commands/resume.ts | head -1 | grep -qE '[3-9]'" },
+    { "name": "renderControlPanel exists in ui.ts",
+      "command": "grep -q 'renderControlPanel' src/ui.ts" },
+    { "name": "tmux unit tests exist",
+      "command": "test -f tests/tmux.test.ts" },
+    { "name": "terminal unit tests exist",
+      "command": "test -f tests/terminal.test.ts" }
   ]
 }
 ```
@@ -1415,8 +1489,8 @@ Task 4 (inner.ts + harness.ts)         ← depends on Task 1, 3
 Task 5 (run.ts refactor)               ← depends on Task 2, 3
 Task 6 (interactive.ts + tests)         ← depends on Task 2
 Task 7 (runner.ts + gate.ts + verify.ts)← depends on Task 1
-Task 8 (skip/jump + signal)            ← depends on Task 1, 3
-Task 9 (resume.ts)                     ← depends on Task 2, 3
+Task 8 (skip/jump + signal)            ← depends on Task 1, 3, 4
+Task 9 (resume.ts)                     ← depends on Task 2, 3, 4
 Task 10 (tests + verification)         ← depends on all
 ```
 
