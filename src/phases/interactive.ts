@@ -1,15 +1,13 @@
 import fs from 'fs';
 import path from 'path';
 import { randomUUID } from 'crypto';
-import { spawn } from 'child_process';
 import { execSync } from 'child_process';
 import chokidar from 'chokidar';
 import type { HarnessState, InteractivePhase, Artifacts } from '../types.js';
-import { PHASE_MODELS, PHASE_EFFORTS, PHASE_ARTIFACT_FILES, SIGTERM_WAIT_MS } from '../config.js';
+import { PHASE_MODELS, PHASE_EFFORTS, PHASE_ARTIFACT_FILES } from '../config.js';
 import { writeState } from '../state.js';
-import { updateLockChild, clearLockChild } from '../lock.js';
 import { getHead } from '../git.js';
-import { getProcessStartTime, isProcessGroupAlive, killProcessGroup } from '../process.js';
+import { createWindow, selectWindow, killWindow, windowExists } from '../tmux.js';
 import { assembleInteractivePrompt } from '../context/assembler.js';
 import { printAdvisorReminder } from '../ui.js';
 
@@ -171,31 +169,31 @@ export async function runInteractivePhase(
   const promptFile = path.join(runDir, `phase-${phase}-init-prompt.md`);
   fs.writeFileSync(promptFile, prompt, 'utf-8');
 
-  // Step 3: Spawn subprocess
+  // Step 3: Spawn Claude in a tmux window
   printAdvisorReminder(phase);
   await new Promise<void>((resolve) => setTimeout(resolve, 300));
-  const child = spawn('claude', [
+
+  const sessionName = state.tmuxSession;
+  const windowName = `phase-${phase}`;
+  const claudeCmd = [
+    'claude',
     '--dangerously-skip-permissions',
     '--model', PHASE_MODELS[phase],
     '--effort', PHASE_EFFORTS[phase],
     '@' + path.resolve(promptFile),
-  ], {
-    stdio: 'inherit',
-    detached: true,
-    cwd,
-  });
+  ].join(' ');
 
-  // Record childPid in lock
-  if (child.pid !== undefined) {
-    updateLockChild(harnessDir, child.pid, phase, getProcessStartTime(child.pid));
-  }
+  const windowId = createWindow(sessionName, windowName, claudeCmd);
+  state.tmuxWindows.push(windowId);
+  writeState(runDir, state);
+  selectWindow(sessionName, windowId);
 
   const sentinelPath = path.join(runDir, `phase-${phase}.done`);
   const attemptId = updatedState.phaseAttemptId[String(phase)] ?? '';
 
-  // Step 4: Wait for BOTH child exit AND sentinel file
   const phaseResult = await waitForPhaseCompletion(
-    child,
+    sessionName,
+    windowId,
     sentinelPath,
     attemptId,
     phase,
@@ -203,33 +201,16 @@ export async function runInteractivePhase(
     cwd
   );
 
-  // Step 5: Restore terminal state after Claude's inherit mode
-  // Claude's TUI uses raw mode; ensure stdin is back to normal for subsequent prompts.
-  if (process.stdin.isTTY) {
-    try {
-      process.stdin.setRawMode(false);
-    } catch { /* best-effort */ }
-    process.stdin.resume();
-  }
-
-  // Step 6: Post-completion process group cleanup
-  if (child.pid !== undefined) {
-    const pgid = child.pid;
-    if (isProcessGroupAlive(pgid)) {
-      await killProcessGroup(pgid, SIGTERM_WAIT_MS);
-    }
-    clearLockChild(harnessDir);
-  }
-
   return phaseResult;
 }
 
 /**
- * Wait for both child exit and sentinel file presence.
- * Uses chokidar for filesystem watching plus a fallback check after exit.
+ * Wait for sentinel file or tmux window death.
+ * Uses chokidar for filesystem watching plus polling for window existence.
  */
 async function waitForPhaseCompletion(
-  child: ReturnType<typeof spawn>,
+  sessionName: string,
+  windowId: string,
   sentinelPath: string,
   attemptId: string,
   phase: InteractivePhase,
@@ -238,7 +219,6 @@ async function waitForPhaseCompletion(
 ): Promise<InteractiveResult> {
   return new Promise<InteractiveResult>((resolve) => {
     let settled = false;
-    let childExited = false;
     let watcher: ReturnType<typeof chokidar.watch> | null = null;
 
     function settle(status: 'completed' | 'failed'): void {
@@ -248,18 +228,19 @@ async function waitForPhaseCompletion(
         void watcher.close();
         watcher = null;
       }
+      // Kill the Claude window + return focus to control
+      killWindow(sessionName, windowId);
+      selectWindow(sessionName, state.tmuxControlWindow || '0');
       resolve({ status });
     }
 
-    function evaluateCompletion(): void {
-      if (!childExited) return;
-
+    // Sentinel detection → kill window → evaluate
+    function onSentinelDetected(): void {
+      if (settled) return;
       const freshness = checkSentinelFreshness(sentinelPath, attemptId);
       if (freshness === 'fresh') {
         const valid = validatePhaseArtifacts(phase, state, cwd);
         settle(valid ? 'completed' : 'failed');
-      } else {
-        settle('failed');
       }
     }
 
@@ -270,34 +251,31 @@ async function waitForPhaseCompletion(
       usePolling: false,
     });
 
-    function onSentinelDetected(): void {
-      if (settled) return;
-      const freshness = checkSentinelFreshness(sentinelPath, attemptId);
-      if (freshness === 'fresh') {
-        // Sentinel confirmed — kill Claude so exit handler triggers evaluation
-        child.kill('SIGTERM');
-      }
-    }
-
     watcher.on('add', onSentinelDetected);
     watcher.on('change', onSentinelDetected);
 
-    // Child exit handler
-    child.on('exit', () => {
-      childExited = true;
-      // Small delay to allow watcher to process filesystem events that may have
-      // arrived just before/at exit
-      setTimeout(() => evaluateCompletion(), 50);
-    });
+    // Also poll for tmux window death (user did /exit without sentinel)
+    const pollInterval = setInterval(() => {
+      if (settled) {
+        clearInterval(pollInterval);
+        return;
+      }
+      if (!windowExists(sessionName, windowId)) {
+        clearInterval(pollInterval);
+        // Window died — check sentinel one last time
+        const freshness = checkSentinelFreshness(sentinelPath, attemptId);
+        if (freshness === 'fresh') {
+          const valid = validatePhaseArtifacts(phase, state, cwd);
+          settle(valid ? 'completed' : 'failed');
+        } else {
+          settle('failed');
+        }
+      }
+    }, 1000);
 
-    child.on('error', () => {
-      childExited = true;
-      setTimeout(() => evaluateCompletion(), 50);
-    });
-
-    // Immediate check in case sentinel already exists before watcher setup
-    if (fs.existsSync(sentinelPath) && childExited) {
-      evaluateCompletion();
+    // Immediate check
+    if (fs.existsSync(sentinelPath)) {
+      onSentinelDetected();
     }
   });
 }
