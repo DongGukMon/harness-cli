@@ -2,7 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import type { HarnessState } from './types.js';
 import { killProcessGroup } from './process.js';
-import { killWindow } from './tmux.js';
+import { sendKeysToPane } from './tmux.js';
 import { getHead } from './git.js';
 import { writeState } from './state.js';
 import { SIGTERM_WAIT_MS, GATE_PHASES } from './config.js';
@@ -106,7 +106,7 @@ export function registerSignalHandlers(ctx: SignalContext): void {
   process.on('SIGTERM', handler);
 
   // SIGUSR1: control-plane signal for skip/jump
-  const { harnessDir, runId, getState, setState } = ctx;
+  const { harnessDir, runId, getState, setState, getCurrentPhaseType, getChildPid } = ctx;
   process.on('SIGUSR1', () => {
     process.stderr.write('ℹ Received control signal (SIGUSR1). Applying pending action...\n');
 
@@ -136,13 +136,22 @@ export function registerSignalHandlers(ctx: SignalContext): void {
       writeState(runDir, state);
       fs.unlinkSync(pendingPath);
 
-      // Kill the active Claude tmux window to force phase loop re-entry
+      // Write phase-scoped interrupt flag (immediate settle for PID-null case)
       const currentState = getState();
-      if (currentState.tmuxWindows.length > 0) {
-        const lastWindow = currentState.tmuxWindows[currentState.tmuxWindows.length - 1];
-        killWindow(currentState.tmuxSession, lastWindow);
+      const interruptFlagPath = path.join(runDir, `interrupted-${currentState.currentPhase}.flag`);
+      fs.writeFileSync(interruptFlagPath, '1');
+
+      // Phase-type-aware interruption
+      const phaseType = getCurrentPhaseType();
+      if (phaseType === 'interactive' && currentState.tmuxWorkspacePane) {
+        sendKeysToPane(currentState.tmuxSession, currentState.tmuxWorkspacePane, 'C-c');
+      } else {
+        const childPid = getChildPid();
+        if (childPid) {
+          try { process.kill(childPid, 'SIGTERM'); } catch { /* ignore */ }
+        }
       }
-      process.stderr.write(`✓ Applied: ${action.action}${action.phase ? ` → phase ${action.phase}` : ''}. Claude window killed, phase loop re-entering.\n`);
+      process.stderr.write(`✓ Applied: ${action.action}${action.phase ? ` → phase ${action.phase}` : ''}. Phase loop re-entering.\n`);
     } catch {
       process.stderr.write('⚠️  Failed to apply pending action.\n');
     }
