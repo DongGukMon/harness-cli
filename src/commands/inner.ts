@@ -6,11 +6,12 @@ import { findHarnessRoot } from '../root.js';
 import { readState, writeState } from '../state.js';
 import { runPhaseLoop } from '../phases/runner.js';
 import { registerSignalHandlers } from '../signal.js';
-import { killSession, killWindow, selectWindow } from '../tmux.js';
+import { killSession, killWindow, selectWindow, splitPane, paneExists } from '../tmux.js';
 import type { HarnessState } from '../types.js';
 
 export interface InnerOptions {
   root?: string;
+  controlPane?: string;
 }
 
 export async function innerCommand(runId: string, options: InnerOptions = {}): Promise<void> {
@@ -27,6 +28,30 @@ export async function innerCommand(runId: string, options: InnerOptions = {}): P
 
   // 2. Claim lock ownership (outer → inner handoff)
   updateLockPid(harnessDir, process.pid);
+
+  // Pane setup — idempotent pair validation (ADR-9)
+  const controlPaneId = options.controlPane;
+  if (!controlPaneId) {
+    process.stderr.write('Fatal: --control-pane argument is required for __inner.\n');
+    process.exit(1);
+  }
+  state.tmuxControlPane = controlPaneId;
+
+  const controlValid = paneExists(state.tmuxSession, controlPaneId);
+  const workspaceValid = !!state.tmuxWorkspacePane
+    && paneExists(state.tmuxSession, state.tmuxWorkspacePane)
+    && state.tmuxWorkspacePane !== controlPaneId;
+
+  if (controlValid && workspaceValid) {
+    // Both panes valid and distinct — reuse
+  } else if (controlValid) {
+    const workspacePaneId = splitPane(state.tmuxSession, controlPaneId, 'h', 70);
+    state.tmuxWorkspacePane = workspacePaneId;
+  } else {
+    process.stderr.write(`Fatal: control pane ${controlPaneId} does not exist.\n`);
+    process.exit(1);
+  }
+  writeState(runDir, state);
 
   // 3. Consume pending-action.json if present
   consumePendingAction(runDir, state);
