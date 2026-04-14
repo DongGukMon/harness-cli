@@ -1,4 +1,5 @@
 import { PHASE_MODELS } from './config.js';
+import type { HarnessState } from './types.js';
 
 // ANSI color codes
 const GREEN = '\x1b[32m';
@@ -8,6 +9,44 @@ const BLUE = '\x1b[34m';
 const RESET = '\x1b[0m';
 
 const SEPARATOR = '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━';
+
+function phaseLabel(phase: number): string {
+  const labels: Record<number, string> = {
+    1: 'Spec 작성',
+    2: 'Spec Gate',
+    3: 'Plan 작성',
+    4: 'Plan Gate',
+    5: '구현',
+    6: '검증',
+    7: 'Eval Gate',
+  };
+  return labels[phase] ?? `Phase ${phase}`;
+}
+
+export function renderControlPanel(state: HarnessState): void {
+  const SEPARATOR = '━'.repeat(50);
+  process.stdout.write('\x1b[2J\x1b[H'); // clear screen
+  console.error(SEPARATOR);
+  console.error(`${GREEN}▶${RESET} Harness Control Panel`);
+  console.error(SEPARATOR);
+  console.error(`  Run:   ${state.runId}`);
+  console.error(`  Phase: ${state.currentPhase}/7 — ${phaseLabel(state.currentPhase)}`);
+  const model = PHASE_MODELS[state.currentPhase];
+  if (model) console.error(`  Model: ${model}`);
+  console.error('');
+
+  for (let p = 1; p <= 7; p++) {
+    const status = state.phases[String(p)] ?? 'pending';
+    const icon = status === 'completed' ? `${GREEN}✓${RESET}`
+      : status === 'in_progress' ? `${YELLOW}▶${RESET}`
+      : status === 'failed' || status === 'error' ? `${RED}✗${RESET}`
+      : ' ';
+    const current = p === state.currentPhase ? ' ← current' : '';
+    console.error(`  [${icon}] Phase ${p}: ${phaseLabel(p)} (${status})${current}`);
+  }
+  console.error('');
+  console.error(SEPARATOR);
+}
 
 /**
  * Prompt user with single-key choices. Returns the selected key (uppercase).

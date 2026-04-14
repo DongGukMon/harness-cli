@@ -206,7 +206,16 @@ export async function runGatePhase(
   let stderrChunks: Buffer[] = [];
 
   child.stdout.on('data', (chunk: Buffer) => { stdoutChunks.push(chunk); });
-  child.stderr.on('data', (chunk: Buffer) => { stderrChunks.push(chunk); });
+  child.stderr.on('data', (chunk: Buffer) => {
+    stderrChunks.push(chunk);
+    // Stream [codex] progress lines to control panel
+    const text = chunk.toString();
+    for (const line of text.split('\n')) {
+      if (line.includes('[codex]')) {
+        process.stderr.write(`  ${line}\n`);
+      }
+    }
+  });
 
   // Step 5: Wait for exit with timeout
   const result = await new Promise<GatePhaseResult>((resolve) => {

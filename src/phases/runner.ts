@@ -17,6 +17,7 @@ import { runVerifyPhase } from './verify.js';
 import {
   promptChoice,
   printPhaseTransition,
+  renderControlPanel,
   printWarning,
   printError,
   printSuccess,
@@ -162,6 +163,7 @@ export async function runPhaseLoop(
 ): Promise<void> {
   while (state.currentPhase < TERMINAL_PHASE) {
     const phase = state.currentPhase;
+    renderControlPanel(state);
 
     if (isInteractivePhase(phase)) {
       await handleInteractivePhase(phase, state, harnessDir, runDir, cwd);
@@ -234,16 +236,21 @@ async function handleInteractivePhase(
     const next = nextPhase(phase);
     state.currentPhase = next;
 
-    process.stdout.write('\x1b[2J\x1b[H');
-    printPhaseTransition(phase, next, phaseLabel(phase) + ' — 완료', phaseLabel(next));
+    renderControlPanel(state);
     writeState(runDir, state);
   } else {
-    // failed
+    // Check if SIGUSR1 already redirected to a different phase
+    if (state.currentPhase !== phase) {
+      // Signal handler changed currentPhase — don't overwrite, just continue loop
+      printInfo(`Phase ${phase} interrupted by control signal → phase ${state.currentPhase}`);
+      renderControlPanel(state);
+      return; // Return to runPhaseLoop which will pick up the new currentPhase
+    }
+    // Normal failure
     state.phases[String(phase)] = 'failed';
     savePausedAtHead(state, cwd);
     printError(`Phase ${phase} failed`);
     writeState(runDir, state);
-    // Return — caller checks phase status
   }
 }
 
@@ -279,8 +286,7 @@ async function handleGatePhase(
       } else {
         const next = nextPhase(phase);
         state.currentPhase = next;
-        process.stdout.write('\x1b[2J\x1b[H');
-        printPhaseTransition(phase, next, phaseLabel(phase) + ' — APPROVED', phaseLabel(next));
+        renderControlPanel(state);
         writeState(runDir, state);
       }
     } else {
@@ -288,7 +294,12 @@ async function handleGatePhase(
       await handleGateReject(phase, result.comments, state, harnessDir, runDir, cwd);
     }
   } else {
-    // Error
+    // Error — but check if SIGUSR1 redirected first
+    if (state.currentPhase !== phase) {
+      printInfo(`Phase ${phase} interrupted by control signal → phase ${state.currentPhase}`);
+      renderControlPanel(state);
+      return;
+    }
     await handleGateError(phase, result.error, state, runDir, cwd);
   }
 }
@@ -526,12 +537,16 @@ async function handleVerifyPhase(
       fs.unlinkSync(path.join(runDir, 'verify-feedback.md'));
     } catch { /* best-effort: may not exist */ }
 
-    process.stdout.write('\x1b[2J\x1b[H');
-    printPhaseTransition(6, 7, phaseLabel(6) + ' — PASS', phaseLabel(7));
+    renderControlPanel(state);
   } else if (outcome.type === 'fail') {
     await handleVerifyFail(outcome.feedbackPath, state, runDir, cwd);
   } else {
-    // error
+    // error — but check if SIGUSR1 redirected first
+    if (state.currentPhase !== 6) {
+      printInfo(`Phase 6 interrupted by control signal → phase ${state.currentPhase}`);
+      renderControlPanel(state);
+      return;
+    }
     await handleVerifyError(outcome.errorPath, state, harnessDir, runDir, cwd);
   }
 }
