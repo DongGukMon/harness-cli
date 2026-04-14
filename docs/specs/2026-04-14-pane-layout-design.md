@@ -35,22 +35,24 @@ Pane 기반 레이아웃으로 전환하면:
 - Claude 종료 후 shell이 살아있어 사용자가 자유롭게 명령 입력 가능.
 - Phase 전환 시 workspace pane을 kill하거나 respawn하지 않음.
 
-**[ADR-3] Claude 프로세스 완료 감지: sentinel + PID polling.**
-- `send-keys`로 Claude 시작 후 1초 대기, workspace pane의 foreground PID 캡처.
-- 감지 방식: chokidar sentinel 감시 + PID 사망 polling (1초 간격).
+**[ADR-3] Claude 프로세스 완료 감지: sentinel + PID file polling.**
+- Claude 시작 시 wrapper script가 Claude PID를 `<runDir>/claude.pid`에 기록.
+- 감지 방식: chokidar sentinel 감시 + PID file polling (1초 간격).
 - PID 사망 + sentinel fresh → completed.
 - PID 사망 + no sentinel → failed.
 - Sentinel detected (PID 아직 alive) → completed (PID polling 중단).
+- **PID 캡처 실패 (파일 없음/PID null)**: sentinel-only 모드 + 10분 타임아웃. 타임아웃 시 settle('failed').
+- PID file 방식을 쓰는 이유: workspace pane은 사용자가 자유롭게 사용하므로 `pgrep -P`로 shell 자식을 찾으면 Claude가 아닌 다른 프로세스를 잡을 수 있음.
 
 **[ADR-4] Phase 전환 시 workspace pane 정리: `Ctrl-C` 선전송.**
 - 새 interactive phase 시작 전, workspace pane에 `Ctrl-C`를 send-keys하여 진행 중인 입력을 정리.
 - 0.3초 대기 후 Claude 명령 send-keys.
 - 사용자가 뭔가 타이핑 중이더라도 안전하게 처리됨.
 
-**[ADR-5] SIGUSR1 (skip/jump) 처리: workspace pane에 `Ctrl-C` 전송.**
-- 현재: `killWindow()`로 Claude window 삭제 → window 사망 감지 → settle.
-- 변경: workspace pane에 `Ctrl-C` send-keys → Claude 프로세스 사망 → PID polling이 감지 → settle.
-- Workspace pane은 유지됨 (shell로 복귀).
+**[ADR-5] SIGUSR1 (skip/jump) 처리: phase-type에 따라 다르게 동작.**
+- **Interactive phase (1/3/5)**: workspace pane에 `Ctrl-C` send-keys → Claude 프로세스 사망 → PID polling이 감지 → settle. Workspace pane은 유지됨 (shell로 복귀).
+- **Gate/Verify phase (2/4/6/7)**: gate/verify 서브프로세스는 control pane의 프로세스 트리에서 실행됨. SIGUSR1 handler가 state를 변경한 뒤 기존 방식대로 child process를 kill함 (lock의 childPid 사용). Workspace pane에는 Ctrl-C를 보내지 않음 (idle 상태이므로 무의미).
+- Handler 로직: `getCurrentPhaseType() === 'interactive'` → workspace Ctrl-C, otherwise → kill child process.
 
 **[ADR-6] Gate/Verify phase에서 workspace pane은 idle.**
 - Gate/verify 출력은 control pane(왼쪽)에서 직접 표시. 현재와 동일.
@@ -95,17 +97,30 @@ $ harness run "태스크"
 └─────────────────────┴──────────────────────────────────┘
 ```
 
-### Inner 시작 시 pane 생성
+### Inner 시작 시 pane 생성 (idempotent)
 
 ```typescript
 // __inner가 시작되면:
 // 1. Lock claim (기존)
-// 2. Workspace pane 생성
-const workspacePaneId = splitPane(sessionName, controlPaneId, 'h', 70);
-state.tmuxWorkspacePane = workspacePaneId;
+// 2. Control pane ID 캡처
+const controlPaneId = getControlPaneId(sessionName);
+state.tmuxControlPane = controlPaneId;
+
+// 3. Workspace pane: validate existing or create new (idempotent)
+if (state.tmuxWorkspacePane && paneExists(sessionName, state.tmuxWorkspacePane)) {
+  // Reuse existing workspace pane (resume Case 2)
+} else {
+  // Create new workspace pane
+  const workspacePaneId = splitPane(sessionName, controlPaneId, 'h', 70);
+  state.tmuxWorkspacePane = workspacePaneId;
+}
 writeState(runDir, state);
-// 3. Phase loop 시작
+// 4. Phase loop 시작
 ```
+
+이 알고리즘은 inner 최초 실행과 resume 재시작 모두에서 동일하게 동작한다:
+- 저장된 pane ID가 유효하면 재사용 → 중복 split 방지
+- 저장된 pane ID가 stale하거나 없으면 새로 split → crash recovery
 
 ### Interactive phase (1/3/5) — Claude spawn
 
@@ -114,13 +129,13 @@ writeState(runDir, state);
 sendKeysToPane(sessionName, workspacePaneId, 'C-c');
 await sleep(300);
 
-// 2. Claude 명령 전송
-const claudeCmd = `claude --dangerously-skip-permissions --model ${model} --effort ${effort} @${promptFile}`;
+// 2. Claude 명령 전송 (wrapper가 PID를 파일에 기록)
+const pidFile = path.join(runDir, 'claude.pid');
+const claudeCmd = `claude --dangerously-skip-permissions --model ${model} --effort ${effort} @${promptFile} & echo $! > ${pidFile}; wait $!`;
 sendKeysToPane(sessionName, workspacePaneId, claudeCmd);
 
-// 3. Claude PID 캡처 (1초 대기 후)
-await sleep(1000);
-const claudePid = getPaneForegroundPid(sessionName, workspacePaneId);
+// 3. Claude PID 읽기 (PID file polling, 최대 5초)
+const claudePid = await pollForPidFile(pidFile, 5000);
 
 // 4. 완료 대기 (sentinel + PID polling)
 const result = await waitForPhaseCompletion(sentinelPath, attemptId, claudePid, ...);
@@ -149,6 +164,7 @@ async function waitForPhaseCompletion(
       settled = true;
       if (watcher) { void watcher.close(); watcher = null; }
       clearInterval(pollInterval);
+      if (timeoutTimer) clearTimeout(timeoutTimer);
       // NOTE: workspace pane은 kill하지 않음 (영구 shell)
       resolve({ status });
     }
@@ -182,6 +198,19 @@ async function waitForPhaseCompletion(
       }
     }, 1000);
 
+    // Sentinel-only timeout (PID 캡처 실패 시 안전망)
+    // claudePid가 null이면 PID polling이 동작하지 않으므로,
+    // sentinel만으로 완료를 감지해야 한다. 10분 타임아웃 설정.
+    const SENTINEL_ONLY_TIMEOUT_MS = 10 * 60 * 1000;
+    const timeoutTimer = claudePid === null
+      ? setTimeout(() => {
+          if (!settled) {
+            process.stderr.write('⚠️  Claude PID unknown + no sentinel after 10 min. Settling as failed.\n');
+            settle('failed');
+          }
+        }, SENTINEL_ONLY_TIMEOUT_MS)
+      : null;
+
     // Immediate check
     if (fs.existsSync(sentinelPath)) {
       onSentinelDetected();
@@ -194,10 +223,15 @@ async function waitForPhaseCompletion(
 
 ```typescript
 // signal.ts — SIGUSR1 handler 내부
-// 현재: killWindow(currentState.tmuxSession, lastWindow)
-// 변경:
-if (currentState.tmuxWorkspacePane) {
+// Phase-type에 따라 다르게 동작
+const phaseType = getCurrentPhaseType();
+if (phaseType === 'interactive' && currentState.tmuxWorkspacePane) {
+  // Interactive phase: workspace pane의 Claude에 Ctrl-C 전송
   sendKeysToPane(currentState.tmuxSession, currentState.tmuxWorkspacePane, 'C-c');
+} else {
+  // Gate/verify phase: control pane의 child process kill (기존 방식)
+  const childPid = getChildPid();
+  if (childPid) process.kill(childPid, 'SIGTERM');
 }
 ```
 
@@ -219,15 +253,35 @@ export function sendKeysToPane(session: string, paneTarget: string, keys: string
 export function selectPane(session: string, paneTarget: string): void;
   // tmux select-pane -t <session>:<paneTarget>
 
-export function getPaneForegroundPid(session: string, paneTarget: string): number | null;
-  // tmux list-panes -t <session>:<paneTarget> -F '#{pane_pid}' → shell PID
-  // Shell의 foreground child: pgrep -P <shellPid> (macOS/Linux)
-  // Claude가 shell의 직접 자식이므로 첫 번째 child PID 반환
-  // pgrep 결과 없으면 null (Claude 아직 미시작 또는 이미 종료)
+export function pollForPidFile(pidFilePath: string, timeoutMs: number): Promise<number | null>;
+  // PID file이 생성될 때까지 polling (200ms 간격)
+  // 파일이 생기면 parseInt 후 반환
+  // 타임아웃 시 null 반환
+  // Claude launch wrapper가 `echo $! > <pidFile>` 로 PID 기록
+
+export function paneExists(session: string, paneTarget: string): boolean;
+  // tmux list-panes -t <session> -F '#{pane_id}' | grep <paneTarget>
+  // Returns true if pane ID exists in session
 
 export function getControlPaneId(session: string): string | null;
   // tmux display-message -t <session> -p '#{pane_id}'
   // Returns current pane ID (control pane, since __inner runs here)
+```
+
+### Pane target syntax (canonical format)
+
+모든 pane helper 함수에서 일관된 타겟 형식을 사용한다:
+- **Pane ID**: `%N` 형식 (예: `%4`, `%5`). `tmux split-window -P -F '#{pane_id}'`가 반환하는 값.
+- **tmux 명령어 타겟**: `-t <session>:<paneId>` (예: `-t harness-abc:%5`)
+- State에 저장: `tmuxControlPane: '%4'`, `tmuxWorkspacePane: '%5'`
+- Pane ID는 세션 내에서 전역 고유. Window 번호를 포함할 필요 없음.
+
+예시:
+```bash
+tmux split-window -t 'harness-abc' -h -p 70 -P -F '#{pane_id}'  # → "%5"
+tmux send-keys -t 'harness-abc:%5' 'claude ...' Enter
+tmux select-pane -t 'harness-abc:%4'
+tmux list-panes -t 'harness-abc' -F '#{pane_id}'  # → "%4\n%5"
 ```
 
 ### 기존 함수 유지/제거
@@ -277,22 +331,26 @@ interface HarnessState {
 
 Outer 로직은 동일: session 생성 → `sendKeys`로 inner 시작 → iTerm2 열기. Pane 분할은 inner 책임.
 
-### `src/commands/resume.ts` — 최소 변경
+### `src/commands/resume.ts` — pane-aware 재시작
 
-- Case 1/2: 기존과 동일 (session re-attach / inner 재시작)
-- Case 3: 기존과 동일 (새 session 생성)
-- Inner가 재시작되면 workspace pane을 다시 생성 (기존 pane이 없으므로)
+- Case 1 (session + inner alive): 기존과 동일 — re-attach만
+- Case 2 (session alive, inner dead): pane-aware 타겟팅 필요
+  - `state.tmuxControlPane`이 유효하면 해당 pane에 `sendKeysToPane`로 inner 명령 전송
+  - Control pane이 stale하면: window 내 첫 번째 pane에 전송 (fallback)
+  - Inner가 시작되면 idempotent pane validation (위 알고리즘)으로 workspace pane 복구
+- Case 3 (no session): 기존과 동일 — 새 session 생성, inner가 pane split 담당
 
-### `src/signal.ts` — SIGUSR1 변경
+### `src/signal.ts` — SIGUSR1 phase-aware 변경
 
-- `killWindow` → `sendKeysToPane(..., 'C-c')`
+- Interactive phase: `sendKeysToPane(session, workspacePane, 'C-c')`
+- Gate/verify phase: child process kill (기존 방식 유지)
 
 ---
 
 ## File-level change list
 
 ### Modify
-- `src/tmux.ts` — `splitPane`, `sendKeysToPane`, `selectPane`, `getPaneForegroundPid`, `getControlPaneId` 추가
+- `src/tmux.ts` — `splitPane`, `sendKeysToPane`, `selectPane`, `paneExists`, `getControlPaneId`, `pollForPidFile` 추가
 - `src/types.ts` — `tmuxWorkspacePane`, `tmuxControlPane` 필드 추가
 - `src/state.ts` — 새 필드 초기화
 - `src/commands/inner.ts` — workspace pane 생성 로직 추가
@@ -344,11 +402,11 @@ Outer 로직은 동일: session 생성 → `sendKeys`로 inner 시작 → iTerm2
 - 완화: Phase 시작 전 `Ctrl-C` 선전송 + 0.3초 대기.
 - 사용자가 인지하고 있으므로 큰 문제 아님.
 
-**R2: Claude PID 캡처 실패 (프로세스가 아직 시작 안 됨)**
-- 완화: 1초 대기 후 캡처. 실패 시 sentinel-only 모드로 fallback.
+**R2: Claude PID 캡처 실패 (PID file이 생성되지 않음)**
+- 완화: PID file polling 최대 5초. 실패 시 sentinel-only 모드 + 10분 타임아웃으로 fallback. 타임아웃 시 settle('failed').
 
-**R3: Pane ID가 session 재연결 후 변경될 수 있음**
-- 완화: `state.tmuxWorkspacePane`을 resume 시 재캡처. Pane이 없으면 다시 split.
+**R3: Pane ID가 session 재연결 후 stale일 수 있음**
+- 완화: inner 시작 시 idempotent validation — `paneExists()`로 확인 후 유효하면 재사용, 아니면 재생성.
 
 ---
 
