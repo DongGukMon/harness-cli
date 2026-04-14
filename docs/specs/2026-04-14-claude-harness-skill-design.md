@@ -1,7 +1,7 @@
 # harness Skill 외부 배포 — Design Spec
 
 - Date: 2026-04-14
-- Status: Draft (Rev 3 — gate-2 feedback 반영 완료)
+- Status: Draft (Rev 4 — gate-2 feedback 반영)
 - Scope: `~/.claude/skills/`에 있는 harness 스킬을 공유 가능한 Claude Code 플러그인으로 패키징
 - Related decisions: [decisions.md](../../.harness/2026-04-14-claude-harness-skill/decisions.md)
 
@@ -56,8 +56,9 @@ harness-cli/
 ├── scripts/
 │   ├── harness-verify.sh    ← 기존 위치 유지 (이미 npm files에 포함)
 │   └── harness-session-hook.sh  ← ~/.claude/scripts/에서 이전
+├── bin/
+│   └── harness.ts           ← init, verify, session-hook, gate-exec 명령어 추가
 ├── src/
-│   ├── bin/harness.ts       ← init, verify, session-hook, gate-exec 명령어 추가
 │   ├── commands/
 │   │   ├── init.ts          ← 새 파일: settings.json 자동 설정
 │   │   ├── verify-cmd.ts    ← 새 파일: harness verify 래퍼
@@ -370,7 +371,7 @@ rm -rf ~/.claude/skills/harness ~/.claude/skills/codex-gate-review
 
 | File | Change |
 |------|--------|
-| `src/bin/harness.ts` | `init`, `verify`, `session-hook`, `gate-exec` 명령어 등록 |
+| `bin/harness.ts` | `init`, `verify`, `session-hook`, `gate-exec` 명령어 등록 |
 | `package.json` | `"files"` 필드에 `scripts/harness-session-hook.sh`, `.claude-plugin/`, `skills/` 추가. `version` bump |
 | `README.md` | 설치 가이드에 플러그인 설치 단계 추가 |
 | `README.ko.md` | 동일 |
