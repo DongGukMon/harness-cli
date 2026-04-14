@@ -110,12 +110,15 @@ export function getActiveWindowId(session: string): string | null {
 }
 
 /**
- * Check if a specific window exists in a session.
+ * Check if a specific window exists in a session (read-only, no focus change).
  */
 export function windowExists(session: string, windowTarget: string): boolean {
   try {
-    execSync(`tmux select-window -t ${esc(session)}:${esc(windowTarget)}`, { stdio: 'pipe' });
-    return true;
+    const output = execSync(
+      `tmux list-windows -t ${esc(session)} -F '#{window_id}'`,
+      { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] }
+    );
+    return output.split('\n').some((line) => line.trim() === windowTarget);
   } catch {
     return false;
   }

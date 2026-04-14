@@ -163,12 +163,12 @@ export async function runCommand(task: string, options: RunOptions = {}): Promis
       process.exit(1);
     }
 
-    // 21. Open terminal window (dedicated mode only)
+    // 21. Open terminal window (dedicated mode only) — ADR-10: graceful fallback
     if (!insideTmux) {
-      const opened = openTerminalWindow(sessionName);
-      if (!opened) {
-        process.exit(1);
-      }
+      openTerminalWindow(sessionName);
+      // openTerminalWindow returns false if it can't open a window, but the tmux session
+      // and inner process are already running. The function prints manual attach instructions.
+      // Per ADR-10, this is non-fatal — the user can manually attach.
     }
 
     printSuccess(`Harness session started: ${sessionName}`);

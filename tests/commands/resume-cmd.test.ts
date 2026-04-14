@@ -119,16 +119,79 @@ describe('resumeCommand', () => {
     expect(current).toBe(runId);
   });
 
-  it('resumes with explicit runId', async () => {
+  it('resumes with explicit runId (Case 3: no session)', async () => {
     setupRun(repo);
+    const { sessionExists } = await import('../../src/tmux.js');
+    const { createSession, sendKeys } = await import('../../src/tmux.js');
+    vi.mocked(sessionExists).mockReturnValue(false);
+
     await resumeCommand('2026-04-12-test', { root: repo.path });
-    // Resume ran successfully (no error thrown)
+
+    expect(vi.mocked(createSession)).toHaveBeenCalled();
+    expect(vi.mocked(sendKeys)).toHaveBeenCalledWith(
+      expect.any(String), '0', expect.stringContaining('__inner')
+    );
   });
 
-  it('resumes with implicit current-run', async () => {
+  it('resumes with implicit current-run (Case 3: no session)', async () => {
     const { harnessDir, runId } = setupRun(repo);
     setCurrentRun(harnessDir, runId);
 
     await resumeCommand(undefined, { root: repo.path });
+  });
+
+  it('Case 1: session + inner alive → re-attach only', async () => {
+    const { harnessDir, runId } = setupRun(repo, { tmuxSession: 'harness-test' });
+    setCurrentRun(harnessDir, runId);
+
+    const tmux = await import('../../src/tmux.js');
+    const terminal = await import('../../src/terminal.js');
+    const lock = await import('../../src/lock.js');
+    const proc = await import('../../src/process.js');
+
+    // Clear all mocks from previous tests
+    vi.mocked(tmux.createSession).mockClear();
+    vi.mocked(tmux.sendKeys).mockClear();
+    vi.mocked(terminal.openTerminalWindow).mockClear();
+
+    vi.mocked(tmux.sessionExists).mockReturnValue(true);
+    vi.mocked(lock.readLock).mockReturnValue({ cliPid: 999, handoff: false, childPid: null, childPhase: null, runId, startedAt: null, childStartedAt: null });
+    vi.mocked(proc.isPidAlive).mockReturnValue(true);
+
+    await resumeCommand(undefined, { root: repo.path });
+
+    expect(vi.mocked(terminal.openTerminalWindow)).toHaveBeenCalledWith('harness-test');
+    expect(vi.mocked(tmux.createSession)).not.toHaveBeenCalled();
+    expect(vi.mocked(tmux.sendKeys)).not.toHaveBeenCalled();
+  });
+
+  it('Case 2: session alive + inner dead → restart inner', async () => {
+    const { harnessDir, runId } = setupRun(repo, { tmuxSession: 'harness-test', tmuxControlWindow: '@0' });
+    setCurrentRun(harnessDir, runId);
+
+    const tmux = await import('../../src/tmux.js');
+    const terminal = await import('../../src/terminal.js');
+    const lock = await import('../../src/lock.js');
+    const proc = await import('../../src/process.js');
+
+    // Clear all mocks from previous tests
+    vi.mocked(tmux.createSession).mockClear();
+    vi.mocked(tmux.sendKeys).mockClear();
+    vi.mocked(terminal.openTerminalWindow).mockClear();
+    vi.mocked(lock.setLockHandoff).mockClear();
+    vi.mocked(lock.pollForHandoffComplete).mockClear();
+
+    vi.mocked(tmux.sessionExists).mockReturnValue(true);
+    vi.mocked(lock.readLock).mockReturnValue({ cliPid: 999, handoff: false, childPid: null, childPhase: null, runId, startedAt: null, childStartedAt: null });
+    vi.mocked(proc.isPidAlive).mockReturnValue(false);
+    vi.mocked(lock.pollForHandoffComplete).mockReturnValue(true);
+
+    await resumeCommand(undefined, { root: repo.path });
+
+    expect(vi.mocked(lock.setLockHandoff)).toHaveBeenCalled();
+    expect(vi.mocked(tmux.sendKeys)).toHaveBeenCalledWith('harness-test', '@0', expect.stringContaining('__inner'));
+    expect(vi.mocked(lock.pollForHandoffComplete)).toHaveBeenCalled();
+    expect(vi.mocked(terminal.openTerminalWindow)).toHaveBeenCalledWith('harness-test');
+    expect(vi.mocked(tmux.createSession)).not.toHaveBeenCalled();
   });
 });

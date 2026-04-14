@@ -102,13 +102,18 @@ describe('tmux utilities', () => {
     expect(getActiveWindowId('sess')).toBeNull();
   });
 
-  it('windowExists returns true when window found', () => {
-    vi.mocked(execSync).mockReturnValue(Buffer.from(''));
+  it('windowExists returns true when window ID is in list-windows output', () => {
+    vi.mocked(execSync).mockReturnValue('@0\n@1\n@2\n');
     expect(windowExists('sess', '@1')).toBe(true);
   });
 
+  it('windowExists returns false when window ID is not in output', () => {
+    vi.mocked(execSync).mockReturnValue('@0\n@2\n');
+    expect(windowExists('sess', '@1')).toBe(false);
+  });
+
   it('windowExists returns false on error', () => {
-    vi.mocked(execSync).mockImplementation(() => { throw new Error('no window'); });
+    vi.mocked(execSync).mockImplementation(() => { throw new Error('no session'); });
     expect(windowExists('sess', '@1')).toBe(false);
   });
 });
