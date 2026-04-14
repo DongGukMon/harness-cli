@@ -50,6 +50,8 @@ export interface HarnessState {
   tmuxWindows: string[];
   tmuxControlWindow: string;
   tmuxOriginalWindow?: string;
+  tmuxWorkspacePane: string;
+  tmuxControlPane: string;
 }
 
 export interface LockData {

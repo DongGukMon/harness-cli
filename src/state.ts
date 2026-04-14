@@ -117,5 +117,7 @@ export function createInitialState(
     tmuxMode: 'dedicated',
     tmuxWindows: [],
     tmuxControlWindow: '',
+    tmuxWorkspacePane: '',
+    tmuxControlPane: '',
   };
 }
