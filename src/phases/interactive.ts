@@ -1,15 +1,14 @@
 import fs from 'fs';
 import path from 'path';
 import { randomUUID } from 'crypto';
-import { spawn } from 'child_process';
 import { execSync } from 'child_process';
 import chokidar from 'chokidar';
 import type { HarnessState, InteractivePhase, Artifacts } from '../types.js';
-import { PHASE_MODELS, PHASE_EFFORTS, PHASE_ARTIFACT_FILES, SIGTERM_WAIT_MS } from '../config.js';
+import { PHASE_MODELS, PHASE_EFFORTS, PHASE_ARTIFACT_FILES } from '../config.js';
 import { writeState } from '../state.js';
-import { updateLockChild, clearLockChild } from '../lock.js';
 import { getHead } from '../git.js';
-import { getProcessStartTime, isProcessGroupAlive, killProcessGroup } from '../process.js';
+import { sendKeysToPane, pollForPidFile } from '../tmux.js';
+import { isPidAlive } from '../process.js';
 import { assembleInteractivePrompt } from '../context/assembler.js';
 import { printAdvisorReminder } from '../ui.js';
 
@@ -35,6 +34,10 @@ export function preparePhase(
   // Delete existing sentinel if present
   const sentinelPath = path.join(runDir, `phase-${phase}.done`);
   try { fs.unlinkSync(sentinelPath); } catch { /* ignore */ }
+
+  // Delete stale interrupt flag (ADR-10: prevent immediate settle on retry)
+  const interruptFlagPath = path.join(runDir, `interrupted-${phase}.flag`);
+  try { fs.unlinkSync(interruptFlagPath); } catch { /* ignore */ }
 
   // Phase 1/3: delete output artifact files to prevent stale mtime
   const artifactKeys = PHASE_ARTIFACT_FILES[phase] as (keyof Artifacts)[] | undefined;
@@ -171,75 +174,59 @@ export async function runInteractivePhase(
   const promptFile = path.join(runDir, `phase-${phase}-init-prompt.md`);
   fs.writeFileSync(promptFile, prompt, 'utf-8');
 
-  // Step 3: Spawn subprocess
+  // Step 3: Spawn Claude in workspace pane via send-keys
   printAdvisorReminder(phase);
   await new Promise<void>((resolve) => setTimeout(resolve, 300));
-  const child = spawn('claude', [
-    '--dangerously-skip-permissions',
-    '--model', PHASE_MODELS[phase],
-    '--effort', PHASE_EFFORTS[phase],
-    '@' + path.resolve(promptFile),
-  ], {
-    stdio: 'inherit',
-    detached: true,
-    cwd,
-  });
 
-  // Record childPid in lock
-  if (child.pid !== undefined) {
-    updateLockChild(harnessDir, child.pid, phase, getProcessStartTime(child.pid));
-  }
+  const sessionName = updatedState.tmuxSession;
+  const workspacePane = updatedState.tmuxWorkspacePane;
+
+  // Ctrl-C pre-send to clear any in-progress input (ADR-4)
+  sendKeysToPane(sessionName, workspacePane, 'C-c');
+  await new Promise<void>((resolve) => setTimeout(resolve, 300));
+
+  // PID file (phase/attempt scoped)
+  const pidFile = path.join(runDir, `claude-${phase}-${updatedState.phaseAttemptId[String(phase)]}.pid`);
+  if (fs.existsSync(pidFile)) fs.unlinkSync(pidFile);
+
+  // Launch Claude via exec wrapper (PID file = Claude's PID)
+  const claudeArgs = `--dangerously-skip-permissions --model ${PHASE_MODELS[phase]} --effort ${PHASE_EFFORTS[phase]} @${path.resolve(promptFile)}`;
+  const wrappedCmd = `sh -c 'echo $$ > ${pidFile}; exec claude ${claudeArgs}'`;
+  sendKeysToPane(sessionName, workspacePane, wrappedCmd);
+
+  // Capture Claude PID
+  const claudePid = await pollForPidFile(pidFile, 5000);
 
   const sentinelPath = path.join(runDir, `phase-${phase}.done`);
   const attemptId = updatedState.phaseAttemptId[String(phase)] ?? '';
 
-  // Step 4: Wait for BOTH child exit AND sentinel file
   const phaseResult = await waitForPhaseCompletion(
-    child,
-    sentinelPath,
-    attemptId,
-    phase,
-    updatedState,
-    cwd
+    sentinelPath, attemptId, claudePid, phase, updatedState, cwd, runDir
   );
-
-  // Step 5: Restore terminal state after Claude's inherit mode
-  // Claude's TUI uses raw mode; ensure stdin is back to normal for subsequent prompts.
-  if (process.stdin.isTTY) {
-    try {
-      process.stdin.setRawMode(false);
-    } catch { /* best-effort */ }
-    process.stdin.resume();
-  }
-
-  // Step 6: Post-completion process group cleanup
-  if (child.pid !== undefined) {
-    const pgid = child.pid;
-    if (isProcessGroupAlive(pgid)) {
-      await killProcessGroup(pgid, SIGTERM_WAIT_MS);
-    }
-    clearLockChild(harnessDir);
-  }
 
   return phaseResult;
 }
 
 /**
- * Wait for both child exit and sentinel file presence.
- * Uses chokidar for filesystem watching plus a fallback check after exit.
+ * Wait for sentinel file or Claude PID death.
+ * Uses chokidar for filesystem watching plus polling for PID liveness.
+ * Also responds to interrupt flags written by SIGUSR1 (skip/jump control).
  */
 async function waitForPhaseCompletion(
-  child: ReturnType<typeof spawn>,
   sentinelPath: string,
   attemptId: string,
+  claudePid: number | null,
   phase: InteractivePhase,
   state: HarnessState,
-  cwd: string
+  cwd: string,
+  runDir: string
 ): Promise<InteractiveResult> {
   return new Promise<InteractiveResult>((resolve) => {
     let settled = false;
-    let childExited = false;
     let watcher: ReturnType<typeof chokidar.watch> | null = null;
+    let pidPollInterval: ReturnType<typeof setInterval> | null = null;
+    let interruptPollInterval: ReturnType<typeof setInterval> | null = null;
+    let nullPidTimeout: ReturnType<typeof setTimeout> | null = null;
 
     function settle(status: 'completed' | 'failed'): void {
       if (settled) return;
@@ -248,18 +235,29 @@ async function waitForPhaseCompletion(
         void watcher.close();
         watcher = null;
       }
+      if (pidPollInterval !== null) {
+        clearInterval(pidPollInterval);
+        pidPollInterval = null;
+      }
+      if (interruptPollInterval !== null) {
+        clearInterval(interruptPollInterval);
+        interruptPollInterval = null;
+      }
+      if (nullPidTimeout !== null) {
+        clearTimeout(nullPidTimeout);
+        nullPidTimeout = null;
+      }
+      // Workspace pane persists — no kill/select needed
       resolve({ status });
     }
 
-    function evaluateCompletion(): void {
-      if (!childExited) return;
-
+    // Sentinel detection → evaluate artifacts
+    function onSentinelDetected(): void {
+      if (settled) return;
       const freshness = checkSentinelFreshness(sentinelPath, attemptId);
       if (freshness === 'fresh') {
         const valid = validatePhaseArtifacts(phase, state, cwd);
         settle(valid ? 'completed' : 'failed');
-      } else {
-        settle('failed');
       }
     }
 
@@ -270,34 +268,72 @@ async function waitForPhaseCompletion(
       usePolling: false,
     });
 
-    function onSentinelDetected(): void {
-      if (settled) return;
-      const freshness = checkSentinelFreshness(sentinelPath, attemptId);
-      if (freshness === 'fresh') {
-        // Sentinel confirmed — kill Claude so exit handler triggers evaluation
-        child.kill('SIGTERM');
-      }
-    }
-
     watcher.on('add', onSentinelDetected);
     watcher.on('change', onSentinelDetected);
 
-    // Child exit handler
-    child.on('exit', () => {
-      childExited = true;
-      // Small delay to allow watcher to process filesystem events that may have
-      // arrived just before/at exit
-      setTimeout(() => evaluateCompletion(), 50);
-    });
+    // PID death polling (1s): when Claude exits, check sentinel one last time
+    if (claudePid !== null) {
+      pidPollInterval = setInterval(() => {
+        if (settled) {
+          clearInterval(pidPollInterval!);
+          pidPollInterval = null;
+          return;
+        }
+        if (!isPidAlive(claudePid)) {
+          clearInterval(pidPollInterval!);
+          pidPollInterval = null;
+          // PID died — check sentinel one last time
+          const freshness = checkSentinelFreshness(sentinelPath, attemptId);
+          if (freshness === 'fresh') {
+            const valid = validatePhaseArtifacts(phase, state, cwd);
+            settle(valid ? 'completed' : 'failed');
+          } else {
+            settle('failed');
+          }
+        }
+      }, 1000);
+    }
 
-    child.on('error', () => {
-      childExited = true;
-      setTimeout(() => evaluateCompletion(), 50);
-    });
+    // Interrupt flag polling (500ms): SIGUSR1-driven skip/jump
+    const interruptFlagPath = path.join(runDir, `interrupted-${phase}.flag`);
+    interruptPollInterval = setInterval(() => {
+      if (settled) {
+        clearInterval(interruptPollInterval!);
+        interruptPollInterval = null;
+        return;
+      }
+      if (fs.existsSync(interruptFlagPath)) {
+        try { fs.unlinkSync(interruptFlagPath); } catch { /* ignore */ }
+        if (claudePid === null) {
+          // No known PID — settle immediately
+          settle('failed');
+        } else {
+          // Grace period: wait up to 3s for PID to die naturally, then settle
+          const graceStart = Date.now();
+          const graceInterval = setInterval(() => {
+            if (settled) {
+              clearInterval(graceInterval);
+              return;
+            }
+            if (!isPidAlive(claudePid) || Date.now() - graceStart >= 3000) {
+              clearInterval(graceInterval);
+              settle('failed');
+            }
+          }, 100);
+        }
+      }
+    }, 500);
 
-    // Immediate check in case sentinel already exists before watcher setup
-    if (fs.existsSync(sentinelPath) && childExited) {
-      evaluateCompletion();
+    // Sentinel-only timeout: 10 minutes when claudePid is null
+    if (claudePid === null) {
+      nullPidTimeout = setTimeout(() => {
+        settle('failed');
+      }, 10 * 60 * 1000);
+    }
+
+    // Immediate check
+    if (fs.existsSync(sentinelPath)) {
+      onSentinelDetected();
     }
   });
 }

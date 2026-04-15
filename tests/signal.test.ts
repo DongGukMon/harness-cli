@@ -2,6 +2,11 @@ import { describe, it, expect, afterEach, vi, beforeEach } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+
+vi.mock('../src/tmux.js', () => ({
+  sendKeysToPane: vi.fn(),
+}));
+
 import { registerSignalHandlers, handleShutdown } from '../src/signal.js';
 import type { SignalContext } from '../src/signal.js';
 import { createInitialState } from '../src/state.js';
@@ -343,5 +348,170 @@ describe('registerSignalHandlers — double-signal guard', () => {
     // We cannot easily test this without mocking process.exit, but we can
     // verify the listener count did not change (no extra listeners added).
     expect(process.listenerCount('SIGINT')).toBe(before + 1);
+  });
+});
+
+// ── SIGUSR1 handler — pending-action consumption ─────────────────────────────
+
+describe('SIGUSR1 handler', () => {
+  let sigusr1Handler: (() => void) | null = null;
+
+  beforeEach(() => {
+    sigusr1Handler = null;
+    vi.restoreAllMocks();
+  });
+
+  afterEach(() => {
+    if (sigusr1Handler) {
+      process.removeListener('SIGUSR1', sigusr1Handler);
+      sigusr1Handler = null;
+    }
+  });
+
+  function registerAndCaptureSIGUSR1(ctx: SignalContext): void {
+    const origOn = process.on.bind(process);
+    vi.spyOn(process, 'on').mockImplementation((event: string | symbol, listener: (...args: unknown[]) => void) => {
+      const eventStr = String(event);
+      if (eventStr === 'SIGUSR1') {
+        sigusr1Handler = listener as () => void;
+      }
+      installedHandlers.push([eventStr, listener]);
+      return origOn(event as NodeJS.Signals, listener as NodeJS.SignalsListener);
+    });
+
+    registerSignalHandlers(ctx);
+    vi.mocked(process.on).mockRestore();
+  }
+
+  it('installs a SIGUSR1 handler', () => {
+    const dir = makeTmpDir();
+    tmpDirs.push(dir);
+    const ctx = makeCtx({ harnessDir: dir, runId: 'run-sigusr1-install' });
+
+    registerAndCaptureSIGUSR1(ctx);
+    expect(sigusr1Handler).not.toBeNull();
+  });
+
+  it('skip action: advances currentPhase and marks phase completed', () => {
+    const dir = makeTmpDir();
+    tmpDirs.push(dir);
+    const runId = 'run-sigusr1-skip';
+    const runDir = path.join(dir, runId);
+    fs.mkdirSync(runDir, { recursive: true });
+
+    const baseState = createInitialState(runId, 'task', 'abc', '/bin/codex', false);
+    baseState.currentPhase = 3;
+    baseState.phases['3'] = 'in_progress';
+    baseState.tmuxSession = 'test-session';
+    baseState.tmuxWindows = ['@5'];
+    baseState.tmuxWorkspacePane = '%1';
+    baseState.tmuxControlPane = '%0';
+
+    let currentState = { ...baseState };
+    // Write initial state.json so writeState can work
+    fs.writeFileSync(path.join(runDir, 'state.json'), JSON.stringify(currentState, null, 2));
+
+    const ctx: SignalContext = {
+      harnessDir: dir,
+      runId,
+      getState: () => currentState,
+      setState: (s) => { currentState = s; },
+      getChildPid: () => null,
+      getCurrentPhaseType: () => 'interactive',
+      cwd: dir,
+    };
+
+    registerAndCaptureSIGUSR1(ctx);
+
+    // Write pending-action.json
+    fs.writeFileSync(path.join(runDir, 'pending-action.json'), JSON.stringify({ action: 'skip' }));
+
+    // Invoke the handler
+    sigusr1Handler!();
+
+    // Verify state mutation
+    expect(currentState.currentPhase).toBe(4);
+    expect(currentState.phases['3']).toBe('completed');
+    // Verify pending-action.json was deleted
+    expect(fs.existsSync(path.join(runDir, 'pending-action.json'))).toBe(false);
+    // Verify state.json was written
+    const saved = JSON.parse(fs.readFileSync(path.join(runDir, 'state.json'), 'utf-8'));
+    expect(saved.currentPhase).toBe(4);
+  });
+
+  it('jump action: resets phases and sets currentPhase', () => {
+    const dir = makeTmpDir();
+    tmpDirs.push(dir);
+    const runId = 'run-sigusr1-jump';
+    const runDir = path.join(dir, runId);
+    fs.mkdirSync(runDir, { recursive: true });
+
+    const baseState = createInitialState(runId, 'task', 'abc', '/bin/codex', false);
+    baseState.currentPhase = 5;
+    baseState.phases['1'] = 'completed';
+    baseState.phases['2'] = 'completed';
+    baseState.phases['3'] = 'completed';
+    baseState.phases['4'] = 'completed';
+    baseState.phases['5'] = 'in_progress';
+    baseState.tmuxSession = 'test-session';
+    baseState.tmuxWindows = ['@7'];
+    baseState.tmuxWorkspacePane = '%1';
+    baseState.tmuxControlPane = '%0';
+
+    let currentState = { ...baseState };
+    fs.writeFileSync(path.join(runDir, 'state.json'), JSON.stringify(currentState, null, 2));
+
+    const ctx: SignalContext = {
+      harnessDir: dir,
+      runId,
+      getState: () => currentState,
+      setState: (s) => { currentState = s; },
+      getChildPid: () => null,
+      getCurrentPhaseType: () => 'interactive',
+      cwd: dir,
+    };
+
+    registerAndCaptureSIGUSR1(ctx);
+
+    fs.writeFileSync(path.join(runDir, 'pending-action.json'), JSON.stringify({ action: 'jump', phase: 3 }));
+
+    sigusr1Handler!();
+
+    expect(currentState.currentPhase).toBe(3);
+    expect(currentState.phases['3']).toBe('pending');
+    expect(currentState.phases['4']).toBe('pending');
+    expect(currentState.phases['5']).toBe('pending');
+    expect(currentState.phases['2']).toBe('completed');
+    expect(fs.existsSync(path.join(runDir, 'pending-action.json'))).toBe(false);
+  });
+
+  it('no-op when pending-action.json does not exist', () => {
+    const dir = makeTmpDir();
+    tmpDirs.push(dir);
+    const runId = 'run-sigusr1-noop';
+    const runDir = path.join(dir, runId);
+    fs.mkdirSync(runDir, { recursive: true });
+
+    const baseState = createInitialState(runId, 'task', 'abc', '/bin/codex', false);
+    baseState.currentPhase = 3;
+
+    let currentState = { ...baseState };
+    fs.writeFileSync(path.join(runDir, 'state.json'), JSON.stringify(currentState, null, 2));
+
+    const ctx: SignalContext = {
+      harnessDir: dir,
+      runId,
+      getState: () => currentState,
+      setState: (s) => { currentState = s; },
+      getChildPid: () => null,
+      getCurrentPhaseType: () => 'interactive',
+      cwd: dir,
+    };
+
+    registerAndCaptureSIGUSR1(ctx);
+    sigusr1Handler!();
+
+    // State unchanged
+    expect(currentState.currentPhase).toBe(3);
   });
 });

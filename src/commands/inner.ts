@@ -1,0 +1,209 @@
+import fs from 'fs';
+import { join } from 'path';
+import { createInterface } from 'readline';
+import { getGitRoot } from '../git.js';
+import { updateLockPid, readLock, releaseLock } from '../lock.js';
+import { findHarnessRoot, clearCurrentRun } from '../root.js';
+import { readState, writeState } from '../state.js';
+import { runPhaseLoop } from '../phases/runner.js';
+import { registerSignalHandlers } from '../signal.js';
+import { killSession, killWindow, selectWindow, splitPane, paneExists, selectPane } from '../tmux.js';
+import { renderWelcome } from '../ui.js';
+import type { HarnessState } from '../types.js';
+
+export interface InnerOptions {
+  root?: string;
+  controlPane?: string;
+}
+
+export async function innerCommand(runId: string, options: InnerOptions = {}): Promise<void> {
+  const harnessDir = findHarnessRoot(options.root);
+  const cwd = options.root ?? getGitRoot();
+  const runDir = join(harnessDir, runId);
+
+  // 1. Load state
+  const state = readState(runDir);
+  if (state === null) {
+    process.stderr.write(`Run '${runId}' has no state.\n`);
+    process.exit(1);
+  }
+
+  // 2. Claim lock ownership (outer → inner handoff)
+  updateLockPid(harnessDir, process.pid);
+
+  // Pane setup — idempotent pair validation (ADR-9)
+  const controlPaneId = options.controlPane;
+  if (!controlPaneId) {
+    process.stderr.write('Fatal: --control-pane argument is required for __inner.\n');
+    process.exit(1);
+  }
+  state.tmuxControlPane = controlPaneId;
+
+  const controlValid = paneExists(state.tmuxSession, controlPaneId);
+  const workspaceValid = !!state.tmuxWorkspacePane
+    && paneExists(state.tmuxSession, state.tmuxWorkspacePane)
+    && state.tmuxWorkspacePane !== controlPaneId;
+
+  if (controlValid && workspaceValid) {
+    // Both panes valid and distinct — reuse
+  } else if (controlValid) {
+    const workspacePaneId = splitPane(state.tmuxSession, controlPaneId, 'h', 70);
+    state.tmuxWorkspacePane = workspacePaneId;
+  } else {
+    process.stderr.write(`Fatal: control pane ${controlPaneId} does not exist.\n`);
+    process.exit(1);
+  }
+  writeState(runDir, state);
+
+  // 3. Task prompt if empty (ADR-3, ADR-5, ADR-6)
+  const taskMdPath = join(runDir, 'task.md');
+  const existingTask = fs.existsSync(taskMdPath)
+    ? fs.readFileSync(taskMdPath, 'utf-8').trim()
+    : '';
+
+  if (!existingTask) {
+    if (state.tmuxControlPane) {
+      selectPane(state.tmuxSession, state.tmuxControlPane);
+    }
+    renderWelcome(state.runId);
+
+    const cancelAndExit = (): never => {
+      process.stderr.write('\nHarness cancelled.\n');
+      fs.rmSync(runDir, { recursive: true, force: true });
+      clearCurrentRun(harnessDir);
+      releaseLock(harnessDir, runId);
+      if (state.tmuxMode === 'dedicated') {
+        killSession(state.tmuxSession);
+      } else if (state.tmuxControlWindow) {
+        killWindow(state.tmuxSession, state.tmuxControlWindow);
+      }
+      process.exit(0);
+    };
+
+    let capturedTask = '';
+    while (!capturedTask) {
+      const result = await promptForTask();
+      switch (result.kind) {
+        case 'task':
+          capturedTask = result.value;
+          break;
+        case 'empty':
+          process.stderr.write('  Task cannot be empty. Please enter a task description:\n');
+          break;
+        case 'eof':
+        case 'interrupt':
+          cancelAndExit();
+      }
+    }
+
+    state.task = capturedTask;
+    fs.writeFileSync(taskMdPath, capturedTask);
+    writeState(runDir, state);
+
+    // Fresh start: discard any pending actions written during prompt
+    // (ADR-7: skip/jump before task capture is meaningless)
+    const pendingPath = join(runDir, 'pending-action.json');
+    try { fs.unlinkSync(pendingPath); } catch { /* ignore */ }
+  } else {
+    // Resume or task-provided start: consume pending actions normally
+    consumePendingAction(runDir, state);
+  }
+
+  // 5. Register signal handlers (ADR-7: after task capture)
+  registerSignalHandlers({
+    harnessDir,
+    runId,
+    getState: () => state,
+    setState: (s) => Object.assign(state, s),
+    getChildPid: () => readLock(harnessDir)?.childPid ?? null,
+    getCurrentPhaseType: () => {
+      const phase = state.currentPhase;
+      if (phase === 1 || phase === 3 || phase === 5) return 'interactive';
+      return 'automated';
+    },
+    cwd,
+  });
+
+  // 5. Run phase loop
+  try {
+    await runPhaseLoop(state, harnessDir, runDir, cwd);
+  } finally {
+    releaseLock(harnessDir, runId);
+  }
+
+  // 6. Cleanup tmux on completion
+  if (state.tmuxMode === 'dedicated') {
+    killSession(state.tmuxSession);
+  } else {
+    // Reused mode: kill only harness-owned windows
+    for (const windowId of state.tmuxWindows) {
+      killWindow(state.tmuxSession, windowId);
+    }
+    if (state.tmuxOriginalWindow) {
+      selectWindow(state.tmuxSession, state.tmuxOriginalWindow);
+    }
+  }
+}
+
+function consumePendingAction(runDir: string, state: HarnessState): void {
+  const pendingPath = join(runDir, 'pending-action.json');
+  if (!fs.existsSync(pendingPath)) return;
+
+  try {
+    const raw = fs.readFileSync(pendingPath, 'utf-8');
+    const action = JSON.parse(raw) as { action: string; phase?: number };
+
+    if (action.action === 'skip') {
+      // Mark current phase as completed and advance
+      state.phases[String(state.currentPhase)] = 'completed';
+      state.currentPhase = state.currentPhase + 1;
+    } else if (action.action === 'jump' && typeof action.phase === 'number') {
+      // Reset phases >= target and set currentPhase
+      for (let m = action.phase; m <= 7; m++) {
+        state.phases[String(m)] = 'pending';
+      }
+      state.currentPhase = action.phase;
+      state.pendingAction = null;
+      state.pauseReason = null;
+    }
+
+    writeState(runDir, state);
+    fs.unlinkSync(pendingPath);
+  } catch {
+    // Best-effort: corrupted pending action is skipped
+    try { fs.unlinkSync(pendingPath); } catch { /* ignore */ }
+  }
+}
+
+type PromptResult =
+  | { kind: 'task'; value: string }
+  | { kind: 'empty' }
+  | { kind: 'eof' }
+  | { kind: 'interrupt' };
+
+function promptForTask(): Promise<PromptResult> {
+  const rl = createInterface({ input: process.stdin, output: process.stderr });
+
+  return new Promise<PromptResult>((resolve) => {
+    let answered = false;
+
+    rl.on('SIGINT', () => {
+      answered = true;
+      rl.close();
+      resolve({ kind: 'interrupt' });
+    });
+
+    rl.question('  > ', (answer) => {
+      answered = true;
+      rl.close();
+      const trimmed = answer.trim();
+      resolve(trimmed ? { kind: 'task', value: trimmed } : { kind: 'empty' });
+    });
+
+    rl.on('close', () => {
+      if (!answered) {
+        resolve({ kind: 'eof' });
+      }
+    });
+  });
+}

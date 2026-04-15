@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'fs';
 import { dirname, join } from 'path';
 import { getGitRoot } from './git.js';
 
@@ -41,7 +41,7 @@ export function findHarnessRoot(explicitRoot?: string, cwd?: string): string {
     dir = parent;
   }
 
-  throw new Error("No `.harness/` directory found. Run 'harness run' first.");
+  throw new Error("No `.harness/` directory found. Run 'harness start' first.");
 }
 
 // Read current-run pointer. Returns runId string or null.
@@ -60,6 +60,12 @@ export function setCurrentRun(harnessDir: string, runId: string): void {
   writeFileSync(join(harnessDir, 'current-run'), runId, 'utf-8');
 }
 
+// Clear current-run pointer (e.g., on cancelled run).
+export function clearCurrentRun(harnessDir: string): void {
+  const p = join(harnessDir, 'current-run');
+  try { unlinkSync(p); } catch { /* ignore if missing */ }
+}
+
 // Resolve runId from explicit arg or current-run pointer.
 // Throws with guidance if neither available.
 export function resolveRunId(harnessDir: string, explicitRunId?: string): string {
@@ -73,7 +79,7 @@ export function resolveRunId(harnessDir: string, explicitRunId?: string): string
   const current = getCurrentRun(harnessDir);
   if (current === null) {
     throw new Error(
-      "No active run. Use 'harness run' to start a new run or 'harness list' to see all runs."
+      "No active run. Use 'harness start' to start a new run or 'harness list' to see all runs."
     );
   }
 

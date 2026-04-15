@@ -123,8 +123,19 @@ export async function runVerifyPhase(
   // Collect stdout/stderr
   const stdoutChunks: Buffer[] = [];
   const stderrChunks: Buffer[] = [];
-  child.stdout!.on('data', (chunk: Buffer) => stdoutChunks.push(chunk));
-  child.stderr!.on('data', (chunk: Buffer) => stderrChunks.push(chunk));
+  child.stdout!.on('data', (chunk: Buffer) => {
+    stdoutChunks.push(chunk);
+    // Stream check results to control panel
+    const text = chunk.toString();
+    if (text.includes('Running:') || text.includes('PASS') || text.includes('FAIL')) {
+      process.stderr.write(`  ${text}`);
+    }
+  });
+  child.stderr!.on('data', (chunk: Buffer) => {
+    stderrChunks.push(chunk);
+    // Stream verify progress to control panel
+    process.stderr.write(chunk.toString());
+  });
 
   // Wait for exit or timeout
   const outcome = await new Promise<VerifyOutcome>((resolve) => {

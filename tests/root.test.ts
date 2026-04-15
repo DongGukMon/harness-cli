@@ -61,7 +61,7 @@ describe('findHarnessRoot', () => {
 
     it('throws with helpful message', () => {
       expect(() => findHarnessRoot(undefined, tmpDir)).toThrow(
-        "No `.harness/` directory found. Run 'harness run' first."
+        "No `.harness/` directory found. Run 'harness start' first."
       );
     });
   });
@@ -154,7 +154,7 @@ describe('resolveRunId', () => {
 
   it('no arg + no pointer → throws with guidance', () => {
     expect(() => resolveRunId(tmpDir)).toThrow(
-      "No active run. Use 'harness run' to start a new run or 'harness list' to see all runs."
+      "No active run. Use 'harness start' to start a new run or 'harness list' to see all runs."
     );
   });
 });

@@ -32,6 +32,7 @@ vi.mock('../../src/phases/verify.js', () => ({
 vi.mock('../../src/ui.js', () => ({
   promptChoice: vi.fn(),
   printPhaseTransition: vi.fn(),
+  renderControlPanel: vi.fn(),
   printWarning: vi.fn(),
   printError: vi.fn(),
   printSuccess: vi.fn(),
@@ -70,7 +71,7 @@ import { runPhaseLoop } from '../../src/phases/runner.js';
 import { runInteractivePhase } from '../../src/phases/interactive.js';
 import { runGatePhase } from '../../src/phases/gate.js';
 import { runVerifyPhase } from '../../src/phases/verify.js';
-import { promptChoice, printPhaseTransition } from '../../src/ui.js';
+import { promptChoice, printPhaseTransition, renderControlPanel } from '../../src/ui.js';
 import { normalizeArtifactCommit } from '../../src/artifact.js';
 import { getHead } from '../../src/git.js';
 import { writeState } from '../../src/state.js';
@@ -676,8 +677,8 @@ describe('Verify FAIL escalation [C]ontinue', () => {
 
 // ─── Phase transition banner ──────────────────────────────────────────────────
 
-describe('printPhaseTransition called on advance', () => {
-  it('prints transition banner when advancing from Phase 1 to 2', async () => {
+describe('renderControlPanel called on advance', () => {
+  it('renders control panel when advancing from Phase 1 to 2', async () => {
     const runDir = makeTmpDir();
     const state = makeState({ currentPhase: 1 });
 
@@ -687,6 +688,6 @@ describe('printPhaseTransition called on advance', () => {
 
     await runPhaseLoop(state, HDIR, runDir, CWD);
 
-    expect(vi.mocked(printPhaseTransition)).toHaveBeenCalled();
+    expect(vi.mocked(renderControlPanel)).toHaveBeenCalled();
   });
 });

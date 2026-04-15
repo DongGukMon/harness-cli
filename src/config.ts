@@ -14,6 +14,7 @@ export const GATE_TIMEOUT_MS = 360_000;  // 6 min — Codex high-effort typicall
 export const VERIFY_TIMEOUT_MS = 300_000;
 export const SIGTERM_WAIT_MS = 5_000;
 export const GROUP_DRAIN_WAIT_MS = 5_000;
+export const HANDOFF_TIMEOUT_MS = 5_000;
 
 export const GATE_RETRY_LIMIT = 3;
 export const VERIFY_RETRY_LIMIT = 3;

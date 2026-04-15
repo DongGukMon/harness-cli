@@ -48,7 +48,7 @@ export function resolveVerifyScriptPath(
 
 // Map phase type → required preflight items.
 const PHASE_ITEMS: Record<PhaseType, PreflightItem[]> = {
-  interactive: ['git', 'head', 'node', 'claude', 'claudeAtFile', 'platform', 'tty'],
+  interactive: ['git', 'head', 'node', 'claude', 'claudeAtFile', 'platform', 'tty', 'tmux'],
   gate: ['git', 'head', 'node', 'codexPath', 'platform', 'tty'],
   verify: ['git', 'head', 'node', 'verifyScript', 'jq', 'platform', 'tty'],
   terminal: ['git', 'platform'],
@@ -210,6 +210,15 @@ function runItem(item: PreflightItem, cwd?: string): { codexPath?: string } {
         throw new Error('harness requires an interactive terminal (TTY).');
       }
       return {};
+
+    case 'tmux': {
+      try {
+        execSync('tmux -V', { stdio: 'pipe' });
+      } catch {
+        throw new Error('tmux is required. Install with: brew install tmux');
+      }
+      return {};
+    }
 
     default: {
       const _exhaustive: never = item;

@@ -23,7 +23,7 @@ export async function listCommand(options: ListOptions = {}): Promise<void> {
   try {
     harnessDir = findHarnessRoot(options.root);
   } catch {
-    process.stdout.write("No runs found. Use 'harness run \"task\"' to start.\n");
+    process.stdout.write("No runs found. Use 'harness start \"task\"' to start.\n");
     return;
   }
 
@@ -33,7 +33,7 @@ export async function listCommand(options: ListOptions = {}): Promise<void> {
   try {
     entries = readdirSync(harnessDir);
   } catch {
-    process.stdout.write("No runs found. Use 'harness run \"task\"' to start.\n");
+    process.stdout.write("No runs found. Use 'harness start \"task\"' to start.\n");
     return;
   }
 
@@ -65,7 +65,7 @@ export async function listCommand(options: ListOptions = {}): Promise<void> {
   }
 
   if (runs.length === 0) {
-    process.stdout.write("No runs found. Use 'harness run \"task\"' to start.\n");
+    process.stdout.write("No runs found. Use 'harness start \"task\"' to start.\n");
     return;
   }
 
