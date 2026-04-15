@@ -11,18 +11,15 @@ import { openTerminalWindow } from '../terminal.js';
 import { HANDOFF_TIMEOUT_MS } from '../config.js';
 import { printSuccess, printError } from '../ui.js';
 
-export interface RunOptions {
+export interface StartOptions {
   allowDirty?: boolean;
   auto?: boolean;
   root?: string;
 }
 
-export async function runCommand(task: string, options: RunOptions = {}): Promise<void> {
-  // 1. Validate task
-  if (!task || task.trim() === '') {
-    process.stderr.write('Error: task description cannot be empty.\n');
-    process.exit(1);
-  }
+export async function startCommand(task: string | undefined, options: StartOptions = {}): Promise<void> {
+  // 1. Normalize task (empty/whitespace → '' for interactive prompt in inner)
+  const normalizedTask = task?.trim() || '';
 
   // 2. Find harness root (creates dir if --root)
   const harnessDir = findHarnessRoot(options.root);
@@ -65,7 +62,7 @@ export async function runCommand(task: string, options: RunOptions = {}): Promis
   }
 
   // 6. Generate runId
-  const runId = generateRunId(task, harnessDir);
+  const runId = generateRunId(normalizedTask, harnessDir);
   const runDir = join(harnessDir, runId);
 
   // 7. Ensure harness parent dir exists so we can acquire the global lock
@@ -96,11 +93,11 @@ export async function runCommand(task: string, options: RunOptions = {}): Promis
     const baseCommit = getHead(cwd);
 
     // 12. Create initial state
-    const state = createInitialState(runId, task, baseCommit, codexPath, options.auto ?? false);
+    const state = createInitialState(runId, normalizedTask, baseCommit, codexPath, options.auto ?? false);
 
     // 13. Save task.md (needed before Phase 1 spawn)
     try {
-      writeFileSync(join(runDir, 'task.md'), task, 'utf-8');
+      writeFileSync(join(runDir, 'task.md'), normalizedTask, 'utf-8');
     } catch (err) {
       cleanupFailedInit(runDir, harnessDir, runId, false);
       process.stderr.write(`Error: failed to write task.md: ${(err as Error).message}\n`);

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { Command } from 'commander';
-import { runCommand } from '../src/commands/run.js';
+import { startCommand } from '../src/commands/start.js';
 import { resumeCommand } from '../src/commands/resume.js';
 import { statusCommand } from '../src/commands/status.js';
 import { listCommand } from '../src/commands/list.js';
@@ -17,13 +17,23 @@ program
   .option('--root <dir>', 'explicit .harness/ parent directory');
 
 program
-  .command('run <task>')
-  .description('start a new harness run')
+  .command('start [task]')
+  .description('start a new harness session')
   .option('--allow-dirty', 'allow unstaged/untracked changes at start')
   .option('--auto', 'autonomous mode (no user escalations)')
-  .action(async (task: string, opts: { allowDirty?: boolean; auto?: boolean }) => {
+  .action(async (task: string | undefined, opts: { allowDirty?: boolean; auto?: boolean }) => {
     const globalOpts = program.opts();
-    await runCommand(task, { ...opts, root: globalOpts.root });
+    await startCommand(task, { ...opts, root: globalOpts.root });
+  });
+
+program
+  .command('run [task]')
+  .description('alias for start')
+  .option('--allow-dirty', 'allow unstaged/untracked changes at start')
+  .option('--auto', 'autonomous mode (no user escalations)')
+  .action(async (task: string | undefined, opts: { allowDirty?: boolean; auto?: boolean }) => {
+    const globalOpts = program.opts();
+    await startCommand(task, { ...opts, root: globalOpts.root });
   });
 
 program
