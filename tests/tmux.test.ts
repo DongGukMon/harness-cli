@@ -167,12 +167,12 @@ describe('tmux utilities', () => {
     expect(() => selectPane('sess', '%1')).not.toThrow();
   });
 
-  it('selectPane builds correct command', () => {
+  it('selectPane targets pane ID directly (no session prefix)', () => {
     selectPane('sess', '%3');
     const cmd = vi.mocked(execSync).mock.calls[0][0] as string;
     expect(cmd).toContain('select-pane');
-    expect(cmd).toContain('sess');
     expect(cmd).toContain('%3');
+    expect(cmd).not.toContain('sess');
   });
 
   it('paneExists returns true when pane ID is in list-panes output', () => {

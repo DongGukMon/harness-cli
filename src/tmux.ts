@@ -80,14 +80,15 @@ export function sendKeys(session: string, windowTarget: string, keys: string): v
  * Split a pane horizontally or vertically. Returns the new pane ID (e.g., "%5").
  */
 export function splitPane(
-  session: string,
+  _session: string,
   targetPane: string,
   direction: 'h' | 'v',
   percent: number
 ): string {
+  // Pane IDs (%N) are globally unique in tmux — target directly, no session prefix needed
   const flag = direction === 'h' ? '-h' : '-v';
   const output = execSync(
-    `tmux split-window -t ${esc(session)}:${esc(targetPane)} ${flag} -p ${percent} -P -F '#{pane_id}'`,
+    `tmux split-window -t ${esc(targetPane)} ${flag} -p ${percent} -P -F '#{pane_id}'`,
     { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] }
   );
   return output.trim();
@@ -97,11 +98,12 @@ export function splitPane(
  * Send keys to a specific pane.
  * Special: if keys is 'C-c', sends Ctrl-C without Enter.
  */
-export function sendKeysToPane(session: string, paneTarget: string, keys: string): void {
+export function sendKeysToPane(_session: string, paneTarget: string, keys: string): void {
+  // Pane IDs (%N) are globally unique — target directly
   if (keys === 'C-c') {
-    execSync(`tmux send-keys -t ${esc(session)}:${esc(paneTarget)} C-c`, { stdio: 'pipe' });
+    execSync(`tmux send-keys -t ${esc(paneTarget)} C-c`, { stdio: 'pipe' });
   } else {
-    execSync(`tmux send-keys -t ${esc(session)}:${esc(paneTarget)} ${esc(keys)} Enter`, {
+    execSync(`tmux send-keys -t ${esc(paneTarget)} ${esc(keys)} Enter`, {
       stdio: 'pipe',
     });
   }
@@ -110,9 +112,10 @@ export function sendKeysToPane(session: string, paneTarget: string, keys: string
 /**
  * Focus a specific pane.
  */
-export function selectPane(session: string, paneTarget: string): void {
+export function selectPane(_session: string, paneTarget: string): void {
   try {
-    execSync(`tmux select-pane -t ${esc(session)}:${esc(paneTarget)}`, { stdio: 'pipe' });
+    // Pane IDs (%N) are globally unique — target directly
+    execSync(`tmux select-pane -t ${esc(paneTarget)}`, { stdio: 'pipe' });
   } catch {
     // Pane may already be gone — best-effort
   }
