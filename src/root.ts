@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'fs';
 import { dirname, join } from 'path';
 import { getGitRoot } from './git.js';
 
@@ -58,6 +58,12 @@ export function getCurrentRun(harnessDir: string): string | null {
 export function setCurrentRun(harnessDir: string, runId: string): void {
   mkdirSync(harnessDir, { recursive: true });
   writeFileSync(join(harnessDir, 'current-run'), runId, 'utf-8');
+}
+
+// Clear current-run pointer (e.g., on cancelled run).
+export function clearCurrentRun(harnessDir: string): void {
+  const p = join(harnessDir, 'current-run');
+  try { unlinkSync(p); } catch { /* ignore if missing */ }
 }
 
 // Resolve runId from explicit arg or current-run pointer.

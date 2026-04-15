@@ -1,12 +1,14 @@
 import fs from 'fs';
 import { join } from 'path';
+import { createInterface } from 'readline';
 import { getGitRoot } from '../git.js';
 import { updateLockPid, readLock, releaseLock } from '../lock.js';
-import { findHarnessRoot } from '../root.js';
+import { findHarnessRoot, clearCurrentRun } from '../root.js';
 import { readState, writeState } from '../state.js';
 import { runPhaseLoop } from '../phases/runner.js';
 import { registerSignalHandlers } from '../signal.js';
-import { killSession, killWindow, selectWindow, splitPane, paneExists } from '../tmux.js';
+import { killSession, killWindow, selectWindow, splitPane, paneExists, selectPane } from '../tmux.js';
+import { renderWelcome } from '../ui.js';
 import type { HarnessState } from '../types.js';
 
 export interface InnerOptions {
@@ -53,10 +55,56 @@ export async function innerCommand(runId: string, options: InnerOptions = {}): P
   }
   writeState(runDir, state);
 
-  // 3. Consume pending-action.json if present
+  // 3. Task prompt if empty (ADR-3, ADR-5, ADR-6)
+  const taskMdPath = join(runDir, 'task.md');
+  const existingTask = fs.existsSync(taskMdPath)
+    ? fs.readFileSync(taskMdPath, 'utf-8').trim()
+    : '';
+
+  if (!existingTask) {
+    if (state.tmuxControlPane) {
+      selectPane(state.tmuxSession, state.tmuxControlPane);
+    }
+    renderWelcome(state.runId);
+
+    const cancelAndExit = (): never => {
+      process.stderr.write('\nHarness cancelled.\n');
+      fs.rmSync(runDir, { recursive: true, force: true });
+      clearCurrentRun(harnessDir);
+      releaseLock(harnessDir, runId);
+      if (state.tmuxMode === 'dedicated') {
+        killSession(state.tmuxSession);
+      } else if (state.tmuxControlWindow) {
+        killWindow(state.tmuxSession, state.tmuxControlWindow);
+      }
+      process.exit(0);
+    };
+
+    let capturedTask = '';
+    while (!capturedTask) {
+      const result = await promptForTask();
+      switch (result.kind) {
+        case 'task':
+          capturedTask = result.value;
+          break;
+        case 'empty':
+          process.stderr.write('  Task cannot be empty. Please enter a task description:\n');
+          break;
+        case 'eof':
+        case 'interrupt':
+          cancelAndExit();
+      }
+    }
+
+    state.task = capturedTask;
+    fs.writeFileSync(taskMdPath, capturedTask);
+    writeState(runDir, state);
+  }
+
+  // 4. Consume pending-action.json if present
   consumePendingAction(runDir, state);
 
-  // 4. Register signal handlers
+  // 5. Register signal handlers (ADR-7: after task capture)
   registerSignalHandlers({
     harnessDir,
     runId,
@@ -120,4 +168,37 @@ function consumePendingAction(runDir: string, state: HarnessState): void {
     // Best-effort: corrupted pending action is skipped
     try { fs.unlinkSync(pendingPath); } catch { /* ignore */ }
   }
+}
+
+type PromptResult =
+  | { kind: 'task'; value: string }
+  | { kind: 'empty' }
+  | { kind: 'eof' }
+  | { kind: 'interrupt' };
+
+function promptForTask(): Promise<PromptResult> {
+  const rl = createInterface({ input: process.stdin, output: process.stderr });
+
+  return new Promise<PromptResult>((resolve) => {
+    let answered = false;
+
+    rl.on('SIGINT', () => {
+      answered = true;
+      rl.close();
+      resolve({ kind: 'interrupt' });
+    });
+
+    rl.question('  > ', (answer) => {
+      answered = true;
+      rl.close();
+      const trimmed = answer.trim();
+      resolve(trimmed ? { kind: 'task', value: trimmed } : { kind: 'empty' });
+    });
+
+    rl.on('close', () => {
+      if (!answered) {
+        resolve({ kind: 'eof' });
+      }
+    });
+  });
 }
