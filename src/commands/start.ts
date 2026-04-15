@@ -21,8 +21,15 @@ export async function startCommand(task: string | undefined, options: StartOptio
   // 1. Normalize task (empty/whitespace → '' for interactive prompt in inner)
   const normalizedTask = task?.trim() || '';
 
-  // 2. Find harness root (creates dir if --root)
-  const harnessDir = findHarnessRoot(options.root);
+  // 2. Find or create harness root
+  //    start is a create command — if no git repo and no .harness/, create in cwd
+  let harnessDir: string;
+  try {
+    harnessDir = findHarnessRoot(options.root);
+  } catch {
+    harnessDir = join(process.cwd(), '.harness');
+    mkdirSync(harnessDir, { recursive: true });
+  }
   let cwd: string;
   try {
     cwd = options.root ?? getGitRoot();
