@@ -157,17 +157,36 @@ import { createInterface } from 'readline';
 Add before `innerCommand`:
 
 ```typescript
-async function promptForTask(): Promise<string | null> {
+type PromptResult =
+  | { kind: 'task'; value: string }
+  | { kind: 'empty' }
+  | { kind: 'eof' }
+  | { kind: 'interrupt' };
+
+async function promptForTask(): Promise<PromptResult> {
   const rl = createInterface({ input: process.stdin, output: process.stderr });
-  return new Promise<string | null>((resolve) => {
-    rl.on('close', () => resolve(null)); // Ctrl-D
+
+  return new Promise<PromptResult>((resolve) => {
+    let answered = false;
+
+    // Ctrl-C
+    rl.on('SIGINT', () => {
+      answered = true;
+      rl.close();
+      resolve({ kind: 'interrupt' });
+    });
+
     rl.question('  > ', (answer) => {
+      answered = true;
       rl.close();
       const trimmed = answer.trim();
-      if (!trimmed) {
-        resolve(null); // will re-prompt in caller
-      } else {
-        resolve(trimmed);
+      resolve(trimmed ? { kind: 'task', value: trimmed } : { kind: 'empty' });
+    });
+
+    // Ctrl-D (EOF) — 'close' fires without question callback
+    rl.on('close', () => {
+      if (!answered) {
+        resolve({ kind: 'eof' });
       }
     });
   });
@@ -179,45 +198,52 @@ async function promptForTask(): Promise<string | null> {
 In `innerCommand`, after pane setup and before signal handler registration, add:
 
 ```typescript
-  // Check if task is empty → prompt user
+  // Check if task is empty → prompt user (ADR-3, ADR-5)
   const taskMdPath = join(runDir, 'task.md');
   const existingTask = fs.readFileSync(taskMdPath, 'utf-8').trim();
 
   if (!existingTask) {
-    // Ensure control pane has focus for readline
+    // Ensure control pane has focus for readline (ADR-5)
     if (state.tmuxControlPane) {
       selectPane(state.tmuxSession, state.tmuxControlPane);
     }
 
     renderWelcome(state.runId);
 
-    let task: string | null = null;
-    while (!task) {
-      task = await promptForTask();
-      if (task === null) {
-        // Check if readline closed (Ctrl-D) vs empty input
-        // Ctrl-D: rl 'close' event fires → null
-        // Empty Enter: question callback with '' → null from trimmed check
-        // Distinguish: if stdin ended, clean up and exit
-        if (process.stdin.readableEnded) {
-          // Ctrl-D: full cleanup
-          process.stderr.write('\nHarness cancelled.\n');
-          fs.rmSync(runDir, { recursive: true, force: true });
-          releaseLock(harnessDir, runId);
-          if (state.tmuxMode === 'dedicated') {
-            killSession(state.tmuxSession);
-          }
-          process.exit(0);
-        }
-        // Empty Enter: re-prompt
-        process.stderr.write('  Task cannot be empty. Please enter a task description:\n');
-        task = null;
-        continue;
+    // Cancellation cleanup helper (ADR-6)
+    function cancelAndExit(): never {
+      process.stderr.write('\nHarness cancelled.\n');
+      fs.rmSync(runDir, { recursive: true, force: true });
+      clearCurrentRun(harnessDir); // reset current-run pointer
+      releaseLock(harnessDir, runId);
+      if (state.tmuxMode === 'dedicated') {
+        killSession(state.tmuxSession);
+      } else if (state.tmuxControlWindow) {
+        killWindow(state.tmuxSession, state.tmuxControlWindow);
+      }
+      process.exit(0);
+    }
+
+    // Task input loop
+    let capturedTask = '';
+    while (!capturedTask) {
+      const result = await promptForTask();
+      switch (result.kind) {
+        case 'task':
+          capturedTask = result.value;
+          break;
+        case 'empty':
+          process.stderr.write('  Task cannot be empty. Please enter a task description:\n');
+          break;
+        case 'eof':
+        case 'interrupt':
+          cancelAndExit();
       }
     }
 
-    // Update state + task.md with the entered task
-    fs.writeFileSync(taskMdPath, task);
+    // Persist task to state AND task.md (ADR-4)
+    state.task = capturedTask;
+    fs.writeFileSync(taskMdPath, capturedTask);
     writeState(runDir, state);
   }
 
@@ -226,6 +252,11 @@ In `innerCommand`, after pane setup and before signal handler registration, add:
 ```
 
 Move the existing `registerSignalHandlers()` call to AFTER this block. The signal handler registration that was previously near the top must be relocated.
+
+Add import for `clearCurrentRun`:
+```typescript
+import { findHarnessRoot, clearCurrentRun } from '../root.js';
+```
 
 - [ ] **Step 4: Add selectPane import**
 
@@ -344,19 +375,44 @@ Replace all `runCommand(` calls with `startCommand(`.
 
 Rename `describe('runCommand', ...)` to `describe('startCommand', ...)`.
 
-- [ ] **Step 3: Add empty-task test**
+- [ ] **Step 3: Add start-specific tests**
 
 ```typescript
 it('starts with empty task when task is undefined', async () => {
-  const result = await startCommand(undefined, { allowDirty: true });
-  // Verify: state.json created with empty task
-  // Verify: task.md is empty
+  await startCommand(undefined, { allowDirty: true });
+  // Verify: state.json created with empty task string
+  // Verify: task.md is empty or contains empty string
   // Verify: no exit(1) — empty task is allowed
 });
 
 it('normalizes whitespace-only task to empty', async () => {
-  const result = await startCommand('   ', { allowDirty: true });
-  // Verify: treated same as undefined task
+  await startCommand('   ', { allowDirty: true });
+  // Verify: treated same as undefined task (normalizedTask === '')
+});
+
+it('starts normally with non-empty task', async () => {
+  await startCommand('Add dark mode', { allowDirty: true });
+  // Verify: state.json has task='Add dark mode'
+  // Verify: task.md contains 'Add dark mode'
+});
+```
+
+- [ ] **Step 4: Add inner readline tests (tests/commands/inner.test.ts)**
+
+Add tests for the new readline flow:
+
+```typescript
+describe('task prompt in inner', () => {
+  it('skips prompt when task.md has content', async () => {
+    // Write task.md with content before calling innerCommand
+    // Assert: promptForTask NOT called, phase loop starts immediately
+  });
+
+  it('prompts when task.md is empty', async () => {
+    // Write empty task.md
+    // Mock readline to return a task
+    // Assert: state.task updated, task.md written, phase loop starts
+  });
 });
 ```
 
@@ -402,7 +458,10 @@ git commit -m "test: update tests for start command rename + empty task handling
     { "name": "list.ts uses harness start", "command": "grep -q 'harness start' src/commands/list.ts" },
     { "name": "root.ts uses harness start", "command": "grep -q 'harness start' src/root.ts" },
     { "name": "no harness run in list.ts", "command": "! grep -q 'harness run' src/commands/list.ts" },
-    { "name": "no harness run in root.ts", "command": "! grep -q 'harness run' src/root.ts" }
+    { "name": "no harness run in root.ts", "command": "! grep -q 'harness run' src/root.ts" },
+    { "name": "inner.ts has selectPane for focus", "command": "grep -q 'selectPane' src/commands/inner.ts" },
+    { "name": "inner.ts has cancelAndExit or cancel cleanup", "command": "grep -q 'cancelled\\|cancelAndExit\\|rmSync.*runDir' src/commands/inner.ts" },
+    { "name": "signal handlers after task capture", "command": "grep -B5 'registerSignalHandlers' src/commands/inner.ts | grep -q 'task\\|writeState'" }
   ]
 }
 ```
