@@ -169,3 +169,14 @@ export function printAdvisorReminder(phase: number): void {
   console.error(`${YELLOW}   (정확한 slash command 문법은 Claude Code 버전에 따라 다를 수 있습니다.)${RESET}`);
   console.error('');
 }
+
+export function renderWelcome(runId: string): void {
+  const SEPARATOR = '━'.repeat(50);
+  process.stdout.write('\x1b[2J\x1b[H');
+  console.error(SEPARATOR);
+  console.error(`${GREEN}▶${RESET} Harness`);
+  console.error(SEPARATOR);
+  console.error(`  Run: ${runId}`);
+  console.error('');
+  console.error('  What would you like to build?');
+}
