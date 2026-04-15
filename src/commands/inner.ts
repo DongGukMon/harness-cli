@@ -99,10 +99,15 @@ export async function innerCommand(runId: string, options: InnerOptions = {}): P
     state.task = capturedTask;
     fs.writeFileSync(taskMdPath, capturedTask);
     writeState(runDir, state);
-  }
 
-  // 4. Consume pending-action.json if present
-  consumePendingAction(runDir, state);
+    // Fresh start: discard any pending actions written during prompt
+    // (ADR-7: skip/jump before task capture is meaningless)
+    const pendingPath = join(runDir, 'pending-action.json');
+    try { fs.unlinkSync(pendingPath); } catch { /* ignore */ }
+  } else {
+    // Resume or task-provided start: consume pending actions normally
+    consumePendingAction(runDir, state);
+  }
 
   // 5. Register signal handlers (ADR-7: after task capture)
   registerSignalHandlers({

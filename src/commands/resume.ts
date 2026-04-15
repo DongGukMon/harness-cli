@@ -37,7 +37,7 @@ export async function resumeCommand(runId?: string, options: ResumeOptions = {})
     const current = getCurrentRun(harnessDir);
     if (current === null) {
       process.stderr.write(
-        "No active run. Use 'harness run' to start a new run or 'harness list' to see all runs.\n"
+        "No active run. Use 'harness start' to start a new run or 'harness list' to see all runs.\n"
       );
       process.exit(1);
     }

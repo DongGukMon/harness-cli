@@ -229,7 +229,7 @@ async function ensureGitignore(cwd: string): Promise<void> {
   } catch (err) {
     process.stderr.write(
       `Error: failed to commit .gitignore update: ${(err as Error).message}\n` +
-      `Fix git state and retry 'harness run'.\n`
+      `Fix git state and retry 'harness start'.\n`
     );
     process.exit(1);
   }
