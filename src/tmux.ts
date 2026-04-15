@@ -27,8 +27,9 @@ export function sessionExists(name: string): boolean {
  * Returns the tmux window ID (e.g., "@1").
  */
 export function createWindow(session: string, windowName: string, command: string): string {
+  const cmdPart = command ? ` ${esc(command)}` : '';
   const output = execSync(
-    `tmux new-window -t ${esc(session)} -n ${esc(windowName)} -P -F '#{window_id}' ${esc(command)}`,
+    `tmux new-window -t ${esc(session)} -n ${esc(windowName)} -P -F '#{window_id}'${cmdPart}`,
     { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] }
   );
   return output.trim();
@@ -39,7 +40,7 @@ export function createWindow(session: string, windowName: string, command: strin
  */
 export function selectWindow(session: string, windowTarget: string): void {
   try {
-    execSync(`tmux select-window -t ${esc(session)}:${esc(windowTarget)}`, { stdio: 'pipe' });
+    execSync(`tmux select-window -t ${escTarget(session, windowTarget)}`, { stdio: 'pipe' });
   } catch {
     // Window may already be gone — best-effort
   }
@@ -50,7 +51,7 @@ export function selectWindow(session: string, windowTarget: string): void {
  */
 export function killWindow(session: string, windowTarget: string): void {
   try {
-    execSync(`tmux kill-window -t ${esc(session)}:${esc(windowTarget)}`, { stdio: 'pipe' });
+    execSync(`tmux kill-window -t ${escTarget(session, windowTarget)}`, { stdio: 'pipe' });
   } catch {
     // Window may already be gone — best-effort
   }
@@ -71,7 +72,7 @@ export function killSession(name: string): void {
  * Send keys to a window (types the text + presses Enter).
  */
 export function sendKeys(session: string, windowTarget: string, keys: string): void {
-  execSync(`tmux send-keys -t ${esc(session)}:${esc(windowTarget)} ${esc(keys)} Enter`, {
+  execSync(`tmux send-keys -t ${escTarget(session, windowTarget)} ${esc(keys)} Enter`, {
     stdio: 'pipe',
   });
 }
@@ -88,7 +89,7 @@ export function splitPane(
   // Pane IDs (%N) are globally unique in tmux — target directly, no session prefix needed
   const flag = direction === 'h' ? '-h' : '-v';
   const output = execSync(
-    `tmux split-window -t ${esc(targetPane)} ${flag} -p ${percent} -P -F '#{pane_id}'`,
+    `tmux split-window -t ${escSmart(targetPane)} ${flag} -p ${percent} -P -F '#{pane_id}'`,
     { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] }
   );
   return output.trim();
@@ -101,9 +102,9 @@ export function splitPane(
 export function sendKeysToPane(_session: string, paneTarget: string, keys: string): void {
   // Pane IDs (%N) are globally unique — target directly
   if (keys === 'C-c') {
-    execSync(`tmux send-keys -t ${esc(paneTarget)} C-c`, { stdio: 'pipe' });
+    execSync(`tmux send-keys -t ${escSmart(paneTarget)} C-c`, { stdio: 'pipe' });
   } else {
-    execSync(`tmux send-keys -t ${esc(paneTarget)} ${esc(keys)} Enter`, {
+    execSync(`tmux send-keys -t ${escSmart(paneTarget)} ${esc(keys)} Enter`, {
       stdio: 'pipe',
     });
   }
@@ -115,7 +116,7 @@ export function sendKeysToPane(_session: string, paneTarget: string, keys: strin
 export function selectPane(_session: string, paneTarget: string): void {
   try {
     // Pane IDs (%N) are globally unique — target directly
-    execSync(`tmux select-pane -t ${esc(paneTarget)}`, { stdio: 'pipe' });
+    execSync(`tmux select-pane -t ${escSmart(paneTarget)}`, { stdio: 'pipe' });
   } catch {
     // Pane may already be gone — best-effort
   }
@@ -140,9 +141,8 @@ export function paneExists(session: string, paneTarget: string): boolean {
  * Get the first pane ID of a window (or active window if windowTarget omitted).
  */
 export function getDefaultPaneId(session: string, windowTarget?: string): string {
-  const target = windowTarget
-    ? `${esc(session)}:${esc(windowTarget)}`
-    : esc(session);
+  // Window IDs (@N) and session names are globally unique in tmux
+  const target = windowTarget ? escSmart(windowTarget) : esc(session);
   const output = execSync(
     `tmux list-panes -t ${target} -F '#{pane_id}'`,
     { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] }
@@ -229,4 +229,26 @@ export function windowExists(session: string, windowTarget: string): boolean {
 function esc(s: string): string {
   // Single-quote the string, escaping any internal single quotes
   return "'" + s.replace(/'/g, "'\\''") + "'";
+}
+
+/**
+ * tmux IDs (@N for windows, %N for panes) must NOT be quoted.
+ * Session names and user strings need quoting.
+ */
+function isTmuxId(s: string): boolean {
+  return /^[@%]\d+$/.test(s);
+}
+
+/** Escape a value, but pass tmux IDs through unquoted. */
+function escSmart(s: string): string {
+  return isTmuxId(s) ? s : esc(s);
+}
+
+/** Build a tmux target like 'session:window' or session:@N */
+function escTarget(session: string, sub: string): string {
+  // If sub is a tmux ID, we can't quote the whole thing — tmux needs @N unquoted
+  if (isTmuxId(sub)) {
+    return `${esc(session)}:${sub}`;
+  }
+  return esc(`${session}:${sub}`);
 }

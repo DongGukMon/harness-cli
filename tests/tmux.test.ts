@@ -200,13 +200,13 @@ describe('tmux utilities', () => {
     expect(() => getDefaultPaneId('sess')).toThrow('No panes found');
   });
 
-  it('getDefaultPaneId uses window target when provided', () => {
+  it('getDefaultPaneId uses window ID directly when provided (no session prefix)', () => {
     vi.mocked(execSync).mockReturnValue('%3\n');
     getDefaultPaneId('sess', '@1');
     const cmd = vi.mocked(execSync).mock.calls[0][0] as string;
     expect(cmd).toContain('list-panes');
-    expect(cmd).toContain('sess');
     expect(cmd).toContain('@1');
+    expect(cmd).not.toContain('sess');
   });
 });
 
