@@ -246,11 +246,14 @@ __inner (inner.ts):
 `harness resume` 시:
 ```
   1. readState() + migrateState()
-  2. InputManager.start() (configuring 상태)
-  3. promptModelConfig() — 남은 phase의 preset 재확인 (이미 완료된 phase는 변경 불가)
-  4. runner-aware preflight — 남은 phase의 runner union 검증 (현재 phase부터 끝까지)
-  5. InputManager 상태를 'idle'로 전환
-  6. runPhaseLoop() 재개
+  2. consumePendingAction() — pending-action.json 또는 state.pendingAction 적용
+     (skip/jump으로 인해 state.json에 반영되지 않은 action이 있을 수 있음)
+  3. InputManager.start() (configuring 상태)
+  4. promptModelConfig() — 남은 phase의 preset 재확인 (이미 완료된 phase는 변경 불가)
+     남은 phase = currentPhase(post-action)부터 7까지 중 completed가 아닌 것
+  5. runner-aware preflight — 남은 phase의 runner union 검증
+  6. InputManager 상태를 'idle'로 전환
+  7. runPhaseLoop() 재개
 ```
 
 **핵심 1: model selection이 preflight보다 먼저 실행된다.** 사용자가 모든 phase를 Claude로 선택하면 Codex preflight를 스킵할 수 있다.
@@ -258,6 +261,8 @@ __inner (inner.ts):
 **핵심 2: Phase 6 (verify) 의존성은 outer preflight에 포함.** `verifyScript`과 `jq`는 모델 선택과 무관하므로 항상 검증.
 
 **핵심 3: Late preflight 실패 시 cleanup.** runner-aware preflight가 inner에서 실패하면, run은 이미 생성되었으므로 삭제하지 않고 `paused` 상태로 저장. 사용자가 환경을 수정 후 `harness resume`로 재개 가능.
+
+**핵심 4: Resume 시 pending action을 먼저 적용.** skip/jump이 SIGUSR1 처리 전에 프로세스가 죽었을 수 있으므로, resume 시 pending-action.json을 먼저 읽어 state에 반영한 뒤 model selection과 preflight를 진행한다.
 
 컨트롤 패널 UI:
 
@@ -344,7 +349,12 @@ export class InputManager {
 
 **동작:**
 - `idle` 상태: 모든 입력 무시 (echo 없음, `^[[A` 방지). Ctrl+C → `handleShutdown()` (phase-aware 종료)
-- `configuring` 상태: 모든 입력 무시 (prompt 외). Ctrl+C → `handleConfigCancel()` (pre-loop 종료: state를 paused로 저장, lock 해제, exit. **phase를 failed로 마킹하지 않음**)
+- `configuring` 상태: 모든 입력 무시 (prompt 외). Ctrl+C → `handleConfigCancel()` (pre-loop 종료):
+  - `state.status = 'paused'`
+  - `state.pauseReason = 'config-cancel'` (신규 PauseReason)
+  - `state.pendingAction = null` — phase 상태 변경 없음
+  - lock 해제 → exit
+  - resume 시: `pauseReason === 'config-cancel'`이면 model selection부터 다시 시작 (정상 resume path와 동일하게 진행)
 - `prompt-single` 상태: 유효 키만 처리 (R/S/Q/C, 1-7 등)
 - `prompt-line` 상태: 텍스트 입력 + Enter
 
@@ -466,16 +476,31 @@ lastWorkspacePidStartTime: number | null;  // epoch seconds — PID reuse 방지
   ```ts
   if (state.lastWorkspacePid !== null
       && isPidAlive(state.lastWorkspacePid)
-      && getProcessStartTime(state.lastWorkspacePid) === state.lastWorkspacePidStartTime) {
+      && isSameProcessInstance(state.lastWorkspacePid, state.lastWorkspacePidStartTime)) {
     // 진짜 이전 Claude — kill 후 대기
   }
+
+  // isSameProcessInstance: lock.ts의 기존 tolerance (±2초) 재사용
+  function isSameProcessInstance(pid: number, savedStartTime: number | null): boolean {
+    if (savedStartTime === null) return false;
+    const actualStart = getProcessStartTime(pid);
+    if (actualStart === null) return false;
+    return Math.abs(actualStart - savedStartTime) <= 2;
+  }
   ```
-  start-time 비교로 PID reuse false positive를 방지.
-- **Clear**: Phase 완료 후 또는 Codex runner로 전환 시:
+  macOS의 `ps -o etime` 기반 start-time은 초 단위 정밀도이므로, `lock.ts`와 동일한 ±2초 tolerance를 적용.
+- **Clear**: PID가 확인 가능하게 종료된 후에만:
+  - Claude runner: 다음 interactive phase 스폰 직전에 이전 PID death 확인 후 clear. Phase 완료(settle) 시에는 clear하지 않음 — settle은 sentinel 감지이지 프로세스 종료가 아니기 때문.
+  - Codex runner: subprocess 종료 + clearLockChild 후 clear (프로세스가 확실히 종료됨)
+  - `handleShutdown()`: childPid(repo.lock) kill 후, lastWorkspacePid도 같은 PID이면 clear
   ```ts
-  state.lastWorkspacePid = null;
-  state.lastWorkspacePidStartTime = null;
+  // clear 시점: 이전 PID 종료 확인 후
+  if (!isPidAlive(state.lastWorkspacePid)) {
+    state.lastWorkspacePid = null;
+    state.lastWorkspacePidStartTime = null;
+  }
   ```
+  **repo.lock.childPid**도 동일 원칙: Claude runner가 `updateLockChild`로 등록하되, settle 시에는 clearLockChild하지 않음. 다음 phase 스폰 전 또는 handleShutdown에서 처리.
 
 ## 7. Runner-aware Preflight
 
@@ -548,19 +573,19 @@ if (exitCode !== 0 && stderr.includes('unrecognized option')) {
 
 ### 변경 파일
 - `src/config.ts` — `ModelPreset`, `MODEL_PRESETS`, `PHASE_DEFAULTS` 추가; `PHASE_MODELS`, `PHASE_EFFORTS` 삭제
-- `src/types.ts` — `HarnessState.phasePresets`, `HarnessState.lastWorkspacePid`, `HarnessState.lastWorkspacePidStartTime` 추가; `codexPath` nullable 변경
+- `src/types.ts` — `HarnessState.phasePresets`, `HarnessState.lastWorkspacePid`, `HarnessState.lastWorkspacePidStartTime` 추가; `codexPath` nullable; `PauseReason`에 `'config-cancel'` 추가
 - `src/ui.ts` — `renderModelSelection()`, `promptModelConfig()` 추가; separator 너비 변경
 - `src/input.ts` — 신규 파일. `InputManager` 클래스
 - `src/runners/claude.ts` — 신규 파일. Claude runner (interactive + gate)
 - `src/runners/codex.ts` — 신규 파일. Codex runner (interactive + gate)
 - `src/phases/interactive.ts` — runner dispatch 로직으로 리팩토링; race condition 수정; artifact 삭제 조건부 변경
 - `src/phases/gate.ts` — runner dispatch 로직으로 리팩토링
-- `src/phases/runner.ts` — `promptModelConfig()` 호출 추가
+- `src/phases/runner.ts` — runner dispatch 로직 (preset 기반)
 - `src/commands/inner.ts` — `InputManager` lifecycle 통합
 - `src/state.ts` — `createInitialState()`에 `phasePresets` 초기화; `readState()`에 migration 추가
 - `src/signal.ts` — runner-aware 인터럽트: Claude(tmux C-c) vs Codex(killProcessGroup)
 - `src/preflight.ts` — `codexCli` 항목 추가; runner-aware preflight 로직
-- `src/commands/start.ts` — runner-aware preflight 호출; model selection 통합
+- `src/commands/start.ts` — outer preflight만 (공통 + Phase 6); codexPath 파라미터 제거
 - `src/commands/resume.ts` — runner-aware preflight; codexPath 호환
 
 ### 삭제 파일
