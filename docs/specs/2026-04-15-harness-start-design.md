@@ -40,7 +40,8 @@
 - Inner: task가 비어있으면 readline prompt → 입력받은 task로 state와 task.md 갱신.
 - 이유: outer는 tmux 생성 + handoff만 담당하고 빠르게 exit해야 함.
 
-**[ADR-5] Control panel 초기 화면.**
+**[ADR-5] Control panel 초기 화면 + 입력 포커스 보장.**
+- Pane split 후 `selectPane(session, controlPaneId)`로 control pane에 포커스를 명시적으로 설정. `splitPane`이 새 pane(workspace)으로 포커스를 이동시킬 수 있으므로, readline 시작 전 반드시 control pane으로 복귀.
 - Inner 시작 시 task가 비어있으면:
   ```
   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -52,6 +53,31 @@
     > 
   ```
 - 사용자가 입력하면 state 갱신 → `renderControlPanel()` 표시 → phase loop 시작.
+
+**[ADR-6] 빈/취소 입력 처리.**
+- 빈 입력 (Enter만): 재프롬프트 ("Task cannot be empty. Please enter a task description:").
+- Ctrl-C / Ctrl-D (EOF): 세션 정리 후 exit.
+  - Dedicated mode: `killSession()`.
+  - Reused mode: harness window만 kill.
+  - Lock 해제.
+  - "Harness cancelled." 출력.
+- 공백만 있는 입력: 빈 입력과 동일 (trim 후 판단).
+
+**[ADR-7] Signal handler는 task 입력 완료 후에 등록.**
+- 현재 inner는 시작 즉시 SIGUSR1 handler를 등록함.
+- 변경: task가 비어있으면 readline 완료 후에 signal handler 등록.
+- 이유: task 입력 중 skip/jump가 발생하면 phase 1이 아직 시작되지 않은 상태에서 state가 변경됨. 무의미하고 위험.
+
+**[ADR-8] Run ID는 task 입력 후 rename하지 않는다.**
+- Task 없이 시작 시 runId는 `YYYY-MM-DD-untitled[-N]` 형태.
+- Task 입력 후에도 runId를 변경하지 않음 (디렉토리 rename은 복잡하고 위험).
+- 대신 state.json의 task 필드와 task.md에 실제 태스크가 기록되므로 식별에 문제 없음.
+- `harness status`/`harness list`에서 task 설명을 함께 표시하면 untitled runId도 구분 가능.
+
+**[ADR-9] `harness run`도 task 없이 실행 가능 (alias 호환).**
+- `harness run` = `harness start` (인자 없음)
+- `harness run "task"` = `harness start "task"`
+- commander에서 `run [task]`로 변경 (optional positional arg).
 
 ---
 
@@ -122,11 +148,15 @@ $ harness start
 - `src/commands/run.ts` → `src/commands/start.ts`
 
 ### Modify
-- `bin/harness.ts` — `start [task]` 추가, `run`을 alias로 변경
-- `src/commands/start.ts` (renamed) — task optional, empty task 허용
-- `src/commands/inner.ts` — readline prompt 추가
+- `bin/harness.ts` — `start [task]` 추가, `run [task]`로 변경 (둘 다 optional)
+- `src/commands/start.ts` (renamed from run.ts) — task optional, empty task 허용
+- `src/commands/inner.ts` — readline prompt 추가, signal handler 등록 시점 변경
 - `src/ui.ts` — `renderWelcome(runId: string)` 함수 추가
-- `tests/commands/run.test.ts` → 파일명 변경 또는 import 수정
+- `src/commands/list.ts` — "harness run" → "harness start" 안내 메시지 갱신
+- `src/root.ts` — "harness run" → "harness start" 안내 메시지 갱신
+- `src/commands/resume.ts` — 안내 메시지 갱신 (필요 시)
+- `tests/commands/run.test.ts` → import/함수명 수정
+- `tests/integration/lifecycle.test.ts` → 명령어 참조 수정
 
 ### Delete
 - None
