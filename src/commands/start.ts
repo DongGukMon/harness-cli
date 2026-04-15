@@ -12,7 +12,7 @@ import { HANDOFF_TIMEOUT_MS } from '../config.js';
 import { printSuccess, printError } from '../ui.js';
 
 export interface StartOptions {
-  allowDirty?: boolean;
+  requireClean?: boolean;
   auto?: boolean;
   root?: string;
 }
@@ -39,26 +39,24 @@ export async function startCommand(task: string | undefined, options: StartOptio
     process.exit(1);
   }
 
-  // 5. Working tree checks (two-step)
-  // 5a. Staged changes: always blocked, even with --allow-dirty
-  if (hasStagedChanges(cwd)) {
-    process.stderr.write(
-      'Error: staged changes exist. Commit or unstage them first (`git restore --staged .`).\n'
-    );
-    process.exit(1);
-  }
-  // 5b. Unstaged/untracked: blocked unless --allow-dirty
-  if (!isWorkingTreeClean(cwd)) {
-    if (!options.allowDirty) {
+  // 5. Working tree checks
+  if (options.requireClean) {
+    if (hasStagedChanges(cwd)) {
       process.stderr.write(
-        'Error: working tree has uncommitted changes. Use --allow-dirty to bypass this check.\n'
+        'Error: staged changes exist. Commit or unstage them first (`git restore --staged .`).\n'
       );
       process.exit(1);
-    } else {
-      process.stderr.write(
-        '⚠️  --allow-dirty: unstaged changes may appear in Phase 7 diff.\n'
-      );
     }
+    if (!isWorkingTreeClean(cwd)) {
+      process.stderr.write(
+        'Error: working tree has uncommitted changes (--require-clean is set).\n'
+      );
+      process.exit(1);
+    }
+  } else if (hasStagedChanges(cwd)) {
+    process.stderr.write(
+      '⚠️  Warning: staged changes exist. They may interfere with artifact commits.\n'
+    );
   }
 
   // 6. Generate runId

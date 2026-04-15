@@ -121,26 +121,34 @@ describe('startCommand', () => {
     expect(headAfter).toBe(headBefore);
   });
 
-  it('rejects staged changes (even with --allow-dirty)', async () => {
+  it('warns on staged changes by default (no block)', async () => {
     writeFileSync(join(repo.path, 'staged.txt'), 'x');
     execSync('git add staged.txt', { cwd: repo.path });
 
-    await expect(startCommand('test', { root: repo.path, allowDirty: true })).rejects.toThrow('__exit__');
+    await startCommand('test', { root: repo.path });
     expect(stderrSpy.mock.calls.map((c: any) => c[0]).join('')).toContain('staged changes');
   });
 
-  it('rejects unstaged changes without --allow-dirty', async () => {
-    writeFileSync(join(repo.path, 'untracked.txt'), 'x');
+  it('rejects staged changes with --require-clean', async () => {
+    writeFileSync(join(repo.path, 'staged.txt'), 'x');
+    execSync('git add staged.txt', { cwd: repo.path });
 
-    await expect(startCommand('test', { root: repo.path })).rejects.toThrow('__exit__');
-    expect(stderrSpy.mock.calls.map((c: any) => c[0]).join('')).toContain('uncommitted');
+    await expect(startCommand('test', { root: repo.path, requireClean: true })).rejects.toThrow('__exit__');
+    expect(stderrSpy.mock.calls.map((c: any) => c[0]).join('')).toContain('staged changes');
   });
 
-  it('allows unstaged changes with --allow-dirty (warning)', async () => {
+  it('allows unstaged changes by default', async () => {
     writeFileSync(join(repo.path, 'untracked.txt'), 'x');
 
-    await startCommand('test', { root: repo.path, allowDirty: true });
-    expect(stderrSpy.mock.calls.map((c: any) => c[0]).join('')).toContain('--allow-dirty');
+    await startCommand('test', { root: repo.path });
+    // No error — dirty working tree is allowed by default
+  });
+
+  it('rejects unstaged changes with --require-clean', async () => {
+    writeFileSync(join(repo.path, 'untracked.txt'), 'x');
+
+    await expect(startCommand('test', { root: repo.path, requireClean: true })).rejects.toThrow('__exit__');
+    expect(stderrSpy.mock.calls.map((c: any) => c[0]).join('')).toContain('uncommitted');
   });
 
   it('sets baseCommit to HEAD after .gitignore commit', async () => {

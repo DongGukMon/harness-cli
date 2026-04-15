@@ -13,7 +13,6 @@ import { printError } from '../ui.js';
 import type { PhaseType } from '../types.js';
 
 export interface ResumeOptions {
-  allowDirty?: boolean;
   root?: string;
 }
 
