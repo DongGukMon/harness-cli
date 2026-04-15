@@ -1,7 +1,7 @@
 import { execSync } from 'child_process';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync, appendFileSync } from 'fs';
 import { join } from 'path';
-import { getGitRoot, getHead, generateRunId, hasStagedChanges, isWorkingTreeClean } from '../git.js';
+import { getGitRoot, getHead, generateRunId, hasStagedChanges, isWorkingTreeClean, isInGitRepo } from '../git.js';
 import { acquireLock, releaseLock, setLockHandoff, pollForHandoffComplete } from '../lock.js';
 import { getPreflightItems, runPreflight } from '../preflight.js';
 import { findHarnessRoot, setCurrentRun } from '../root.js';
@@ -23,7 +23,12 @@ export async function startCommand(task: string | undefined, options: StartOptio
 
   // 2. Find harness root (creates dir if --root)
   const harnessDir = findHarnessRoot(options.root);
-  const cwd = options.root ?? getGitRoot();
+  let cwd: string;
+  try {
+    cwd = options.root ?? getGitRoot();
+  } catch {
+    cwd = options.root ?? process.cwd();
+  }
 
   // 3. Run full preflight (union of all phase types; dedup)
   const allItems = [
@@ -39,24 +44,27 @@ export async function startCommand(task: string | undefined, options: StartOptio
     process.exit(1);
   }
 
-  // 5. Working tree checks
-  if (options.requireClean) {
-    if (hasStagedChanges(cwd)) {
+  // 5. Working tree checks (skip if not in a git repo)
+  const inGitRepo = isInGitRepo(cwd);
+  if (inGitRepo) {
+    if (options.requireClean) {
+      if (hasStagedChanges(cwd)) {
+        process.stderr.write(
+          'Error: staged changes exist. Commit or unstage them first (`git restore --staged .`).\n'
+        );
+        process.exit(1);
+      }
+      if (!isWorkingTreeClean(cwd)) {
+        process.stderr.write(
+          'Error: working tree has uncommitted changes (--require-clean is set).\n'
+        );
+        process.exit(1);
+      }
+    } else if (hasStagedChanges(cwd)) {
       process.stderr.write(
-        'Error: staged changes exist. Commit or unstage them first (`git restore --staged .`).\n'
+        '⚠️  Warning: staged changes exist. They may interfere with artifact commits.\n'
       );
-      process.exit(1);
     }
-    if (!isWorkingTreeClean(cwd)) {
-      process.stderr.write(
-        'Error: working tree has uncommitted changes (--require-clean is set).\n'
-      );
-      process.exit(1);
-    }
-  } else if (hasStagedChanges(cwd)) {
-    process.stderr.write(
-      '⚠️  Warning: staged changes exist. They may interfere with artifact commits.\n'
-    );
   }
 
   // 6. Generate runId
@@ -84,11 +92,16 @@ export async function startCommand(task: string | undefined, options: StartOptio
     mkdirSync(join(cwd, 'docs/plans'), { recursive: true });
     mkdirSync(join(cwd, 'docs/process/evals'), { recursive: true });
 
-    // 10. .gitignore handling
-    await ensureGitignore(cwd);
+    // 10. .gitignore handling (skip if not in git repo)
+    if (inGitRepo) {
+      await ensureGitignore(cwd);
+    }
 
-    // 11. Capture baseCommit after .gitignore commit
-    const baseCommit = getHead(cwd);
+    // 11. Capture baseCommit after .gitignore commit (empty string if no git)
+    let baseCommit = '';
+    if (inGitRepo) {
+      try { baseCommit = getHead(cwd); } catch { /* no commits yet */ }
+    }
 
     // 12. Create initial state
     const state = createInitialState(runId, normalizedTask, baseCommit, codexPath, options.auto ?? false);

@@ -6,6 +6,16 @@ function exec(cmd: string, cwd?: string): string {
   return execSync(cmd, { cwd, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] }).trim();
 }
 
+// Check if cwd is inside a git repository.
+export function isInGitRepo(cwd?: string): boolean {
+  try {
+    exec('git rev-parse --show-toplevel', cwd);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // Returns git repo root path. Throws if not in a git repo.
 export function getGitRoot(cwd?: string): string {
   try {

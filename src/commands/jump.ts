@@ -44,7 +44,8 @@ export async function jumpCommand(phaseArg: string, options: JumpOptions = {}): 
     process.exit(1);
   }
 
-  const cwd = options.root ?? getGitRoot();
+  let cwd: string;
+  try { cwd = options.root ?? getGitRoot(); } catch { cwd = options.root ?? process.cwd(); }
 
   // Check if inner process is running (tmux architecture)
   const lock = readLock(harnessDir);

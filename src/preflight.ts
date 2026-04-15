@@ -48,10 +48,10 @@ export function resolveVerifyScriptPath(
 
 // Map phase type → required preflight items.
 const PHASE_ITEMS: Record<PhaseType, PreflightItem[]> = {
-  interactive: ['git', 'head', 'node', 'claude', 'claudeAtFile', 'platform', 'tty', 'tmux'],
-  gate: ['git', 'head', 'node', 'codexPath', 'platform', 'tty'],
-  verify: ['git', 'head', 'node', 'verifyScript', 'jq', 'platform', 'tty'],
-  terminal: ['git', 'platform'],
+  interactive: ['node', 'claude', 'claudeAtFile', 'platform', 'tty', 'tmux'],
+  gate: ['node', 'codexPath', 'platform', 'tty'],
+  verify: ['node', 'verifyScript', 'jq', 'platform', 'tty'],
+  terminal: ['platform'],
   ui_only: ['platform', 'tty'],
 };
 

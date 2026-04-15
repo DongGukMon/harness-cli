@@ -58,7 +58,7 @@ export function preparePhase(
 
   // Phase 5: update implRetryBase to current HEAD
   if (phase === 5) {
-    state.implRetryBase = getHead(cwd);
+    try { state.implRetryBase = getHead(cwd); } catch { /* no git */ }
   }
 
   writeState(runDir, state);

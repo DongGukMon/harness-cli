@@ -17,6 +17,13 @@ function exec(cmd: string, cwd?: string): string {
  * - Other files staged → throw error
  */
 export function normalizeArtifactCommit(filePath: string, message: string, cwd?: string): boolean {
+  // Not in a git repo → skip auto-commit entirely
+  try {
+    exec('git rev-parse --show-toplevel', cwd);
+  } catch {
+    return false;
+  }
+
   // Step 1: Check if file is already clean/committed
   const fileStatus = getFileStatus(filePath, cwd);
   if (fileStatus === '') {

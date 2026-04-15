@@ -26,7 +26,8 @@ function phaseType(phase: number): PhaseType {
 export async function resumeCommand(runId?: string, options: ResumeOptions = {}): Promise<void> {
   // 1. Find harness root
   const harnessDir = findHarnessRoot(options.root);
-  const cwd = options.root ?? getGitRoot();
+  let cwd: string;
+  try { cwd = options.root ?? getGitRoot(); } catch { cwd = options.root ?? process.cwd(); }
 
   // 2. Resolve runId (explicit arg or current-run pointer)
   let targetRunId: string;

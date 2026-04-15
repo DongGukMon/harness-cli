@@ -18,22 +18,22 @@ import type { PhaseType } from '../src/types.js';
 describe('getPreflightItems', () => {
   it('returns correct items for interactive phases', () => {
     const items = getPreflightItems('interactive');
-    expect(items).toEqual(['git', 'head', 'node', 'claude', 'claudeAtFile', 'platform', 'tty', 'tmux']);
+    expect(items).toEqual(['node', 'claude', 'claudeAtFile', 'platform', 'tty', 'tmux']);
   });
 
   it('returns correct items for gate phases', () => {
     const items = getPreflightItems('gate');
-    expect(items).toEqual(['git', 'head', 'node', 'codexPath', 'platform', 'tty']);
+    expect(items).toEqual(['node', 'codexPath', 'platform', 'tty']);
   });
 
   it('returns correct items for verify phase', () => {
     const items = getPreflightItems('verify');
-    expect(items).toEqual(['git', 'head', 'node', 'verifyScript', 'jq', 'platform', 'tty']);
+    expect(items).toEqual(['node', 'verifyScript', 'jq', 'platform', 'tty']);
   });
 
   it('returns correct items for terminal phase', () => {
     const items = getPreflightItems('terminal');
-    expect(items).toEqual(['git', 'platform']);
+    expect(items).toEqual(['platform']);
   });
 
   it('returns correct items for ui_only phase', () => {

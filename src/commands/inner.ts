@@ -18,7 +18,8 @@ export interface InnerOptions {
 
 export async function innerCommand(runId: string, options: InnerOptions = {}): Promise<void> {
   const harnessDir = findHarnessRoot(options.root);
-  const cwd = options.root ?? getGitRoot();
+  let cwd: string;
+  try { cwd = options.root ?? getGitRoot(); } catch { cwd = options.root ?? process.cwd(); }
   const runDir = join(harnessDir, runId);
 
   // 1. Load state
