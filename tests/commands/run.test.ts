@@ -3,7 +3,7 @@ import { execSync } from 'child_process';
 import { existsSync, readFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { createTestRepo } from '../helpers/test-repo.js';
-import { runCommand } from '../../src/commands/run.js';
+import { startCommand } from '../../src/commands/start.js';
 
 vi.mock('../../src/preflight.js', async () => {
   const actual = await vi.importActual<typeof import('../../src/preflight.js')>('../../src/preflight.js');
@@ -44,7 +44,7 @@ vi.mock('../../src/ui.js', () => ({
   printError: vi.fn(),
 }));
 
-describe('runCommand', () => {
+describe('startCommand', () => {
   let repo: { path: string; cleanup: () => void };
   let origCwd: string;
   let exitSpy: any;
@@ -67,16 +67,22 @@ describe('runCommand', () => {
     repo.cleanup();
   });
 
-  it('rejects empty task', async () => {
-    await expect(runCommand('', { root: repo.path })).rejects.toThrow('__exit__');
+  it('accepts empty task as untitled', async () => {
+    await startCommand('', { root: repo.path });
+    const harnessDir = join(repo.path, '.harness');
+    const currentRun = readFileSync(join(harnessDir, 'current-run'), 'utf-8').trim();
+    expect(currentRun).toMatch(/^\d{4}-\d{2}-\d{2}-untitled$/);
   });
 
-  it('rejects whitespace-only task', async () => {
-    await expect(runCommand('   ', { root: repo.path })).rejects.toThrow('__exit__');
+  it('accepts whitespace-only task as untitled', async () => {
+    await startCommand('   ', { root: repo.path });
+    const harnessDir = join(repo.path, '.harness');
+    const currentRun = readFileSync(join(harnessDir, 'current-run'), 'utf-8').trim();
+    expect(currentRun).toMatch(/^\d{4}-\d{2}-\d{2}-untitled$/);
   });
 
   it('creates run directory with state.json + task.md', async () => {
-    await runCommand('test task', { root: repo.path });
+    await startCommand('test task', { root: repo.path });
 
     const harnessDir = join(repo.path, '.harness');
     expect(existsSync(harnessDir)).toBe(true);
@@ -91,7 +97,7 @@ describe('runCommand', () => {
   });
 
   it('creates required directories', async () => {
-    await runCommand('test', { root: repo.path });
+    await startCommand('test', { root: repo.path });
 
     expect(existsSync(join(repo.path, 'docs/specs'))).toBe(true);
     expect(existsSync(join(repo.path, 'docs/plans'))).toBe(true);
@@ -99,7 +105,7 @@ describe('runCommand', () => {
   });
 
   it('adds .harness/ to .gitignore', async () => {
-    await runCommand('test', { root: repo.path });
+    await startCommand('test', { root: repo.path });
     const gitignore = readFileSync(join(repo.path, '.gitignore'), 'utf-8');
     expect(gitignore).toContain('.harness/');
   });
@@ -109,7 +115,7 @@ describe('runCommand', () => {
     execSync('git add .gitignore && git commit -m "add gitignore"', { cwd: repo.path });
 
     const headBefore = execSync('git rev-parse HEAD', { cwd: repo.path, encoding: 'utf-8' }).trim();
-    await runCommand('test', { root: repo.path });
+    await startCommand('test', { root: repo.path });
     const headAfter = execSync('git rev-parse HEAD', { cwd: repo.path, encoding: 'utf-8' }).trim();
 
     expect(headAfter).toBe(headBefore);
@@ -119,26 +125,26 @@ describe('runCommand', () => {
     writeFileSync(join(repo.path, 'staged.txt'), 'x');
     execSync('git add staged.txt', { cwd: repo.path });
 
-    await expect(runCommand('test', { root: repo.path, allowDirty: true })).rejects.toThrow('__exit__');
+    await expect(startCommand('test', { root: repo.path, allowDirty: true })).rejects.toThrow('__exit__');
     expect(stderrSpy.mock.calls.map((c: any) => c[0]).join('')).toContain('staged changes');
   });
 
   it('rejects unstaged changes without --allow-dirty', async () => {
     writeFileSync(join(repo.path, 'untracked.txt'), 'x');
 
-    await expect(runCommand('test', { root: repo.path })).rejects.toThrow('__exit__');
+    await expect(startCommand('test', { root: repo.path })).rejects.toThrow('__exit__');
     expect(stderrSpy.mock.calls.map((c: any) => c[0]).join('')).toContain('uncommitted');
   });
 
   it('allows unstaged changes with --allow-dirty (warning)', async () => {
     writeFileSync(join(repo.path, 'untracked.txt'), 'x');
 
-    await runCommand('test', { root: repo.path, allowDirty: true });
+    await startCommand('test', { root: repo.path, allowDirty: true });
     expect(stderrSpy.mock.calls.map((c: any) => c[0]).join('')).toContain('--allow-dirty');
   });
 
   it('sets baseCommit to HEAD after .gitignore commit', async () => {
-    await runCommand('test', { root: repo.path });
+    await startCommand('test', { root: repo.path });
     const harnessDir = join(repo.path, '.harness');
     const runId = readFileSync(join(harnessDir, 'current-run'), 'utf-8').trim();
     const state = JSON.parse(readFileSync(join(harnessDir, runId, 'state.json'), 'utf-8'));
