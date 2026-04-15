@@ -41,7 +41,7 @@ export function findHarnessRoot(explicitRoot?: string, cwd?: string): string {
     dir = parent;
   }
 
-  throw new Error("No `.harness/` directory found. Run 'harness run' first.");
+  throw new Error("No `.harness/` directory found. Run 'harness start' first.");
 }
 
 // Read current-run pointer. Returns runId string or null.
@@ -73,7 +73,7 @@ export function resolveRunId(harnessDir: string, explicitRunId?: string): string
   const current = getCurrentRun(harnessDir);
   if (current === null) {
     throw new Error(
-      "No active run. Use 'harness run' to start a new run or 'harness list' to see all runs."
+      "No active run. Use 'harness start' to start a new run or 'harness list' to see all runs."
     );
   }
 
