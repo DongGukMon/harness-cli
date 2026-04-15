@@ -41,7 +41,10 @@ export function findHarnessRoot(explicitRoot?: string, cwd?: string): string {
     dir = parent;
   }
 
-  throw new Error("No `.harness/` directory found. Run 'harness start' first.");
+  throw new Error(
+    "Not in a git repository and no `.harness/` directory found.\n" +
+    "Run 'harness start' inside a git repo, or use --root <dir> to specify a location."
+  );
 }
 
 // Read current-run pointer. Returns runId string or null.

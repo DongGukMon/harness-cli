@@ -61,7 +61,7 @@ describe('findHarnessRoot', () => {
 
     it('throws with helpful message', () => {
       expect(() => findHarnessRoot(undefined, tmpDir)).toThrow(
-        "No `.harness/` directory found. Run 'harness start' first."
+        "Not in a git repository"
       );
     });
   });

@@ -3,7 +3,7 @@ import { existsSync } from 'fs';
 import { normalize } from 'path';
 
 function exec(cmd: string, cwd?: string): string {
-  return execSync(cmd, { cwd, encoding: 'utf-8' }).trim();
+  return execSync(cmd, { cwd, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] }).trim();
 }
 
 // Returns git repo root path. Throws if not in a git repo.
