@@ -36,6 +36,7 @@
 - 이유: 입력 UI를 control pane에서 보여주려면 inner에서 처리해야 함.
 
 **[ADR-4] 빈 task로 state를 초기화하고, inner에서 task를 채운다.**
+- Outer: CLI 인자를 `task?.trim() || ''`로 정규화. `""`, `"   "` 등 빈/공백 인자는 빈 task와 동일하게 처리.
 - Outer: `createInitialState()`에 `task: ''`로 초기화. `task.md`는 빈 상태로 생성.
 - Inner: task가 비어있으면 readline prompt → 입력받은 task로 state와 task.md 갱신.
 - 이유: outer는 tmux 생성 + handoff만 담당하고 빠르게 exit해야 함.
@@ -56,7 +57,9 @@
 
 **[ADR-6] 빈/취소 입력 처리.**
 - 빈 입력 (Enter만): 재프롬프트 ("Task cannot be empty. Please enter a task description:").
-- Ctrl-C / Ctrl-D (EOF): 세션 정리 후 exit.
+- Ctrl-C / Ctrl-D (EOF): 전체 정리 후 exit.
+  - Run 디렉토리 삭제 (`rm -rf <runDir>`): task가 입력되지 않았으므로 보존할 가치 없음.
+  - current-run 포인터 초기화.
   - Dedicated mode: `killSession()`.
   - Reused mode: harness window만 kill.
   - Lock 해제.
@@ -169,7 +172,10 @@ $ harness start
 2. 태스크 입력 후 phase loop 시작 (기존과 동일)
 3. `harness start "task"` → 기존 `harness run "task"`와 동일 동작
 4. `harness run "task"` → 하위 호환 유지 (alias)
-5. `pnpm test` 통과, `pnpm run lint` 클린
+5. `harness run` (인자 없음) → `harness start`와 동일 동작
+6. `harness start ""` / `harness start "  "` → 빈 인자를 no-arg와 동일하게 처리
+7. `harness list` — untitled run이 task 텍스트 없이도 구분 가능 (runId 표시)
+8. `pnpm test` 통과, `pnpm run lint` 클린
 
 ---
 
