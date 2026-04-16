@@ -135,7 +135,7 @@ export const PHASE_ARTIFACT_FILES: Record<number, string[]> = {
 - [ ] **Step 3: Run lint to verify compilation**
 
 Run: `npm run lint`
-Expected: Exit 0 (with some errors in files that still import PHASE_MODELS — fix in subsequent tasks)
+Expected: Compilation errors in files that still import PHASE_MODELS — these are expected and will be fixed in subsequent tasks. Verify that config.ts and types.ts themselves compile correctly.
 
 - [ ] **Step 4: Update conformance test**
 
@@ -1209,7 +1209,9 @@ Key changes:
 
 - [ ] **Step 2: Refactor gate.ts to dispatch to runner**
 
-Update `runGatePhase()` to check `state.phasePresets` and dispatch to either `runClaudeGate()` or `runCodexGate()`. Export `parseVerdict` and `buildGateResult` for reuse by both runners.
+First, extract `parseVerdict()` and `buildGateResult()` from `gate.ts` into a new `src/phases/verdict.ts` module to prevent circular dependency (`runners/* → gate → runners/*`). Then update `gate.ts` and both runners to import from `verdict.ts`.
+
+Update `runGatePhase()` to check `state.phasePresets` and dispatch to either `runClaudeGate()` or `runCodexGate()`.
 
 - [ ] **Step 3: Update runner.ts for preset-based dispatch + promptChoice callers**
 
@@ -1315,6 +1317,8 @@ git commit -m "feat: runner-aware preflight (codexCli) and signal interrupt disp
 - Modify: `src/commands/inner.ts`
 - Modify: `src/commands/start.ts`
 - Modify: `src/commands/resume.ts`
+- Modify: `src/resume.ts`
+- Modify: `bin/harness.ts` — add `--resume` option to `__inner` command
 - Modify: `src/resume.ts`
 
 - [ ] **Step 1: Update start.ts — remove codexPath preflight, simplify outer preflight**
@@ -1456,7 +1460,15 @@ In `src/commands/resume.ts`, when spawning inner:
 const innerCmd = `node ${harnessPath} __inner ${runId} --resume${options.root ? ` --root ${options.root}` : ''}`;
 ```
 
-In `bin/harness.ts`, add `--resume` flag to `__inner` command definition.
+In `bin/harness.ts`, add `--resume` flag to `__inner` command definition:
+```ts
+// bin/harness.ts — __inner command
+.option('--resume', 'Resume mode (invoked from harness resume)')
+```
+
+**Files for this step:**
+- Modify: `bin/harness.ts` — add `--resume` option to `__inner` command
+- Modify: `src/commands/resume.ts` — pass `--resume` flag when spawning inner
 
 ```ts
 // src/commands/resume.ts — codexPath compatibility
