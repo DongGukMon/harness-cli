@@ -18,7 +18,7 @@
 |---|-------|---------|----------------|
 | 1 | TypeScript compiles | `npm run lint` | Exit 0 |
 | 2 | All tests pass | `npm test` | Exit 0 |
-| 3 | Config: MODEL_PRESETS and PHASE_DEFAULTS exported | `node -e "const c=require('./dist/config.js'); console.log(c.MODEL_PRESETS.length, Object.keys(c.PHASE_DEFAULTS).length)"` | Prints `5 6` |
+| 3 | Config: MODEL_PRESETS and PHASE_DEFAULTS exported | `node --input-type=module -e "import {MODEL_PRESETS,PHASE_DEFAULTS} from './dist/config.js'; console.log(MODEL_PRESETS.length, Object.keys(PHASE_DEFAULTS).length)"` | Prints `5 6` |
 | 4 | Config: PHASE_MODELS and PHASE_EFFORTS removed | `grep -r 'PHASE_MODELS\|PHASE_EFFORTS' src/` | Exit 1 (no matches) |
 | 5 | State: createInitialState no longer takes codexPath | `grep 'codexPath' src/state.ts` | Only `codexPath: null` in the return object |
 | 6 | State: migrateState backfills phasePresets | `npm test -- tests/state.test.ts` | Pass |
@@ -38,7 +38,7 @@
 | 20 | handleShutdown kills both lock.childPid and lastWorkspacePid | `npm test -- tests/signal.test.ts -t "dual-PID"` | Pass |
 | 21 | resume with codexPath=null does not crash | `npm test -- tests/commands/resume-cmd.test.ts -t "codexPath null"` | Pass |
 | 22 | Codex runner spawns detached | `grep "detached: true" src/runners/codex.ts` | Match found |
-| 23 | Old resume-side preflight removed | `grep -c "runPreflight\|resolveCodexPath" src/commands/resume.ts` | 0 (no preflight calls) |
+| 23 | Old resume-side runner-specific preflight removed | `grep -c "resolveCodexPath\|codexPath.*preflight\|getPreflightItems" src/commands/resume.ts` | 0 (runner-specific preflight removed; common preflight may remain) |
 | 24 | promptModelConfig accepts editablePhases param | `grep "editablePhases" src/ui.ts` | Match found |
 | 25 | Inner command accepts --resume flag | `grep "resume" src/commands/inner.ts` | Match found |
 
@@ -1325,25 +1325,29 @@ The existing `resumeRun()` currently does recovery + `runPhaseLoop()` in one cal
 
 - [ ] **Step 5: Update resume.ts — handle reopen_config + codexPath nullable**
 
-In `consumePendingAction()` in inner.ts:
+In `src/resume.ts`'s `replayPendingAction()` switch (the typed `state.pendingAction` consumer — NOT inner.ts's file-based `consumePendingAction()`):
 ```ts
-if (action.action === 'reopen_config') {
+case 'reopen_config':
+  // Clear pendingAction — model selection will restart in inner.ts
   state.pendingAction = null;
+  state.status = 'in_progress';
+  state.pauseReason = null;
   writeState(runDir, state);
-}
+  break;
 ```
 
-- [ ] **Step 6: Remove old resume-side preflight from resume.ts/resume command**
+**Note:** `consumePendingAction()` in inner.ts handles **file-based** pending-action.json (skip/jump signals from external CLI). `replayPendingAction()` in resume.ts handles **typed state.pendingAction** (reopen_phase, show_escalation, reopen_config). These are separate consumers — do not conflate.
+
+- [ ] **Step 6: Remove old resume-side runner-specific preflight from resume command**
 
 The current `resumeCommand()` runs phase-scoped preflight and codexPath validation before spawning inner. This conflicts with the spec ordering (model selection → runner preflight in inner). Remove:
-- `resume.ts` codexPath re-resolve (replaced by runner-aware preflight in inner)
-- `resumeCommand()` phase-scoped `runPreflight()` calls
-- Only keep common/Phase-6 preflight in resumeCommand (same as start)
+- `resumeCommand()` runner-specific `runPreflight()` calls (codexPath resolve, gate-specific checks)
+- Keep common/Phase-6 preflight in resumeCommand (same as start)
 
 In `src/resume.ts`:
 - Add `config-cancel` to valid pause reasons
 - Guard `codexPath` re-resolve: skip when `state.codexPath === null` (new runs don't set it)
-- Legacy runs (codexPath is string): preserve existing re-resolve behavior
+- Legacy runs (codexPath is string): preserve existing re-resolve behavior for backward compat
 
 - [ ] **Step 7: Add `--resume` flag to InnerOptions**
 
