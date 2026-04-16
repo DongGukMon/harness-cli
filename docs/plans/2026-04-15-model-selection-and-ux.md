@@ -38,7 +38,7 @@
 | 20 | handleShutdown kills both lock.childPid and lastWorkspacePid | `npm test -- tests/signal.test.ts -t "dual-PID"` | Pass |
 | 21 | resume with codexPath=null does not crash | `npm test -- tests/commands/resume-cmd.test.ts -t "codexPath null"` | Pass |
 | 22 | Codex runner spawns detached | `grep "detached: true" src/runners/codex.ts` | Match found |
-| 23 | Old resume-side runner-specific preflight removed | `grep -c "resolveCodexPath\|codexPath.*preflight\|getPreflightItems" src/commands/resume.ts` | 0 (runner-specific preflight removed; common preflight may remain) |
+| 23 | Old resume-side runner-specific preflight removed | `grep -c "resolveCodexPath" src/commands/resume.ts` | 0 (codex companion resolve removed; common preflight helpers may remain) |
 | 24 | promptModelConfig accepts editablePhases param | `grep "editablePhases" src/ui.ts` | Match found |
 | 25 | Inner command accepts --resume flag | `grep "resume" src/commands/inner.ts` | Match found |
 
@@ -697,16 +697,38 @@ export function printAdvisorReminder(phase: number, runner?: string): void {
 }
 ```
 
-- [ ] **Step 4: Run tests**
+- [ ] **Step 4: Refactor promptChoice to use InputManager**
+
+Current `promptChoice()` manages its own raw mode and Ctrl+C handling. Refactor to delegate to `InputManager`:
+
+```ts
+export async function promptChoice(
+  message: string,
+  choices: { key: string; label: string }[],
+  inputManager: InputManager,
+): Promise<string> {
+  const choiceText = choices.map((c) => `[${c.key.toUpperCase()}] ${c.label}`).join('  ');
+  process.stderr.write(`\n${message}\n${choiceText}\n`);
+
+  const validKeys = new Set(choices.map((c) => c.key.toLowerCase()));
+  const key = await inputManager.waitForKey(validKeys);
+  process.stderr.write('\n');
+  return key;
+}
+```
+
+Remove: `setRawMode`, `resume`, `pause`, direct `Ctrl+C` handling, `onData` listener. These are now InputManager's responsibility.
+
+- [ ] **Step 5: Run tests**
 
 Run: `npx vitest run tests/ui.test.ts`
-Expected: PASS (update existing tests if they check separator length)
+Expected: PASS (update existing tests if they check separator length or promptChoice signature)
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
 git add src/ui.ts tests/ui.test.ts
-git commit -m "feat: widen control panel to 64 chars, add model selection UI"
+git commit -m "feat: widen control panel to 64 chars, add model selection UI, refactor promptChoice"
 ```
 
 ---
@@ -850,11 +872,11 @@ export async function runClaudeGate(
 }
 ```
 
-- [ ] **Step 2: Create basic test**
+- [ ] **Step 2: Create tests — exports + behavioral**
 
 ```ts
 // tests/runners/claude.test.ts
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 
 describe('Claude Runner', () => {
   it('module exports runClaudeInteractive and runClaudeGate', async () => {
@@ -863,7 +885,36 @@ describe('Claude Runner', () => {
     expect(typeof mod.runClaudeGate).toBe('function');
   });
 });
+
+describe('runClaudeGate', () => {
+  it('passes --print --model --effort flags to claude CLI', async () => {
+    // Mock spawn to capture args without actually running claude
+    // Verify spawn is called with ['--print', '--model', 'claude-opus-4-6', '--effort', 'max']
+    // This validates the gate subprocess command construction
+  });
+
+  it('pipes prompt to stdin and captures stdout', async () => {
+    // Mock child process: write to stdin, read from stdout
+    // Verify parseVerdict is called on stdout content
+  });
+
+  it('kills process group on timeout', async () => {
+    // Mock a child that never exits → verify killProcessGroup called after GATE_TIMEOUT_MS
+  });
+});
+
+describe('runClaudeInteractive', () => {
+  it('registers childPid in repo.lock via updateLockChild', async () => {
+    // Mock tmux + PID file → verify updateLockChild called with correct args
+  });
+
+  it('kills previous workspace PID if alive with matching start-time', async () => {
+    // Set state.lastWorkspacePid → verify sendKeysToPane C-c + wait
+  });
+});
 ```
+
+Note: Full runner tests require mocking child_process.spawn, tmux.sendKeysToPane, lock.updateLockChild etc. Stubs for these should use vitest `vi.mock()`. Implementation details of the mocks depend on the actual runner code shape.
 
 - [ ] **Step 3: Run test**
 
@@ -1079,17 +1130,49 @@ export async function runCodexGate(
 }
 ```
 
-- [ ] **Step 2: Create test**
+- [ ] **Step 2: Create tests — exports + behavioral**
 
 ```ts
 // tests/runners/codex.test.ts
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 
 describe('Codex Runner', () => {
   it('module exports runCodexInteractive and runCodexGate', async () => {
     const mod = await import('../../src/runners/codex.js');
     expect(typeof mod.runCodexInteractive).toBe('function');
     expect(typeof mod.runCodexGate).toBe('function');
+  });
+});
+
+describe('runCodexInteractive', () => {
+  it('spawns detached with correct sandbox mode', async () => {
+    // Phase 5 → danger-full-access; Phase 1/3 → workspace-write
+  });
+
+  it('rejects prompt exceeding MAX_PROMPT_SIZE_KB', async () => {
+    // Create oversized prompt file → verify immediate failure return
+  });
+
+  it('pipes prompt content to stdin', async () => {
+    // Mock spawn → verify stdin.write called with prompt content
+  });
+
+  it('writes error sidecar on non-zero exit', async () => {
+    // Mock child exit(1) → verify codex-<phase>-error.md written
+  });
+
+  it('clears lastWorkspacePid after subprocess exits', async () => {
+    // Verify state.lastWorkspacePid = null after completion
+  });
+});
+
+describe('runCodexGate', () => {
+  it('passes -c model_reasoning_effort flag', async () => {
+    // Mock spawn → verify args include -c model_reasoning_effort="high"
+  });
+
+  it('streams [codex] lines to stderr', async () => {
+    // Mock child stderr output → verify process.stderr.write called
   });
 });
 ```
@@ -1128,9 +1211,17 @@ Key changes:
 
 Update `runGatePhase()` to check `state.phasePresets` and dispatch to either `runClaudeGate()` or `runCodexGate()`. Export `parseVerdict` and `buildGateResult` for reuse by both runners.
 
-- [ ] **Step 3: Update runner.ts for preset-based dispatch**
+- [ ] **Step 3: Update runner.ts for preset-based dispatch + promptChoice callers**
 
 Update `renderControlPanel()` calls and model display to use `state.phasePresets`. Update `printAdvisorReminder()` calls to pass runner type.
+
+Thread `InputManager` through all `promptChoice()` callers in runner.ts:
+- `handleGateEscalation()` → `promptChoice(msg, choices, inputManager)`
+- `handleGateError()` → same
+- `handleVerifyEscalation()` → same
+- `handleVerifyError()` → same
+
+`runPhaseLoop()` receives `inputManager` as a parameter. Pass it down to all handler functions that call `promptChoice()`.
 
 - [ ] **Step 4: Run all phase tests**
 
