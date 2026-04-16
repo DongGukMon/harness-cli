@@ -31,13 +31,16 @@
 | 13 | Bug fix: phaseReopenFlags in types | `grep 'phaseReopenFlags' src/types.ts` | Match found |
 | 14 | Bug fix: lastWorkspacePid in types | `grep 'lastWorkspacePid' src/types.ts` | Match found |
 | 15 | Build succeeds | `npm run build` | Exit 0 |
-| 16 | getEffectiveReopenTarget resolves show_escalation to sourcePhase | `npm test -- tests/config.test.ts` | Pass — test for show_escalation returns sourcePhase |
+| 16 | getEffectiveReopenTarget resolves show_escalation to sourcePhase | `npm test -- tests/conformance/phase-models.test.ts -t "getEffectiveReopenTarget"` | Pass |
 | 17 | migrateState handles partial phasePresets | `npm test -- tests/state.test.ts -t "backfills individual"` | Pass |
 | 18 | config-cancel produces reopen_config pendingAction | `npm test -- tests/commands/inner.test.ts -t "config-cancel"` | Pass |
 | 19 | phaseReopenFlags survives write/read cycle | `npm test -- tests/state.test.ts -t "phaseReopenFlags"` | Pass |
 | 20 | handleShutdown kills both lock.childPid and lastWorkspacePid | `npm test -- tests/signal.test.ts -t "dual-PID"` | Pass |
-| 21 | resume with codexPath=null does not crash | `npm test -- tests/resume.test.ts -t "codexPath null"` | Pass |
+| 21 | resume with codexPath=null does not crash | `npm test -- tests/commands/resume-cmd.test.ts -t "codexPath null"` | Pass |
 | 22 | Codex runner spawns detached | `grep "detached: true" src/runners/codex.ts` | Match found |
+| 23 | Old resume-side preflight removed | `grep -c "runPreflight\|resolveCodexPath" src/commands/resume.ts` | 0 (no preflight calls) |
+| 24 | promptModelConfig accepts editablePhases param | `grep "editablePhases" src/ui.ts` | Match found |
+| 25 | Inner command accepts --resume flag | `grep "resume" src/commands/inner.ts` | Match found |
 
 ---
 
@@ -627,9 +630,11 @@ export function renderModelSelection(phasePresets: Record<string, string>): void
 export async function promptModelConfig(
   currentPresets: Record<string, string>,
   inputManager: InputManager,
+  editablePhases?: string[],  // if provided, only these phases are editable (resume scope)
 ): Promise<Record<string, string>> {
   const presets = { ...currentPresets };
-  const validPhaseKeys = new Set(['1', '2', '3', '4', '5', '7', '\r', '\n']);
+  const editable = editablePhases ? new Set(editablePhases) : new Set(REQUIRED_PHASE_KEYS);
+  const validPhaseKeys = new Set([...editable, '\r', '\n']);
 
   while (true) {
     renderModelSelection(presets);
@@ -1251,10 +1256,12 @@ import { resumeRun } from '../resume.js'; // split resumeRun into recovery-only
 
 // After task capture + signal handler registration:
 
-// Resume path: call resumeRun() for crash-recovery (artifact ancestry, external commits, typed pendingAction replay)
-const isResume = existingTask !== ''; // task already existed → this is a resume
+// Resume detection: use a flag passed from the CLI command, not task-file presence.
+// `harness resume` sets `--resume` flag; `harness run` does not.
+// inner.ts receives isResume from options: `innerCommand(runId, { ...options, resume: true })`
+const isResume = options.resume ?? false;
 if (isResume) {
-  await resumeRunRecovery(state, harnessDir, runDir, cwd); // recovery-only portion of resumeRun
+  await resumeRunRecovery(state, harnessDir, runDir, cwd);
 }
 
 // InputManager + model selection (both start and resume)
@@ -1283,8 +1290,8 @@ const reopenTarget = state.pendingAction
 if (reopenTarget !== null) remainingSet.add(String(reopenTarget));
 const remaining = [...remainingSet];
 
-// Model selection — pass remaining phases for editability
-const updatedPresets = await promptModelConfig(state.phasePresets, inputManager);
+// Model selection — pass remaining phases for editability (resume: only remaining; start: all)
+const updatedPresets = await promptModelConfig(state.phasePresets, inputManager, remaining);
 state.phasePresets = updatedPresets;
 writeState(runDir, state);
 
@@ -1326,10 +1333,35 @@ if (action.action === 'reopen_config') {
 }
 ```
 
+- [ ] **Step 6: Remove old resume-side preflight from resume.ts/resume command**
+
+The current `resumeCommand()` runs phase-scoped preflight and codexPath validation before spawning inner. This conflicts with the spec ordering (model selection → runner preflight in inner). Remove:
+- `resume.ts` codexPath re-resolve (replaced by runner-aware preflight in inner)
+- `resumeCommand()` phase-scoped `runPreflight()` calls
+- Only keep common/Phase-6 preflight in resumeCommand (same as start)
+
 In `src/resume.ts`:
 - Add `config-cancel` to valid pause reasons
 - Guard `codexPath` re-resolve: skip when `state.codexPath === null` (new runs don't set it)
 - Legacy runs (codexPath is string): preserve existing re-resolve behavior
+
+- [ ] **Step 7: Add `--resume` flag to InnerOptions**
+
+In `src/commands/inner.ts`:
+```ts
+export interface InnerOptions {
+  root?: string;
+  controlPane?: string;
+  resume?: boolean;  // true when invoked from `harness resume`
+}
+```
+
+In `src/commands/resume.ts`, when spawning inner:
+```ts
+const innerCmd = `node ${harnessPath} __inner ${runId} --resume${options.root ? ` --root ${options.root}` : ''}`;
+```
+
+In `bin/harness.ts`, add `--resume` flag to `__inner` command definition.
 
 ```ts
 // src/commands/resume.ts — codexPath compatibility
