@@ -31,6 +31,13 @@
 | 13 | Bug fix: phaseReopenFlags in types | `grep 'phaseReopenFlags' src/types.ts` | Match found |
 | 14 | Bug fix: lastWorkspacePid in types | `grep 'lastWorkspacePid' src/types.ts` | Match found |
 | 15 | Build succeeds | `npm run build` | Exit 0 |
+| 16 | getEffectiveReopenTarget resolves show_escalation to sourcePhase | `npm test -- tests/config.test.ts` | Pass — test for show_escalation returns sourcePhase |
+| 17 | migrateState handles partial phasePresets | `npm test -- tests/state.test.ts -t "backfills individual"` | Pass |
+| 18 | config-cancel produces reopen_config pendingAction | `npm test -- tests/commands/inner.test.ts -t "config-cancel"` | Pass |
+| 19 | phaseReopenFlags survives write/read cycle | `npm test -- tests/state.test.ts -t "phaseReopenFlags"` | Pass |
+| 20 | handleShutdown kills both lock.childPid and lastWorkspacePid | `npm test -- tests/signal.test.ts -t "dual-PID"` | Pass |
+| 21 | resume with codexPath=null does not crash | `npm test -- tests/resume.test.ts -t "codexPath null"` | Pass |
+| 22 | Codex runner spawns detached | `grep "detached: true" src/runners/codex.ts` | Match found |
 
 ---
 
@@ -1218,16 +1225,39 @@ git commit -m "feat: runner-aware preflight (codexCli) and signal interrupt disp
 
 Remove the `codexPath` resolve from preflight. Only run common items + Phase 6 deps. Remove `codexPath` from `createInitialState()` call (already done in Task 2).
 
-- [ ] **Step 2: Update inner.ts — add model selection + runner preflight**
+- [ ] **Step 2: Add getEffectiveReopenTarget helper to config.ts**
 
-After task capture + signal handler registration:
+```ts
+// src/config.ts — add helper
+import type { PendingAction } from './types.js';
+
+export function getEffectiveReopenTarget(pa: PendingAction): number | null {
+  if (pa.type === 'reopen_phase') return pa.targetPhase;
+  if (pa.type === 'show_escalation') return pa.sourcePhase;
+  return null;
+}
+```
+
+- [ ] **Step 3: Update inner.ts — add resume branch + model selection + runner preflight**
+
+Restructure `innerCommand()` to handle both start and resume paths:
+
 ```ts
 import { InputManager } from '../input.js';
 import { promptModelConfig } from '../ui.js';
 import { runRunnerAwarePreflight } from '../preflight.js';
-import { REQUIRED_PHASE_KEYS } from '../config.js';
+import { REQUIRED_PHASE_KEYS, getEffectiveReopenTarget } from '../config.js';
+import { resumeRun } from '../resume.js'; // split resumeRun into recovery-only
 
-// After signal handler registration:
+// After task capture + signal handler registration:
+
+// Resume path: call resumeRun() for crash-recovery (artifact ancestry, external commits, typed pendingAction replay)
+const isResume = existingTask !== ''; // task already existed → this is a resume
+if (isResume) {
+  await resumeRunRecovery(state, harnessDir, runDir, cwd); // recovery-only portion of resumeRun
+}
+
+// InputManager + model selection (both start and resume)
 const inputManager = new InputManager();
 inputManager.onConfigCancel = () => {
   state.status = 'paused';
@@ -1241,19 +1271,27 @@ inputManager.onConfigCancel = () => {
 
 inputManager.start('configuring');
 
-// Model selection
+// Compute remaining phases (including pendingAction reopen targets)
+const remainingSet = new Set(
+  [...REQUIRED_PHASE_KEYS].filter(
+    p => Number(p) >= state.currentPhase && state.phases[p] !== 'completed'
+  )
+);
+const reopenTarget = state.pendingAction
+  ? getEffectiveReopenTarget(state.pendingAction)
+  : null;
+if (reopenTarget !== null) remainingSet.add(String(reopenTarget));
+const remaining = [...remainingSet];
+
+// Model selection — pass remaining phases for editability
 const updatedPresets = await promptModelConfig(state.phasePresets, inputManager);
 state.phasePresets = updatedPresets;
 writeState(runDir, state);
 
 // Runner-aware preflight
 try {
-  const remaining = REQUIRED_PHASE_KEYS.filter(
-    p => Number(p) >= state.currentPhase && state.phases[p] !== 'completed'
-  );
-  runRunnerAwarePreflight(state.phasePresets, [...remaining]);
+  runRunnerAwarePreflight(state.phasePresets, remaining);
 } catch (err) {
-  // Same as config cancel
   inputManager.onConfigCancel!();
 }
 
@@ -1268,18 +1306,44 @@ try {
 }
 ```
 
-- [ ] **Step 3: Update resume.ts — handle reopen_config pendingAction**
+- [ ] **Step 4: Split resumeRun() — extract recovery-only function**
 
-In `consumePendingAction()` in inner.ts, add:
+In `src/resume.ts`, extract a `resumeRunRecovery()` function that does:
+- artifact ancestry verification
+- external commit detection
+- typed pendingAction replay (reopen_phase, show_escalation, etc.)
+- sidecar consumption
+
+The existing `resumeRun()` currently does recovery + `runPhaseLoop()` in one call. Split so `inner.ts` can call recovery first, then model selection, then `runPhaseLoop()` separately.
+
+- [ ] **Step 5: Update resume.ts — handle reopen_config + codexPath nullable**
+
+In `consumePendingAction()` in inner.ts:
 ```ts
 if (action.action === 'reopen_config') {
-  // Clear the pending action — model selection will restart
   state.pendingAction = null;
   writeState(runDir, state);
 }
 ```
 
-In `src/resume.ts`, add `config-cancel` to valid pause reasons.
+In `src/resume.ts`:
+- Add `config-cancel` to valid pause reasons
+- Guard `codexPath` re-resolve: skip when `state.codexPath === null` (new runs don't set it)
+- Legacy runs (codexPath is string): preserve existing re-resolve behavior
+
+```ts
+// src/commands/resume.ts — codexPath compatibility
+if (state.codexPath !== null && !existsSync(state.codexPath)) {
+  const resolved = resolveCodexPath();
+  if (resolved === null) {
+    // Not fatal for new runs — Codex runner uses standalone CLI
+    process.stderr.write('Warning: Codex companion not found (legacy run). Codex runner uses standalone CLI.\n');
+  } else {
+    state.codexPath = resolved;
+  }
+}
+// null codexPath: no action needed — Codex runner resolves standalone binary
+```
 
 - [ ] **Step 4: Run full test suite**
 
