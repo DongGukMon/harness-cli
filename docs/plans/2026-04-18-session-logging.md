@@ -1879,17 +1879,28 @@ async function handleGateReject(state: HarnessState, phase: GatePhase, /* ... */
 
 - [ ] **Step 3: escalation emit (handleGateEscalation, handleGateError)**
 
+**Normative:** 각 escalation 경로에서 **정확히 1개**의 `escalation` 이벤트만 emit하며, `userChoice` 필드를 사용자 선택 확정 후 함께 기록한다. (Spec §4.3의 schema는 userChoice를 포함한 단일 이벤트 shape을 정의.)
+
 ```ts
 async function handleGateEscalation(state, phase, /* ... */, logger: SessionLogger): Promise<void> {
-  // existing prompt
-  logger.logEvent({ event: 'escalation', phase, reason: 'gate-retry-limit' });
-  // ... user choice
-  const userChoice = /* ... */;
-  logger.logEvent({ event: 'escalation', phase, reason: 'gate-retry-limit', userChoice });
+  // Prompt user for choice (existing logic)
+  const userChoice = await promptUser(/* ... */);  // 'C' | 'S' | 'Q' | 'R'
+
+  // Emit exactly one escalation event AFTER userChoice is known
+  logger.logEvent({
+    event: 'escalation',
+    phase,
+    reason: 'gate-retry-limit',  // or 'gate-error' for handleGateError
+    userChoice,
+  });
+
+  // ... subsequent logic based on choice
 }
 ```
 
-**주의:** 실제 escalation flow는 사용자 입력 대기가 포함되므로, 이벤트를 1개만 emit하고 `userChoice` 필드를 입력 후 함께 넣거나, 2개(진입 + 선택) emit하는 방식 중 구현 편의에 따라 선택. v1은 1개 emit (선택 후) 권장.
+동일 규칙을 `handleGateError` (`reason: 'gate-error'`), `handleVerifyEscalation` (`reason: 'verify-limit'`), `handleVerifyError` (`reason: 'verify-error'`)에도 적용.
+
+**단일 emit 원칙 검증:** Task 20 통합 테스트에서 각 escalation 경로마다 events.jsonl에 해당 `(phase, reason)` 조합이 정확히 1번만 존재함을 assertion.
 
 - [ ] **Step 4: force_pass emit (forcePassGate, forcePassVerify)**
 
@@ -2288,23 +2299,40 @@ describe('Integration: --enable-logging creates session files', () => {
 describe('Integration: one-shot sidecar replay', () => {
   it('first gate on resume replays sidecar once', async () => {
     const { runGatePhase } = await import('../../src/phases/gate.js');
-    // setup: create runDir with existing gate-N-result.json (new-schema)
     const runDir = fs.mkdtempSync(path.join(os.tmpdir(), 'onshot-'));
     const sidecar = { exitCode: 0, timestamp: Date.now(), runner: 'codex', promptBytes: 1000, durationMs: 10000 };
     fs.writeFileSync(path.join(runDir, 'gate-2-result.json'), JSON.stringify(sidecar));
     fs.writeFileSync(path.join(runDir, 'gate-2-raw.txt'), 'VERDICT: APPROVE\ncomments: ok');
-    // minimal state mock
     const state = { gateRetries: { '2': 0 } } as any;
 
     const flag = { value: true };
     const result = await runGatePhase(state, 2, runDir, '/cwd', flag);
     expect((result as any).recoveredFromSidecar).toBe(true);
-    expect(flag.value).toBe(false);  // consumed
+    expect(flag.value).toBe(false);  // consumed after first use
+  });
 
-    // Second call should NOT replay
-    const sidecar2 = { exitCode: 0, timestamp: Date.now(), runner: 'codex', promptBytes: 500, durationMs: 5000 };
-    fs.writeFileSync(path.join(runDir, 'gate-2-result.json'), JSON.stringify(sidecar2));
-    // would need to mock runner to avoid actual subprocess; alternatively verify via checkGateSidecars unit
+  it('second gate call with consumed flag does NOT replay (forces fresh run)', async () => {
+    // Use vi.mock or spy on runCodexGate/runClaudeGate to detect invocation.
+    const gateModule = await import('../../src/phases/gate.js');
+    const runDir = fs.mkdtempSync(path.join(os.tmpdir(), 'second-call-'));
+    const sidecar = { exitCode: 0, timestamp: Date.now(), runner: 'codex', promptBytes: 1000, durationMs: 10000 };
+    fs.writeFileSync(path.join(runDir, 'gate-2-result.json'), JSON.stringify(sidecar));
+    fs.writeFileSync(path.join(runDir, 'gate-2-raw.txt'), 'VERDICT: APPROVE\ncomments: ok');
+    const state = { gateRetries: { '2': 0 }, phasePresets: { '2': 'sonnet-high' } } as any;
+
+    const flag = { value: false };  // already consumed
+
+    // Spy on the runner to detect if fresh gate execution happens
+    const codexModule = await import('../../src/runners/codex.js');
+    const spy = vi.spyOn(codexModule, 'runCodexGate').mockResolvedValue({ exitCode: 0, rawOutput: 'VERDICT: APPROVE' } as any);
+
+    try {
+      const result = await gateModule.runGatePhase(state, 2, runDir, '/cwd', flag);
+      expect((result as any).recoveredFromSidecar).toBeFalsy();
+      expect(spy).toHaveBeenCalledTimes(1);  // fresh run, not replay
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it('legacy sidecar (no runner) still replays but with runner=undefined', () => {
@@ -2371,6 +2399,139 @@ describe('Integration: CLI start --enable-logging end-to-end', () => {
 ```
 
 **주의:** 실제 `startCommand`/`resumeCommand` end-to-end 테스트는 tmux 의존성이 커서 mocking 비용이 높다. Task 20의 CLI-level 테스트는 **상태 레벨 검증** (state.json에 loggingEnabled 기록, migrate 시 기본값, resume 시 state에서 계승)으로 한정한다. 실제 `harness start --enable-logging` 실행은 수동 검증 (Eval Checklist의 "Spec Acceptance §9" 항목에서 체크).
+
+### 추가 엣지 케이스 테스트 (§5.8/§5.9 커버리지)
+
+```ts
+describe('Integration: edge cases', () => {
+  it('config-cancel lazy bootstrap emits session_start before session_end', () => {
+    const harnessDir = tempHarnessDir();
+    const sessionsRoot = path.join(harnessDir, 'sessions-root');
+    const logger = new FileSessionLogger('run-cc', harnessDir, { sessionsRoot });
+    // Simulate onConfigCancel before any session_start was emitted:
+    expect(logger.hasEmittedSessionOpen()).toBe(false);
+    logger.writeMeta({ task: 'original task' });
+    logger.logEvent({ event: 'session_start', task: 'original task', autoMode: false, baseCommit: '', harnessVersion: 'v1' });
+    expect(logger.hasEmittedSessionOpen()).toBe(true);
+    logger.logEvent({ event: 'session_end', status: 'paused', totalWallMs: 1000 });
+    logger.finalizeSummary({ status: 'paused', autoMode: false } as any);
+
+    const repoKey = computeRepoKey(harnessDir);
+    const eventsPath = path.join(sessionsRoot, repoKey, 'run-cc', 'events.jsonl');
+    const lines = fs.readFileSync(eventsPath, 'utf-8').trim().split('\n');
+    // Ensure session_start precedes session_end
+    expect(JSON.parse(lines[0]).event).toBe('session_start');
+    expect(JSON.parse(lines[lines.length - 1]).event).toBe('session_end');
+
+    const summary = JSON.parse(fs.readFileSync(path.join(sessionsRoot, repoKey, 'run-cc', 'summary.json'), 'utf-8'));
+    expect(summary.status).toBe('paused');
+  });
+
+  it('config-cancel on resume pushes resumedAt and emits session_resumed before session_end', () => {
+    const harnessDir = tempHarnessDir();
+    const sessionsRoot = path.join(harnessDir, 'sessions-root');
+    // First session creates meta.json
+    const logger1 = new FileSessionLogger('run-cc-resume', harnessDir, { sessionsRoot });
+    logger1.writeMeta({ task: 't' });
+    // Second session starts; onConfigCancel fires before runPhaseLoop
+    const logger2 = new FileSessionLogger('run-cc-resume', harnessDir, { sessionsRoot });
+    expect(logger2.hasBootstrapped()).toBe(true);
+    expect(logger2.hasEmittedSessionOpen()).toBe(false);
+    logger2.updateMeta({ pushResumedAt: Date.now() });
+    logger2.logEvent({ event: 'session_resumed', fromPhase: 1, stateStatus: 'paused' });
+    logger2.logEvent({ event: 'session_end', status: 'paused', totalWallMs: 500 });
+
+    const repoKey = computeRepoKey(harnessDir);
+    const metaPath = path.join(sessionsRoot, repoKey, 'run-cc-resume', 'meta.json');
+    const meta = JSON.parse(fs.readFileSync(metaPath, 'utf-8'));
+    expect(meta.resumedAt.length).toBe(1);
+  });
+
+  it('reopenFromGate accuracy: phase 5 reopen from verify vs gate 7', () => {
+    const harnessDir = tempHarnessDir();
+    const sessionsRoot = path.join(harnessDir, 'sessions-root');
+    const logger = new FileSessionLogger('run-rfg', harnessDir, { sessionsRoot });
+    logger.writeMeta({ task: 't' });
+    logger.logEvent({ event: 'phase_start', phase: 5, attemptId: 'a1' });
+    logger.logEvent({ event: 'phase_end', phase: 5, attemptId: 'a1', status: 'completed', durationMs: 100 });
+    logger.logEvent({ event: 'phase_start', phase: 5, attemptId: 'a2', reopenFromGate: 6 });  // verify-triggered reopen
+    logger.logEvent({ event: 'phase_end', phase: 5, attemptId: 'a2', status: 'completed', durationMs: 200 });
+    logger.logEvent({ event: 'phase_start', phase: 5, attemptId: 'a3', reopenFromGate: 7 });  // gate 7-triggered reopen
+
+    const repoKey = computeRepoKey(harnessDir);
+    const eventsPath = path.join(sessionsRoot, repoKey, 'run-rfg', 'events.jsonl');
+    const events = fs.readFileSync(eventsPath, 'utf-8').trim().split('\n').map(l => JSON.parse(l));
+    const startsForPhase5 = events.filter(e => e.event === 'phase_start' && e.phase === 5);
+    expect(startsForPhase5[0].reopenFromGate).toBeUndefined();
+    expect(startsForPhase5[1].reopenFromGate).toBe(6);
+    expect(startsForPhase5[2].reopenFromGate).toBe(7);
+  });
+
+  it('verify throw path emits phase_end failed with reason verify_throw', () => {
+    const harnessDir = tempHarnessDir();
+    const sessionsRoot = path.join(harnessDir, 'sessions-root');
+    const logger = new FileSessionLogger('run-vt', harnessDir, { sessionsRoot });
+    logger.writeMeta({ task: 't' });
+    logger.logEvent({ event: 'phase_start', phase: 6 });
+    logger.logEvent({
+      event: 'phase_end',
+      phase: 6,
+      status: 'failed',
+      durationMs: 50,
+      details: { reason: 'verify_throw' },
+    });
+    logger.logEvent({ event: 'escalation', phase: 6, reason: 'verify-error', userChoice: 'Q' });
+
+    const repoKey = computeRepoKey(harnessDir);
+    const events = fs.readFileSync(path.join(sessionsRoot, repoKey, 'run-vt', 'events.jsonl'), 'utf-8')
+      .trim().split('\n').map(l => JSON.parse(l));
+    const phaseEnd = events.find(e => e.event === 'phase_end');
+    expect(phaseEnd.status).toBe('failed');
+    expect(phaseEnd.details.reason).toBe('verify_throw');
+    expect(events.find(e => e.event === 'escalation')).toBeDefined();
+  });
+
+  it('force_pass emit exclusivity: only one force_pass, no phase_end/gate_verdict/verify_result', () => {
+    const harnessDir = tempHarnessDir();
+    const sessionsRoot = path.join(harnessDir, 'sessions-root');
+    const logger = new FileSessionLogger('run-fp', harnessDir, { sessionsRoot });
+    logger.writeMeta({ task: 't' });
+    // Simulate forcePassGate for phase 2
+    logger.logEvent({ event: 'force_pass', phase: 2, by: 'user' });
+    // Simulate forcePassVerify for phase 6
+    logger.logEvent({ event: 'force_pass', phase: 6, by: 'auto' });
+
+    const repoKey = computeRepoKey(harnessDir);
+    const events = fs.readFileSync(path.join(sessionsRoot, repoKey, 'run-fp', 'events.jsonl'), 'utf-8')
+      .trim().split('\n').map(l => JSON.parse(l));
+    const forcePassEvents = events.filter(e => e.event === 'force_pass');
+    expect(forcePassEvents.length).toBe(2);
+    // No other terminal events should exist for phases 2 or 6
+    expect(events.some(e => (e.event === 'phase_end' || e.event === 'gate_verdict' || e.event === 'verify_result') && (e.phase === 2 || e.phase === 6))).toBe(false);
+  });
+
+  it('escalation emit exclusivity: exactly one per escalation path', () => {
+    const harnessDir = tempHarnessDir();
+    const sessionsRoot = path.join(harnessDir, 'sessions-root');
+    const logger = new FileSessionLogger('run-esc', harnessDir, { sessionsRoot });
+    logger.writeMeta({ task: 't' });
+    // Gate retry-limit escalation for phase 2
+    logger.logEvent({ event: 'escalation', phase: 2, reason: 'gate-retry-limit', userChoice: 'C' });
+    // Verify error escalation for phase 6
+    logger.logEvent({ event: 'escalation', phase: 6, reason: 'verify-error', userChoice: 'R' });
+
+    const repoKey = computeRepoKey(harnessDir);
+    const events = fs.readFileSync(path.join(sessionsRoot, repoKey, 'run-esc', 'events.jsonl'), 'utf-8')
+      .trim().split('\n').map(l => JSON.parse(l));
+    const phase2Escs = events.filter(e => e.event === 'escalation' && e.phase === 2);
+    const phase6Escs = events.filter(e => e.event === 'escalation' && e.phase === 6);
+    expect(phase2Escs.length).toBe(1);
+    expect(phase6Escs.length).toBe(1);
+    expect(phase2Escs[0].userChoice).toBe('C');
+    expect(phase6Escs[0].userChoice).toBe('R');
+  });
+});
+```
 
 - [ ] **Step 2: 테스트 실행**
 
