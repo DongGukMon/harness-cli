@@ -361,6 +361,7 @@ async function handleGateReject(
     // Crash-safe: feedback already saved → write pendingAction+state atomically
     state.pendingAction = pendingAction;
     state.phases[String(targetInteractive)] = 'pending';
+    state.phaseReopenFlags[String(targetInteractive)] = true;
     state.currentPhase = targetInteractive;
     writeState(runDir, state);
   } else {
@@ -403,6 +404,7 @@ export async function handleGateEscalation(
       feedbackPaths: [feedbackPath],
     };
     state.phases[String(targetInteractive)] = 'pending';
+    state.phaseReopenFlags[String(targetInteractive)] = true;
     state.currentPhase = targetInteractive;
     writeState(runDir, state);
   } else if (choice === 'S') {
@@ -590,6 +592,7 @@ async function handleVerifyFail(
     state.pendingAction = pendingAction;
     state.phases['5'] = 'pending';
     state.phases['6'] = 'pending';
+    state.phaseReopenFlags['5'] = true;
     state.currentPhase = 5;
     writeState(runDir, state);
 
@@ -635,6 +638,7 @@ export async function handleVerifyEscalation(
     };
     state.phases['5'] = 'pending';
     state.phases['6'] = 'pending';
+    state.phaseReopenFlags['5'] = true;
     state.currentPhase = 5;
     writeState(runDir, state);
 
