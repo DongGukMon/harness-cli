@@ -1,11 +1,18 @@
 import fs from 'fs';
 import path from 'path';
 import type { HarnessState } from './types.js';
-import { killProcessGroup } from './process.js';
+import { killProcessGroup, isPidAlive, getProcessStartTime } from './process.js';
 import { sendKeysToPane } from './tmux.js';
 import { getHead } from './git.js';
 import { writeState } from './state.js';
-import { SIGTERM_WAIT_MS, GATE_PHASES } from './config.js';
+import { SIGTERM_WAIT_MS, GATE_PHASES, getPresetById } from './config.js';
+
+function isSameProcessInstance(pid: number, savedStartTime: number | null): boolean {
+  if (savedStartTime === null) return false;
+  const actualStart = getProcessStartTime(pid);
+  if (actualStart === null) return false;
+  return Math.abs(actualStart - savedStartTime) <= 2;
+}
 
 export interface SignalContext {
   harnessDir: string;
@@ -23,14 +30,25 @@ export interface SignalContext {
 export async function handleShutdown(ctx: SignalContext): Promise<void> {
   const { harnessDir, runId, getState, setState, getChildPid, getCurrentPhaseType, cwd } = ctx;
 
-  // Step 1-2: Kill child process group if running
+  // Step 1: Kill tracked child PID (gate/verify subprocess or interactive child)
   const childPid = getChildPid();
   if (childPid !== null) {
     await killProcessGroup(childPid, SIGTERM_WAIT_MS);
   }
 
-  // Step 3: Save pausedAtHead
   const state = getState();
+
+  // Step 1b: Also kill lastWorkspacePid if distinct and alive (§6.3 dual-PID)
+  if (
+    state.lastWorkspacePid !== null &&
+    state.lastWorkspacePid !== childPid &&
+    isPidAlive(state.lastWorkspacePid) &&
+    isSameProcessInstance(state.lastWorkspacePid, state.lastWorkspacePidStartTime)
+  ) {
+    await killProcessGroup(state.lastWorkspacePid, SIGTERM_WAIT_MS);
+  }
+
+  // Step 3: Save pausedAtHead
   let pausedAtHead: string | null = null;
   try {
     pausedAtHead = getHead(cwd);
@@ -106,7 +124,7 @@ export function registerSignalHandlers(ctx: SignalContext): void {
   process.on('SIGTERM', handler);
 
   // SIGUSR1: control-plane signal for skip/jump
-  const { harnessDir, runId, getState, setState, getCurrentPhaseType, getChildPid } = ctx;
+  const { harnessDir, runId, getState, setState, getChildPid } = ctx;
   process.on('SIGUSR1', () => {
     process.stderr.write('ℹ Received control signal (SIGUSR1). Applying pending action...\n');
 
@@ -121,7 +139,6 @@ export function registerSignalHandlers(ctx: SignalContext): void {
 
       // Capture interrupted phase BEFORE mutation (ADR-5/ADR-10)
       const interruptedPhase = state.currentPhase;
-      const interruptedPhaseType = getCurrentPhaseType();
 
       if (action.action === 'skip') {
         state.phases[String(state.currentPhase)] = 'completed';
@@ -145,7 +162,11 @@ export function registerSignalHandlers(ctx: SignalContext): void {
       fs.writeFileSync(interruptFlagPath, '1');
 
       // Interrupt the INTERRUPTED phase's process (not the next phase's)
-      if (interruptedPhaseType === 'interactive' && state.tmuxWorkspacePane) {
+      // Dispatch based on runner: Claude interactive phases use tmux C-c; Codex or gate/verify → kill subprocess
+      const interruptedPreset = getPresetById(state.phasePresets[String(interruptedPhase)]);
+      const interruptedRunner = interruptedPreset?.runner ?? null;
+      const isInteractivePhase = [1, 3, 5].includes(interruptedPhase as number);
+      if (isInteractivePhase && interruptedRunner === 'claude' && state.tmuxWorkspacePane) {
         sendKeysToPane(state.tmuxSession, state.tmuxWorkspacePane, 'C-c');
       } else {
         const childPid = getChildPid();

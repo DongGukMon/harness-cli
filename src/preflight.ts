@@ -5,6 +5,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 
 import type { PreflightItem, PhaseType } from './types.js';
+import { getPresetById } from './config.js';
 
 const _defaultPackageLocalRoot = path.dirname(fileURLToPath(import.meta.url));
 
@@ -199,6 +200,16 @@ function runItem(item: PreflightItem, cwd?: string): { codexPath?: string } {
       return { codexPath: resolved };
     }
 
+    case 'codexCli': {
+      try {
+        const codexBin = execSync('which codex', { encoding: 'utf-8', stdio: 'pipe' }).trim();
+        if (!codexBin) throw new Error('Codex CLI not found in PATH.');
+      } catch {
+        throw new Error('Codex CLI not found in PATH. Install: brew install codex or npm i -g @openai/codex');
+      }
+      return {};
+    }
+
     case 'platform':
       if (process.platform === 'win32') {
         throw new Error('harness requires macOS or Linux.');
@@ -240,4 +251,26 @@ export function runPreflight(items: PreflightItem[], cwd?: string): { codexPath?
   }
 
   return result;
+}
+
+/**
+ * Runner-aware preflight: validate the union of runners used by phasePresets over the given phase set.
+ * - If any selected preset uses 'claude' runner, check claude + claudeAtFile.
+ * - If any selected preset uses 'codex' runner, check codexCli (standalone CLI in PATH).
+ */
+export function runRunnerAwarePreflight(
+  phasePresets: Record<string, string>,
+  phases: string[],
+): void {
+  const runners = new Set<'claude' | 'codex'>();
+  for (const phase of phases) {
+    const preset = getPresetById(phasePresets[phase]);
+    if (preset) runners.add(preset.runner);
+  }
+  if (runners.has('claude')) {
+    runPreflight(['claude', 'claudeAtFile']);
+  }
+  if (runners.has('codex')) {
+    runPreflight(['codexCli']);
+  }
 }
