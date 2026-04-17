@@ -906,6 +906,27 @@ describe('FileSessionLogger.finalizeSummary', () => {
     expect(summary.phases['2'].attempts.length).toBe(1);
   });
 
+  it('multiple session_end events: last one wins (paused→resumed→completed flow)', () => {
+    const harnessDir = makeTempHarnessDir();
+    const sessionsRoot = path.join(harnessDir, 'sessions-root');
+    const logger = new FileSessionLogger('run-multi-end', harnessDir, { sessionsRoot });
+    logger.writeMeta({ task: 't' });
+    logger.logEvent({ event: 'session_start', task: 't', autoMode: false, baseCommit: '', harnessVersion: 'v1' });
+    logger.logEvent({ event: 'phase_start', phase: 1 });
+    // First session ended in paused state
+    logger.logEvent({ event: 'session_end', status: 'paused', totalWallMs: 1000 });
+    // Resume appends: new session_resumed + eventually another session_end (completed)
+    logger.logEvent({ event: 'session_resumed', fromPhase: 1, stateStatus: 'paused' });
+    logger.logEvent({ event: 'phase_end', phase: 1, status: 'completed', durationMs: 500 });
+    logger.logEvent({ event: 'session_end', status: 'completed', totalWallMs: 5000 });
+
+    logger.finalizeSummary({ status: 'completed', autoMode: false } as any);
+    const repoKey = computeRepoKey(harnessDir);
+    const summary = JSON.parse(fs.readFileSync(path.join(sessionsRoot, repoKey, 'run-multi-end', 'summary.json'), 'utf-8'));
+    expect(summary.status).toBe('completed');  // LAST session_end wins, not 'paused'
+    expect(summary.totalWallMs).toBe(5000);
+  });
+
   it('drops gate_error with recoveredFromSidecar=true when authoritative error exists for same phase', () => {
     const harnessDir = makeTempHarnessDir();
     const sessionsRoot = path.join(harnessDir, 'sessions-root');
@@ -942,7 +963,8 @@ Expected: FAIL (finalizeSummary is no-op).
       if (events.length === 0) return;
 
       const startedAt = this.getStartedAt();
-      const sessionEndEvent = events.find(e => e.event === 'session_end') as any;
+      // Find LAST session_end (resumed runs append multiple; latest is authoritative)
+      const sessionEndEvent = [...events].reverse().find(e => e.event === 'session_end') as any;
       const status = sessionEndEvent ? sessionEndEvent.status : 'interrupted';
       const endedAt = sessionEndEvent ? sessionEndEvent.ts : events[events.length - 1].ts;
       const totalWallMs = sessionEndEvent ? sessionEndEvent.totalWallMs : (endedAt - startedAt);
@@ -1325,7 +1347,27 @@ git commit -m "feat(logging): inner.ts logger lifecycle + lazy bootstrap + handl
 - Modify: `src/phases/runner.ts`
 - Test: `tests/phases/runner.test.ts`
 
-- [ ] **Step 1: runPhaseLoop 시그니처 확장**
+- [ ] **Step 1: handler 함수들을 export로 변경**
+
+핸들러 레벨 테스트를 위해 `src/phases/runner.ts`에서 다음 함수들을 `export`로 변경 (기존 `function` → `export function`):
+- `handleInteractivePhase`
+- `handleGatePhase`
+- `handleGateReject`
+- `handleGateError`
+- `handleVerifyPhase`
+- `handleVerifyFail`
+- `forcePassGate`
+- `forcePassVerify`
+
+이미 export된 함수들(`runPhaseLoop`, `handleGateEscalation`, `handleVerifyEscalation`, `handleVerifyError`)은 그대로 유지.
+
+```bash
+rg -n "^(async )?function handle|^(async )?function forcePass" src/phases/runner.ts
+```
+
+각 함수 앞에 `export` 추가. 기존 파일 내부 참조는 변경 없음.
+
+- [ ] **Step 2: runPhaseLoop 시그니처 확장**
 
 `src/phases/runner.ts`의 `runPhaseLoop` 함수와 모든 `handle*`, `forcePass*` 함수에 `logger: SessionLogger` 파라미터 추가. 타입 import:
 
@@ -1347,7 +1389,7 @@ export async function runPhaseLoop(
 ): Promise<void>
 ```
 
-- [ ] **Step 2: 모든 내부 handler 호출부 업데이트**
+- [ ] **Step 3: 모든 내부 handler 호출부 업데이트**
 
 `runPhaseLoop` 내에서 `handleInteractivePhase(state, ...)`, `handleGatePhase(state, ...)`, `handleVerifyPhase(state, ...)` 호출부에 logger와 필요시 sidecarReplayAllowed 전달.
 
@@ -1368,7 +1410,7 @@ async function handleGatePhase(
 
 나머지 handler(`handleInteractivePhase`, `handleVerifyPhase`, `handleGateReject`, `handleGateError`, `handleGateEscalation`, `handleVerifyFail`, `handleVerifyError`, `handleVerifyEscalation`, `forcePassGate`, `forcePassVerify`)는 `logger: SessionLogger`만 추가.
 
-- [ ] **Step 3: 기존 테스트 업데이트**
+- [ ] **Step 4: 기존 테스트 업데이트**
 
 `tests/phases/runner.test.ts`에서 `runPhaseLoop` 호출부를 찾아 `new NoopLogger()`와 `{ value: false }`를 추가:
 
@@ -1384,7 +1426,7 @@ import { NoopLogger } from '../../src/logger.js';
 await runPhaseLoop(state, harnessDir, runDir, cwd, inputManager, new NoopLogger(), { value: false });
 ```
 
-- [ ] **Step 4: 빌드 및 테스트**
+- [ ] **Step 5: 빌드 및 테스트**
 
 ```bash
 npm run build && npm test -- runner
@@ -1392,11 +1434,16 @@ npm run build && npm test -- runner
 
 Expected: 컴파일 성공 + 기존 테스트 PASS (logger는 NoopLogger로 효과 없음).
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
 git add src/phases/runner.ts tests/phases/runner.test.ts
-git commit -m "refactor(logging): thread logger + sidecarReplayAllowed through runner handlers"
+git commit -m "refactor(logging): thread logger + sidecarReplayAllowed; export handlers for testing
+
+- Export handleInteractivePhase/handleGatePhase/handleGateReject/handleGateError/
+  handleVerifyPhase/handleVerifyFail/forcePassGate/forcePassVerify for unit testing
+- All runPhaseLoop handlers receive SessionLogger parameter
+- handleGatePhase also receives sidecarReplayAllowed one-shot flag"
 ```
 
 ---
@@ -2396,7 +2443,64 @@ rg -n "handleGatePhase\(|handleVerifyPhase\(|handleInteractivePhase\(" tests/
 
 각 호출부에 `new NoopLogger()` 및 필요시 `{ value: false }` 전달.
 
-- [ ] **Step 3: 전체 테스트 실행**
+- [ ] **Step 3: Command-layer 로깅 wiring 테스트 (tests/commands/run.test.ts + resume-cmd.test.ts)**
+
+기존 `tests/commands/run.test.ts`와 `tests/commands/resume-cmd.test.ts`는 이미 tmux/lock/terminal을 mock하고 실제 `startCommand`/`resumeCommand`를 호출한다. 이 테스트 시드를 활용하여 CLI 레벨 wiring 검증을 추가:
+
+**run.test.ts 추가 테스트 예시:**
+
+```ts
+describe('startCommand — --enable-logging wiring', () => {
+  it('state.loggingEnabled=true when enableLogging option passed', async () => {
+    // Reuse existing tmux/lock/terminal mocks
+    await startCommand('test task', { enableLogging: true, root: harnessRoot });
+    const runDir = /* derive from mocked harness layout */;
+    const state = readState(runDir);
+    expect(state?.loggingEnabled).toBe(true);
+  });
+
+  it('state.loggingEnabled=false (default) when enableLogging not passed', async () => {
+    await startCommand('test task', { root: harnessRoot });
+    const runDir = /* ... */;
+    const state = readState(runDir);
+    expect(state?.loggingEnabled).toBe(false);
+  });
+
+  it('spawned __inner command does NOT include --enable-logging flag (flag is state-driven)', async () => {
+    await startCommand('test task', { enableLogging: true, root: harnessRoot });
+    // Verify the mocked tmux send-keys payload for __inner spawn:
+    //   Should include `__inner <runId>` but NOT `--enable-logging`
+    //   (logger reads state.loggingEnabled, not a new flag)
+    expect(capturedInnerArgs).not.toContain('--enable-logging');
+  });
+});
+```
+
+**resume-cmd.test.ts 추가 테스트 예시:**
+
+```ts
+describe('resumeCommand — loggingEnabled inheritance', () => {
+  it('resume preserves state.loggingEnabled=true from original start', async () => {
+    // Setup: run with loggingEnabled=true already persisted
+    writeState(runDir, { ...baseState, loggingEnabled: true });
+    await resumeCommand(runId, { root: harnessRoot });
+    const state = readState(runDir);
+    expect(state?.loggingEnabled).toBe(true);  // unchanged
+  });
+
+  it('resume does not require a flag to enable logging', async () => {
+    writeState(runDir, { ...baseState, loggingEnabled: true });
+    // resumeCommand accepts no --enable-logging CLI flag; state carries it
+    const spawnArgs = captureSpawnArgs();
+    expect(spawnArgs).toContain('--resume');
+    expect(spawnArgs).not.toContain('--enable-logging');
+  });
+});
+```
+
+**주의:** 위 테스트들은 기존 mock 구조(tmux, lock, terminal, subprocess spawn)를 재사용한다. 실제 subprocess는 spawn되지 않고 arguments만 capture하여 검증. `startCommand`/`resumeCommand` 시그니처가 각각 `enableLogging?: boolean` 옵션을 받도록 Task 10에서 이미 확장됨.
+
+- [ ] **Step 4: 전체 테스트 실행**
 
 ```bash
 npm test
@@ -2404,15 +2508,18 @@ npm test
 
 Expected: 전체 PASS.
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
 git add tests/
-git commit -m "test(logging): update existing test call sites for new signatures
+git commit -m "test(logging): update existing test call sites + add CLI-layer wiring tests
 
 - createInitialState with loggingEnabled parameter
 - runPhaseLoop and handle* functions with NoopLogger
-- sidecarReplayAllowed object passed where required"
+- sidecarReplayAllowed object passed where required
+- run.test.ts: verify startCommand persists loggingEnabled into state.json
+- run.test.ts: verify __inner spawn args do NOT include --enable-logging (state-driven)
+- resume-cmd.test.ts: verify resumeCommand inherits loggingEnabled from state"
 ```
 
 ---
