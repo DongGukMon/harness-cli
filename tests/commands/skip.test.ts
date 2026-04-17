@@ -22,7 +22,7 @@ function setupRun(repo: { path: string }, options: Partial<Record<string, unknow
   mkdirSync(runDir, { recursive: true });
 
   const baseCommit = execSync('git rev-parse HEAD', { cwd: repo.path, encoding: 'utf-8' }).trim();
-  const state = createInitialState(runId, 'test task', baseCommit, '/fake/codex', false);
+  const state = createInitialState(runId, 'test task', baseCommit, false);
   Object.assign(state, options);
   writeState(runDir, state);
   setCurrentRun(harnessDir, runId);

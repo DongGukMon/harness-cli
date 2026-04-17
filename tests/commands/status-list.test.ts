@@ -10,7 +10,7 @@ import { setCurrentRun } from '../../src/root.js';
 function makeRunState(harnessDir: string, runId: string, overrides: Partial<Record<string, unknown>> = {}) {
   const runDir = join(harnessDir, runId);
   mkdirSync(runDir, { recursive: true });
-  const state = createInitialState(runId, 'test task', 'abc123', '/fake/codex', false);
+  const state = createInitialState(runId, 'test task', 'abc123', false);
   Object.assign(state, overrides);
   writeState(runDir, state);
   return state;

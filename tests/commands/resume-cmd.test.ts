@@ -62,7 +62,7 @@ function setupRun(repo: { path: string }, overrides: Partial<Record<string, unkn
   mkdirSync(runDir, { recursive: true });
 
   const baseCommit = execSync('git rev-parse HEAD', { cwd: repo.path, encoding: 'utf-8' }).trim();
-  const state = createInitialState(runId, 'test task', baseCommit, '/fake/codex', false);
+  const state = createInitialState(runId, 'test task', baseCommit, false);
   Object.assign(state, overrides);
   writeState(runDir, state);
 

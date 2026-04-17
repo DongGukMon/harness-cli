@@ -169,6 +169,13 @@ export async function innerCommand(runId: string, options: InnerOptions = {}): P
 
   // Step 5.8: Prompt for model selection
   state.phasePresets = await promptModelConfig(state.phasePresets, inputManager, remainingPhases);
+
+  // Clear reopen_config pendingAction (written by onConfigCancel) — model selection succeeded
+  if (state.pendingAction?.type === 'reopen_config') {
+    state.pendingAction = null;
+    state.pauseReason = null;
+    state.status = 'in_progress';
+  }
   writeState(runDir, state);
 
   // Step 5.9: Runner-aware preflight

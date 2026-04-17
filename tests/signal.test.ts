@@ -26,7 +26,7 @@ function makeCtx(
   overrides: Partial<SignalContext> & { harnessDir: string; runId: string },
 ): SignalContext {
   const state: HarnessState = {
-    ...createInitialState(overrides.runId, 'test task', 'abc123', '/bin/codex', false),
+    ...createInitialState(overrides.runId, 'test task', 'abc123', false),
     currentPhase: 1,
   };
 
@@ -129,7 +129,7 @@ describe('handleShutdown', () => {
     const runId = 'run-interactive';
 
     let savedState: HarnessState | undefined;
-    const baseState = createInitialState(runId, 'task', 'abc', '/bin/codex', false);
+    const baseState = createInitialState(runId, 'task', 'abc', false);
     baseState.currentPhase = 1;
     baseState.phases['1'] = 'in_progress';
 
@@ -157,7 +157,7 @@ describe('handleShutdown', () => {
       const runId = `run-gate-phase-${phase}`;
 
       let savedState: HarnessState | undefined;
-      const baseState = createInitialState(runId, 'task', 'abc', '/bin/codex', false);
+      const baseState = createInitialState(runId, 'task', 'abc', false);
       baseState.currentPhase = phase;
       baseState.phases[String(phase)] = 'in_progress';
 
@@ -188,7 +188,7 @@ describe('handleShutdown', () => {
     const runId = 'run-verify-phase-6';
 
     let savedState: HarnessState | undefined;
-    const baseState = createInitialState(runId, 'task', 'abc', '/bin/codex', false);
+    const baseState = createInitialState(runId, 'task', 'abc', false);
     baseState.currentPhase = 6;
     baseState.phases['6'] = 'in_progress';
 
@@ -264,7 +264,7 @@ describe('handleShutdown', () => {
     const runId = 'run-paused-head';
 
     let savedState: HarnessState | undefined;
-    const baseState = createInitialState(runId, 'task', 'abc', '/bin/codex', false);
+    const baseState = createInitialState(runId, 'task', 'abc', false);
 
     const ctx = makeCtx({
       harnessDir: dir,
@@ -290,7 +290,7 @@ describe('handleShutdown', () => {
     const runId = 'run-no-git';
 
     let savedState: HarnessState | undefined;
-    const baseState = createInitialState(runId, 'task', 'abc', '/bin/codex', false);
+    const baseState = createInitialState(runId, 'task', 'abc', false);
 
     const ctx = makeCtx({
       harnessDir: dir,
@@ -399,7 +399,7 @@ describe('SIGUSR1 handler', () => {
     const runDir = path.join(dir, runId);
     fs.mkdirSync(runDir, { recursive: true });
 
-    const baseState = createInitialState(runId, 'task', 'abc', '/bin/codex', false);
+    const baseState = createInitialState(runId, 'task', 'abc', false);
     baseState.currentPhase = 3;
     baseState.phases['3'] = 'in_progress';
     baseState.tmuxSession = 'test-session';
@@ -446,7 +446,7 @@ describe('SIGUSR1 handler', () => {
     const runDir = path.join(dir, runId);
     fs.mkdirSync(runDir, { recursive: true });
 
-    const baseState = createInitialState(runId, 'task', 'abc', '/bin/codex', false);
+    const baseState = createInitialState(runId, 'task', 'abc', false);
     baseState.currentPhase = 5;
     baseState.phases['1'] = 'completed';
     baseState.phases['2'] = 'completed';
@@ -492,7 +492,7 @@ describe('SIGUSR1 handler', () => {
     const runDir = path.join(dir, runId);
     fs.mkdirSync(runDir, { recursive: true });
 
-    const baseState = createInitialState(runId, 'task', 'abc', '/bin/codex', false);
+    const baseState = createInitialState(runId, 'task', 'abc', false);
     baseState.currentPhase = 3;
 
     let currentState = { ...baseState };

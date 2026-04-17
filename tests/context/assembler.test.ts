@@ -26,7 +26,6 @@ function makeState(overrides: Partial<HarnessState> = {}): HarnessState {
     'my-run',
     '/tasks/my-task.md',
     'deadbeef',
-    '/usr/local/bin/codex',
     false
   );
   return { ...base, ...overrides };

@@ -53,7 +53,6 @@ function makeState(overrides: Partial<HarnessState> = {}): HarnessState {
     'test-run',
     '/tasks/test-task.md',
     'deadbeef',
-    '/usr/local/bin/codex',
     false
   );
   return {
