@@ -6,6 +6,8 @@ import { assembleGatePrompt } from '../context/assembler.js';
 import { updateLockChild, clearLockChild } from '../lock.js';
 import { GATE_TIMEOUT_MS, SIGTERM_WAIT_MS } from '../config.js';
 import { getProcessStartTime, killProcessGroup } from '../process.js';
+import { parseVerdict, buildGateResult } from './verdict.js';
+export { parseVerdict, buildGateResult } from './verdict.js';
 
 function sidecarRaw(runDir: string, phase: number): string {
   return path.join(runDir, `gate-${phase}-raw.txt`);
@@ -17,58 +19,6 @@ function sidecarResult(runDir: string, phase: number): string {
 
 function sidecarError(runDir: string, phase: number): string {
   return path.join(runDir, `gate-${phase}-error.md`);
-}
-
-/**
- * Parse verdict from raw gate output.
- * Finds ## Verdict header, then first APPROVE or REJECT token after it.
- * Extracts content between ## Comments and ## Summary as comments.
- */
-export function parseVerdict(
-  rawOutput: string
-): { verdict: 'APPROVE' | 'REJECT'; comments: string } | null {
-  const lines = rawOutput.split('\n');
-
-  // Find ## Verdict header
-  const verdictHeaderIdx = lines.findIndex(
-    (l) => l.trim().toLowerCase() === '## verdict'
-  );
-  if (verdictHeaderIdx === -1) return null;
-
-  // Find first line that is exactly APPROVE or REJECT (optionally with trailing punctuation)
-  // after ## Verdict. Must be a standalone token — prose like "Do not approve" won't match.
-  let verdict: 'APPROVE' | 'REJECT' | null = null;
-  for (let i = verdictHeaderIdx + 1; i < lines.length; i++) {
-    const trimmed = lines[i].trim().toUpperCase();
-    // Stop if we hit the next section (e.g. ## Comments) before finding a verdict
-    if (trimmed.startsWith('##')) break;
-    // Match standalone APPROVE or REJECT (allow trailing punctuation like `.` or `!`)
-    if (/^APPROVE\b[\s.!]*$/.test(trimmed)) {
-      verdict = 'APPROVE';
-      break;
-    }
-    if (/^REJECT\b[\s.!]*$/.test(trimmed)) {
-      verdict = 'REJECT';
-      break;
-    }
-  }
-
-  if (verdict === null) return null;
-
-  // Extract comments between ## Comments and ## Summary
-  const commentsHeaderIdx = lines.findIndex(
-    (l) => l.trim().toLowerCase() === '## comments'
-  );
-  let comments = '';
-  if (commentsHeaderIdx !== -1) {
-    const summaryHeaderIdx = lines.findIndex(
-      (l, idx) => idx > commentsHeaderIdx && l.trim().toLowerCase() === '## summary'
-    );
-    const endIdx = summaryHeaderIdx === -1 ? lines.length : summaryHeaderIdx;
-    comments = lines.slice(commentsHeaderIdx + 1, endIdx).join('\n').trim();
-  }
-
-  return { verdict, comments };
 }
 
 /**
@@ -120,42 +70,6 @@ export function checkGateSidecars(runDir: string, phase: number): GatePhaseResul
     verdict: parsed.verdict,
     comments: parsed.comments,
     rawOutput,
-  };
-}
-
-/**
- * Build GatePhaseResult from subprocess exit data.
- * Exit code is authoritative: non-zero always yields GateError.
- */
-export function buildGateResult(
-  exitCode: number,
-  stdout: string,
-  stderr: string
-): GatePhaseResult {
-  if (exitCode !== 0) {
-    return {
-      type: 'error',
-      error: `Gate subprocess exited with code ${exitCode}`,
-      rawOutput: stdout,
-    };
-  }
-
-  const parsed = parseVerdict(stdout);
-  if (!parsed) {
-    return {
-      type: 'error',
-      error: 'Gate output missing ## Verdict header',
-      rawOutput: stdout,
-    };
-  }
-
-  void stderr; // stderr captured but not used on success
-
-  return {
-    type: 'verdict',
-    verdict: parsed.verdict,
-    comments: parsed.comments,
-    rawOutput: stdout,
   };
 }
 
