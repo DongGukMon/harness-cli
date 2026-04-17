@@ -598,19 +598,21 @@ describe('FileSessionLogger — meta.json + bootstrap flags', () => {
     }
   });
 
-  it('writeMeta is idempotent (second call does not clobber resumedAt)', () => {
+  it('updateMeta is idempotent: multiple pushResumedAt preserve prior entries and startedAt', () => {
     const harnessDir = makeTempHarnessDir();
     const sessionsRoot = path.join(harnessDir, 'sessions-root');
     const logger = new FileSessionLogger('runWM', harnessDir, { sessionsRoot });
     logger.writeMeta({ task: 'initial' });
-    // Simulate second writeMeta (should not clobber existing resumedAt from first write)
-    logger.updateMeta({ pushResumedAt: 1000 });
-    logger.writeMeta({ task: 'initial' });  // idempotent — recreates meta but should be stable
-    // Verify meta still contains task
     const repoKey = computeRepoKey(harnessDir);
-    const meta = JSON.parse(fs.readFileSync(path.join(sessionsRoot, repoKey, 'runWM', 'meta.json'), 'utf-8'));
+    const metaPath = path.join(sessionsRoot, repoKey, 'runWM', 'meta.json');
+    const initialStartedAt = JSON.parse(fs.readFileSync(metaPath, 'utf-8')).startedAt;
+
+    logger.updateMeta({ pushResumedAt: 1000 });
+    logger.updateMeta({ pushResumedAt: 2000 });
+    const meta = JSON.parse(fs.readFileSync(metaPath, 'utf-8'));
     expect(meta.task).toBe('initial');
-    expect(typeof meta.startedAt).toBe('number');
+    expect(meta.startedAt).toBe(initialStartedAt);  // not clobbered
+    expect(meta.resumedAt).toEqual([1000, 2000]);   // both pushes preserved (§6.3 idempotent)
   });
 
   it('updateMeta on missing meta.json: bootstrap with bootstrapOnResume=true + resumedAt push', () => {
@@ -2300,13 +2302,21 @@ describe('forcePassGate / forcePassVerify — emit exclusivity', () => {
   });
 });
 
-describe('handleGatePhase — gate_verdict emission', () => {
-  it('APPROVE path emits gate_verdict with runner=codex when Codex preset', async () => {
+describe('handleGatePhase — gate_verdict emission (event sequencing only)', () => {
+  // NOTE: tests/phases/runner.test.ts globally mocks src/phases/gate.js, so these tests
+  // can only validate event emission sequences based on the mocked GatePhaseResult they
+  // inject. Runner selection, sidecar replay, and recoveredFromSidecar propagation
+  // from gate.ts are validated in tests/phases/gate.test.ts (Task 15 Step 4), not here.
+
+  it('APPROVE result (runner=codex in result) emits gate_verdict with matching fields', async () => {
     const { logger, eventsPath, cleanup } = makeLogger('gv1');
     try {
       const state = buildMinimalState({ phase: 2 });
-      state.phasePresets['2'] = 'codex-high';  // real Codex preset from config.ts
-      vi.spyOn(/* codex */, 'runCodexGate').mockResolvedValue({ exitCode: 0, rawOutput: 'VERDICT: APPROVE', tokensTotal: 45000 } as any);
+      // Inject the mocked runGatePhase to return a Codex APPROVE
+      vi.spyOn(gateModule, 'runGatePhase').mockResolvedValue({
+        type: 'verdict', verdict: 'APPROVE', comments: 'ok', rawOutput: 'APPROVE',
+        runner: 'codex', promptBytes: 1000, durationMs: 5000, tokensTotal: 45000,
+      } as any);
       await handleGatePhase(state, 2, /* ... */, logger, { value: false });
       const events = readEvents(eventsPath);
       const verdicts = events.filter(e => e.event === 'gate_verdict');
@@ -2317,11 +2327,15 @@ describe('handleGatePhase — gate_verdict emission', () => {
     } finally { cleanup(); }
   });
 
-  it('REJECT path emits gate_verdict then gate_retry in order', async () => {
+  it('REJECT result emits gate_verdict then gate_retry in order', async () => {
     const { logger, eventsPath, cleanup } = makeLogger('gv2');
     try {
       const state = buildMinimalState({ phase: 2 });
-      // Mock runCodexGate → REJECT; feedback file exists
+      vi.spyOn(gateModule, 'runGatePhase').mockResolvedValue({
+        type: 'verdict', verdict: 'REJECT', comments: 'bad', rawOutput: 'REJECT',
+        runner: 'codex', promptBytes: 1000, durationMs: 5000,
+      } as any);
+      // Create feedback file mock
       await handleGatePhase(state, 2, /* ... REJECT setup ... */, logger, { value: false });
       const events = readEvents(eventsPath);
       const verdict = events.find(e => e.event === 'gate_verdict');
@@ -2333,18 +2347,24 @@ describe('handleGatePhase — gate_verdict emission', () => {
     } finally { cleanup(); }
   });
 
-  it('Legacy sidecar replay path does NOT emit gate_verdict (runner=undefined)', async () => {
+  it('Legacy-shape result (runner=undefined) does NOT emit gate_verdict', async () => {
     const { logger, eventsPath, cleanup } = makeLogger('gv3');
     try {
-      // Pre-populate runDir with a legacy sidecar (no runner field)
       const state = buildMinimalState({ phase: 2 });
-      // Force sidecarReplayAllowed.value = true and have replay return result with runner=undefined
-      await handleGatePhase(state, 2, /* ... with legacy sidecar ... */, logger, { value: true });
+      vi.spyOn(gateModule, 'runGatePhase').mockResolvedValue({
+        type: 'verdict', verdict: 'APPROVE', comments: 'ok', rawOutput: 'APPROVE',
+        recoveredFromSidecar: true,
+        // runner/promptBytes/durationMs omitted → simulates legacy sidecar hydration
+      } as any);
+      await handleGatePhase(state, 2, /* ... */, logger, { value: true });
       const events = readEvents(eventsPath);
-      expect(events.some(e => e.event === 'gate_verdict')).toBe(false);  // logger emit skipped per §5.2
+      expect(events.some(e => e.event === 'gate_verdict')).toBe(false);  // emit skipped per §5.2
     } finally { cleanup(); }
   });
 });
+
+// Sidecar replay behavior (one-shot flag consumption, legacy hydration) is validated
+// at the non-mocked gate.ts boundary in tests/phases/gate.test.ts — see Task 15 Step 4.
 ```
 
 **주의:** 테스트 작성 시 실제 runner.ts handler 시그니처에 맞춰 파라미터 전달. mockInputManagerWithChoice 등 헬퍼는 실제 InputManager 인터페이스에 기반한 test double로 구현 (prompt timing 추적 포함).
@@ -2697,6 +2717,25 @@ describe('bootstrapSessionLogger — session event bootstrap', () => {
     const state = buildMinimalState({ loggingEnabled: false, task: 'test' });
     await bootstrapSessionLogger('r3', harnessDir, state, false, { sessionsRoot });
     expect(fs.existsSync(sessionsRoot)).toBe(false);
+  });
+
+  it('non-resume + meta.json exists (idempotent crash re-entry): emits session_resumed, not session_start', async () => {
+    const { bootstrapSessionLogger } = await import('../../src/commands/inner.js');
+    const harnessDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bootstrap-reentry-'));
+    const sessionsRoot = path.join(harnessDir, 'sessions');
+    const state = buildMinimalState({ loggingEnabled: true, task: 'test' });
+    // First bootstrap creates meta.json
+    await bootstrapSessionLogger('r4', harnessDir, state, false, { sessionsRoot });
+    // Second bootstrap with isResume=false but meta.json exists — §5.1 idempotent re-entry
+    await bootstrapSessionLogger('r4', harnessDir, state, false, { sessionsRoot });
+    const repoKey = computeRepoKey(harnessDir);
+    const events = fs.readFileSync(path.join(sessionsRoot, repoKey, 'r4', 'events.jsonl'), 'utf-8').trim().split('\n').map(l => JSON.parse(l));
+    const starts = events.filter(e => e.event === 'session_start');
+    const resumes = events.filter(e => e.event === 'session_resumed');
+    expect(starts.length).toBe(1);   // only the first bootstrap
+    expect(resumes.length).toBe(1);  // second bootstrap emits session_resumed per §5.1
+    const meta = JSON.parse(fs.readFileSync(path.join(sessionsRoot, repoKey, 'r4', 'meta.json'), 'utf-8'));
+    expect(meta.resumedAt.length).toBe(1);  // idempotent re-entry pushes resumedAt
   });
 });
 ```
