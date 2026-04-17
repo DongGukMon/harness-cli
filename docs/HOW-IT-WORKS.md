@@ -212,6 +212,24 @@ Focus review on changes within the harness ranges above.
 
 ---
 
+## Model Selection
+
+Each interactive phase (1, 3, 5) and each gate phase (2, 4, 7) has a configurable model preset. Phase 6 (automated shell verification) has no AI model. At the start of every `harness run` or `harness resume`, the CLI presents a model-selection UI (via `promptModelConfig()` in `src/ui.ts`) that lets the user assign a preset to each remaining phase before any phase work begins.
+
+Available presets are defined in `MODEL_PRESETS` in `src/config.ts`: `opus-max` (Claude Opus 4.6 / max effort), `opus-high`, `sonnet-high`, `codex-high` (Codex gpt-5.4 / high effort), and `codex-medium`. Default per-phase assignments come from `PHASE_DEFAULTS` in the same file (e.g., phase 1 defaults to `opus-max`, phases 3 and 5 to `sonnet-high`, gates 2/4/7 to `codex-high`). The model shown in each phase table above is the default preset; users can override per-phase at run start. Selections are persisted in `state.phasePresets` and survive resume; `migrateState()` in `src/state.ts` backfills defaults for older state files that predate the preset system.
+
+---
+
+## Runner Architecture
+
+Phases that involve an AI agent are dispatched to one of two runners depending on the preset's `runner` field (`claude` or `codex`).
+
+**`src/runners/claude.ts`** handles Claude interactive and gate modes. Interactive: Claude is launched inside the tmux workspace pane via `sendKeysToPane` using a wrapper that writes the Claude process PID to a sentinel file (`claude-<phase>-<attemptId>.pid`); the harness polls `pollForPidFile` to capture the PID, then watches for the phase completion sentinel (`phase-N.done`) using chokidar + PID polling. Gate: a `claude --print` subprocess is spawned with stdio piped; stdout is captured for verdict parsing. **`src/runners/codex.ts`** handles Codex interactive and gate modes. Interactive: a `codex exec --sandbox <level> --full-auto -` subprocess reads the assembled prompt from stdin and streams `[codex]`-prefixed progress lines to the control panel; there is no sentinel file — artifacts are validated directly after subprocess exit. Gate: `codex exec -` with stdin prompt, stdout captured.
+
+Shared verdict helpers (`parseVerdict`, `buildGateResult`) live in `src/phases/verdict.ts` to avoid circular imports between the runner files and `src/phases/gate.ts`. Phase dispatch: `runGatePhase()` in `src/phases/gate.ts` and `runInteractivePhase()` in `src/phases/interactive.ts` both call `getPresetById(state.phasePresets[phase])` to resolve the preset and then branch on `preset.runner`.
+
+---
+
 ## Session clear points
 
 A "session clear" means a previous Claude session's in-memory context is completely discarded. The CLI creates explicit clear points by spawning fresh OS processes.
@@ -361,6 +379,14 @@ So hitting Ctrl-C is always safe: state is preserved, and `harness resume` picks
 
 ---
 
+## InputManager
+
+`src/input.ts` exports `InputManager`, which owns stdin in raw mode for the entire lifetime of the `__inner` process. It is started (`inputManager.start('configuring')`) before model selection and stopped (`inputManager.stop()`) only after the phase loop exits. Without raw-mode ownership, arrow-key presses while no readline prompt is active emit raw ANSI sequences (`^[[A`) that clutter the control panel output.
+
+The manager tracks four internal states: `idle` (phase loop running, Claude owns the terminal), `configuring` (model-selection UI active), `prompt-single` (waiting for a single keypress via `waitForKey(validKeys)`), and `prompt-line` (text input via `waitForLine()`). Ctrl+C routing depends on the `isPreLoop` flag: before `enterPhaseLoop()` is called (during model selection), Ctrl+C invokes `onConfigCancel`, which persists state as paused and exits cleanly. After `enterPhaseLoop()`, Ctrl+C is forwarded as `SIGINT` to trigger the normal shutdown handler. The initial task prompt (when no `task.md` exists yet) uses a standard readline interface rather than InputManager — per ADR-6/7, stdin raw mode is not active at that point.
+
+---
+
 ## Error recovery
 
 Crash-safe recovery is achieved through:
@@ -378,6 +404,24 @@ The authoritative resume algorithm is in `src/resume.ts`. Key branches:
 - Phase 1/3 in `error` with valid artifacts → retry normalize_artifact_commit
 - Phase 6 in `in_progress` with `verify-result.json` → apply stored PASS/FAIL/ERROR outcome
 - Phase 6 in `error` with valid eval report → retry normalize
+
+---
+
+## Resume + Config-Cancel
+
+`harness resume` passes a `--resume` flag through to `__inner`; `inner.ts` receives it as `options.resume`. When the flag is set and a `task.md` already exists, `inner.ts` skips the task-prompt step and immediately processes any `pendingAction` stored in `state.json`. This allows recovery from any paused state — including mid-phase crashes, gate escalations, and the config-cancel flow described below.
+
+Config-cancel is a special pause mode triggered when the user presses Ctrl+C during the model-selection step. The InputManager's `onConfigCancel` handler sets `state.pauseReason = 'config-cancel'` and `state.pendingAction = { type: 'reopen_config' }`, writes state atomically, and exits. On resume, `inner.ts` sees the existing task, loads the state, calls `getEffectiveReopenTarget()` (defined in `src/config.ts`) to compute which phase to show in the model selector, and re-enters the selection UI — effectively restarting from just before any phase was launched. `getEffectiveReopenTarget` resolves the target phase from the pending action: `reopen_phase` → `targetPhase`; `show_escalation` → `sourcePhase`; `reopen_config` → uses `currentPhase` directly.
+
+---
+
+## Bug Fixes
+
+Two durable state fields address races that could corrupt artifacts or leave orphan processes:
+
+`state.phaseReopenFlags` (a `Record<'1'|'3'|'5', boolean>`) is set to `true` before a phase is queued to reopen after a gate REJECT. `preparePhase()` in `src/phases/interactive.ts` reads this flag via `isReopen` and, when true, skips deleting the phase's artifacts — preserving the existing spec or plan so Claude can edit rather than start from scratch. The flag is cleared to `false` at the end of `preparePhase()`.
+
+`state.lastWorkspacePid` + `state.lastWorkspacePidStartTime` track the PID and start-time of the most recently spawned Claude workspace process. Before launching a new interactive phase, `runClaudeInteractive()` checks whether the previous PID is still alive (verified by start-time to guard against PID reuse) and sends it a Ctrl+C before proceeding. `handleShutdown` in `src/signal.ts` performs a dual-PID kill: it terminates both the current child process group (via the repo lock's `childPid`) and the saved `lastWorkspacePid`, preventing orphan Claude sessions from persisting after harness exits.
 
 ---
 
