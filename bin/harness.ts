@@ -81,9 +81,10 @@ program
   .description('(internal) run phase loop inside tmux session')
   .option('--root <dir>', 'explicit .harness/ parent directory')
   .option('--control-pane <paneId>', 'tmux pane ID for control panel')
-  .action(async (runId: string, opts: { root?: string; controlPane?: string }) => {
+  .option('--resume', 'resume mode (invoked from harness resume)')
+  .action(async (runId: string, opts: { root?: string; controlPane?: string; resume?: boolean }) => {
     const globalOpts = program.opts();
-    await innerCommand(runId, { root: opts.root ?? globalOpts.root, controlPane: opts.controlPane });
+    await innerCommand(runId, { root: opts.root ?? globalOpts.root, controlPane: opts.controlPane, resume: opts.resume });
   });
 
 program.parseAsync(process.argv).catch((err) => {

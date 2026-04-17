@@ -12,7 +12,13 @@ import {
   handleVerifyEscalation,
   handleVerifyError,
 } from './phases/runner.js';
+import { InputManager } from './input.js';
 import type { HarnessState, PhaseNumber } from './types.js';
+
+/** Create a no-op InputManager for use in resumeRun (deferred refactor: inputManager passed by inner.ts in future). */
+function createNoOpInputManager(): InputManager {
+  return new InputManager();
+}
 
 /**
  * Resume a run. Validates state, performs recovery based on pendingAction or
@@ -58,7 +64,7 @@ export async function resumeRun(
     return;
   }
 
-  await runPhaseLoop(state, harnessDir, runDir, cwd);
+  await runPhaseLoop(state, harnessDir, runDir, cwd, createNoOpInputManager());
 }
 
 /**
@@ -651,7 +657,7 @@ async function replayPendingAction(
             state.currentPhase = action.targetPhase + 1;
             writeState(runDir, state);
             // Continue phase loop from the next phase
-            await runPhaseLoop(state, harnessDir, runDir, cwd);
+            await runPhaseLoop(state, harnessDir, runDir, cwd, createNoOpInputManager());
             return;
           } else {
             // Artifact validation failed — treat sentinel as stale
@@ -716,14 +722,14 @@ async function replayPendingAction(
 
       if (wasVerifyEscalation) {
         const feedbackPath = action.feedbackPaths[0] ?? join(runDir, 'verify-feedback.md');
-        await handleVerifyEscalation(feedbackPath, state, runDir, cwd);
+        await handleVerifyEscalation(feedbackPath, state, runDir, cwd, createNoOpInputManager());
       } else {
         // Gate escalation: targetPhase is the rejected gate (2/4/7)
         const gatePhase = action.targetPhase as 2 | 4 | 7;
-        await handleGateEscalation(gatePhase, comments, state, runDir, cwd);
+        await handleGateEscalation(gatePhase, comments, state, runDir, cwd, createNoOpInputManager());
       }
       if ((state.status as string) === 'paused') return;
-      await runPhaseLoop(state, harnessDir, runDir, cwd);
+      await runPhaseLoop(state, harnessDir, runDir, cwd, createNoOpInputManager());
       return;
     }
     case 'show_verify_error': {
@@ -732,13 +738,21 @@ async function replayPendingAction(
       writeState(runDir, state);
 
       const errorPath = action.feedbackPaths[0] ?? undefined;
-      await handleVerifyError(errorPath, state, harnessDir, runDir, cwd);
+      await handleVerifyError(errorPath, state, harnessDir, runDir, cwd, createNoOpInputManager());
       if ((state.status as string) === 'paused') return;
-      await runPhaseLoop(state, harnessDir, runDir, cwd);
+      await runPhaseLoop(state, harnessDir, runDir, cwd, createNoOpInputManager());
       return;
+    }
+    case 'reopen_config': {
+      // Clear pendingAction — model selection will restart in inner.ts
+      state.pendingAction = null;
+      state.status = 'in_progress';
+      state.pauseReason = null;
+      writeState(runDir, state);
+      break;
     }
   }
 
   // After pendingAction handling, continue phase loop
-  await runPhaseLoop(state, harnessDir, runDir, cwd);
+  await runPhaseLoop(state, harnessDir, runDir, cwd, createNoOpInputManager());
 }

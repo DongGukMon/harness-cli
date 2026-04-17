@@ -8,12 +8,16 @@ import { readState, writeState } from '../state.js';
 import { runPhaseLoop } from '../phases/runner.js';
 import { registerSignalHandlers } from '../signal.js';
 import { killSession, killWindow, selectWindow, splitPane, paneExists, selectPane } from '../tmux.js';
-import { renderWelcome } from '../ui.js';
+import { renderWelcome, promptModelConfig } from '../ui.js';
+import { InputManager } from '../input.js';
+import { runRunnerAwarePreflight } from '../preflight.js';
+import { REQUIRED_PHASE_KEYS, getEffectiveReopenTarget } from '../config.js';
 import type { HarnessState } from '../types.js';
 
 export interface InnerOptions {
   root?: string;
   controlPane?: string;
+  resume?: boolean;
 }
 
 export async function innerCommand(runId: string, options: InnerOptions = {}): Promise<void> {
@@ -125,14 +129,69 @@ export async function innerCommand(runId: string, options: InnerOptions = {}): P
     cwd,
   });
 
-  // 5. Run phase loop
+  // Step 5.5: Resume recovery (if --resume flag)
+  // Note: resumeRun from src/resume.ts currently does recovery + runs phase loop.
+  // For now, we skip calling resumeRun here (deferred refactor).
+  // consumePendingAction already handles file-based actions.
+  // typed state.pendingAction (reopen_phase, etc.) will be replayed inside the phase loop
+  // via existing logic in runner.ts.
+
+  // Step 5.6: Create InputManager
+  const inputManager = new InputManager();
+  inputManager.onConfigCancel = () => {
+    state.status = 'paused';
+    state.pauseReason = 'config-cancel';
+    state.pendingAction = {
+      type: 'reopen_config',
+      targetPhase: state.currentPhase as any,
+      sourcePhase: null,
+      feedbackPaths: [],
+    };
+    writeState(runDir, state);
+    releaseLock(harnessDir, runId);
+    inputManager.stop();
+    process.exit(0);
+  };
+  inputManager.start('configuring');
+
+  // Step 5.7: Compute remaining phases (including pendingAction reopen target)
+  const remainingSet = new Set<string>();
+  for (const p of REQUIRED_PHASE_KEYS) {
+    if (Number(p) >= state.currentPhase && state.phases[p] !== 'completed') {
+      remainingSet.add(p);
+    }
+  }
+  const reopenTarget = state.pendingAction
+    ? getEffectiveReopenTarget(state.pendingAction)
+    : null;
+  if (reopenTarget !== null) remainingSet.add(String(reopenTarget));
+  const remainingPhases = [...remainingSet];
+
+  // Step 5.8: Prompt for model selection
+  state.phasePresets = await promptModelConfig(state.phasePresets, inputManager, remainingPhases);
+  writeState(runDir, state);
+
+  // Step 5.9: Runner-aware preflight
   try {
-    await runPhaseLoop(state, harnessDir, runDir, cwd);
+    runRunnerAwarePreflight(state.phasePresets, remainingPhases);
+  } catch (err) {
+    process.stderr.write(`Preflight failed: ${(err as Error).message}\n`);
+    inputManager.onConfigCancel?.();
+    return; // onConfigCancel calls process.exit(0)
+  }
+
+  // Step 5.10: Enter phase loop mode
+  inputManager.enterPhaseLoop();
+
+  // 6. Run phase loop
+  try {
+    await runPhaseLoop(state, harnessDir, runDir, cwd, inputManager);
   } finally {
+    inputManager.stop();
     releaseLock(harnessDir, runId);
   }
 
-  // 6. Cleanup tmux on completion
+  // 7. Cleanup tmux on completion
   if (state.tmuxMode === 'dedicated') {
     killSession(state.tmuxSession);
   } else {

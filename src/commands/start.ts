@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync, appendFileS
 import { join } from 'path';
 import { getGitRoot, getHead, generateRunId, hasStagedChanges, isWorkingTreeClean, isInGitRepo } from '../git.js';
 import { acquireLock, releaseLock, setLockHandoff, pollForHandoffComplete } from '../lock.js';
-import { getPreflightItems, runPreflight } from '../preflight.js';
+import { runPreflight } from '../preflight.js';
 import { findHarnessRoot, setCurrentRun } from '../root.js';
 import { createInitialState, writeState } from '../state.js';
 import { isInsideTmux, getCurrentSessionName, getActiveWindowId, createSession, createWindow, sendKeys, killSession, selectWindow, getDefaultPaneId } from '../tmux.js';
@@ -37,19 +37,9 @@ export async function startCommand(task: string | undefined, options: StartOptio
     cwd = options.root ?? process.cwd();
   }
 
-  // 3. Run full preflight (union of all phase types; dedup)
-  const allItems = [
-    ...getPreflightItems('interactive'),
-    ...getPreflightItems('gate'),
-    ...getPreflightItems('verify'),
-  ];
-  const uniqueItems = Array.from(new Set(allItems));
-  const preflightResult = runPreflight(uniqueItems, cwd);
-  const codexPath = preflightResult.codexPath;
-  if (!codexPath) {
-    process.stderr.write('Error: codex path not resolved in preflight.\n');
-    process.exit(1);
-  }
+  // 3. Run common preflight (node, tmux, tty, platform, verifyScript, jq)
+  // Runner-specific preflight (claude, codex) is deferred to inner.ts after model selection
+  runPreflight(['node', 'tmux', 'tty', 'platform', 'verifyScript', 'jq'], cwd);
 
   // 5. Working tree checks (skip if not in a git repo)
   const inGitRepo = isInGitRepo(cwd);
@@ -111,7 +101,7 @@ export async function startCommand(task: string | undefined, options: StartOptio
     }
 
     // 12. Create initial state
-    const state = createInitialState(runId, normalizedTask, baseCommit, codexPath, options.auto ?? false);
+    const state = createInitialState(runId, normalizedTask, baseCommit, options.auto ?? false);
 
     // 13. Save task.md (needed before Phase 1 spawn)
     try {

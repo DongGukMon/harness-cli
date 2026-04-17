@@ -2,7 +2,7 @@ import { existsSync } from 'fs';
 import { join } from 'path';
 import { getGitRoot } from '../git.js';
 import { acquireLock, readLock, releaseLock, setLockHandoff, pollForHandoffComplete } from '../lock.js';
-import { getPreflightItems, runPreflight, resolveCodexPath } from '../preflight.js';
+import { resolveCodexPath } from '../preflight.js';
 import { findHarnessRoot, getCurrentRun, setCurrentRun } from '../root.js';
 import { readState, writeState } from '../state.js';
 import { sessionExists, createSession, sendKeys, selectWindow, isInsideTmux, getCurrentSessionName, getActiveWindowId, createWindow, killSession, killWindow, paneExists, getDefaultPaneId, sendKeysToPane } from '../tmux.js';
@@ -10,17 +10,9 @@ import { openTerminalWindow } from '../terminal.js';
 import { isPidAlive } from '../process.js';
 import { HANDOFF_TIMEOUT_MS } from '../config.js';
 import { printError } from '../ui.js';
-import type { PhaseType } from '../types.js';
 
 export interface ResumeOptions {
   root?: string;
-}
-
-function phaseType(phase: number): PhaseType {
-  if (phase === 1 || phase === 3 || phase === 5) return 'interactive';
-  if (phase === 2 || phase === 4 || phase === 7) return 'gate';
-  if (phase === 6) return 'verify';
-  return 'ui_only';
 }
 
 export async function resumeCommand(runId?: string, options: ResumeOptions = {}): Promise<void> {
@@ -82,21 +74,16 @@ export async function resumeCommand(runId?: string, options: ResumeOptions = {})
     process.exit(1);
   }
 
-  // 6. Phase-scoped preflight (minimum for current phase)
-  const currentPhaseType = phaseType(state.currentPhase);
-  runPreflight(getPreflightItems(currentPhaseType), cwd);
+  // 6. (Runner-aware preflight deferred to inner.ts after model selection)
 
-  // 7. Verify codexPath still valid; re-discover if missing
-  if (!existsSync(state.codexPath)) {
+  // 7. Legacy codexPath compatibility (only for old runs with string codexPath)
+  if (state.codexPath !== null && !existsSync(state.codexPath)) {
     const resolved = resolveCodexPath();
-    if (resolved === null) {
-      process.stderr.write(
-        `Error: Codex companion not found. Install the openai-codex Claude plugin.\n`
-      );
-      process.exit(1);
+    if (resolved !== null) {
+      state.codexPath = resolved;
+      writeState(runDir, state);
     }
-    state.codexPath = resolved;
-    writeState(runDir, state);
+    // If null: Codex runner uses standalone CLI — preflight will verify in inner
   }
 
   // 8. Update current-run pointer (now that we're committed)
@@ -126,7 +113,7 @@ export async function resumeCommand(runId?: string, options: ResumeOptions = {})
 
     if (state.tmuxControlPane && paneExists(state.tmuxSession, state.tmuxControlPane)) {
       // Control pane valid → restart inner here
-      const innerCmd = `node ${harnessPath} __inner ${targetRunId} --control-pane ${state.tmuxControlPane}`;
+      const innerCmd = `node ${harnessPath} __inner ${targetRunId} --resume --control-pane ${state.tmuxControlPane}`;
       sendKeysToPane(state.tmuxSession, state.tmuxControlPane, innerCmd);
     } else {
       // Control pane stale → cleanup by mode, then fall through to Case 3
@@ -170,7 +157,7 @@ export async function resumeCommand(runId?: string, options: ResumeOptions = {})
   setLockHandoff(harnessDir, process.pid, sessionName);
 
   const harnessPath = process.argv[1];
-  const innerCmd = `node ${harnessPath} __inner ${targetRunId}`;
+  const innerCmd = `node ${harnessPath} __inner ${targetRunId} --resume`;
 
   if (!insideTmux) {
     createSession(sessionName, cwd);
