@@ -1722,18 +1722,22 @@ function checkGateSidecars(runDir: string, phase: GatePhase): GatePhaseResult | 
 rg -n "checkGateSidecars|GateResult" tests/phases/gate.test.ts
 ```
 
-- 기존 legacy-sidecar 테스트: "returns null for legacy sidecar without runner field"으로 재작성
-- 신규 extended-sidecar 테스트: "hydrates runner/promptBytes/durationMs from extended sidecar"
+- 기존 legacy-sidecar 테스트: replay는 유지, metadata 필드는 undefined임을 검증
+- 신규 extended-sidecar 테스트: runner/promptBytes/durationMs 등 metadata 필드 hydrate 검증
 
 예시:
 
 ```ts
-it('returns null for legacy sidecar without runner field (skipped by policy)', () => {
+it('still replays legacy sidecar; metadata fields are undefined', () => {
   const runDir = setupTempRunDir();
   fs.writeFileSync(path.join(runDir, 'gate-2-result.json'), JSON.stringify({ exitCode: 0, timestamp: 1700000000 }));
-  fs.writeFileSync(path.join(runDir, 'gate-2-raw.txt'), 'VERDICT: APPROVE');
+  fs.writeFileSync(path.join(runDir, 'gate-2-raw.txt'), 'VERDICT: APPROVE\ncomments: ok');
   const result = checkGateSidecars(runDir, 2);
-  expect(result).toBeNull();
+  expect(result).not.toBeNull();
+  expect(result?.type).toBe('verdict');
+  expect((result as any).runner).toBeUndefined();
+  expect((result as any).promptBytes).toBeUndefined();
+  // handleGatePhase will skip logger emit when result.runner is undefined
 });
 
 it('hydrates metadata from extended sidecar', () => {
@@ -2133,14 +2137,19 @@ describe('Integration: --enable-logging creates session files', () => {
     expect(fs.existsSync(path.join(sessionDir, 'summary.json'))).toBe(true);
   });
 
-  it('with loggingEnabled=false (NoopLogger), no files are created', () => {
-    const { NoopLogger } = require('../../src/logger.js');
-    const logger = new NoopLogger();
+  it('with loggingEnabled=false, createSessionLogger returns NoopLogger and no files are created', () => {
+    const { createSessionLogger } = require('../../src/logger.js');
+    const harnessDir = tempHarnessDir();
+    const sessionsRoot = path.join(harnessDir, 'sessions-root');
+    const logger = createSessionLogger('run-noop', harnessDir, false, { sessionsRoot });
+    expect(logger.constructor.name).toBe('NoopLogger');
     logger.writeMeta({ task: 't' });
+    logger.logEvent({ event: 'session_start', task: 't', autoMode: false, baseCommit: '', harnessVersion: 'v1', phase: 1 });
     logger.logEvent({ event: 'phase_start', phase: 1 });
-    // Nothing should be on disk since NoopLogger does nothing
-    // (no direct way to check without a sessions root, so just verify no throw)
-    expect(true).toBe(true);
+    logger.finalizeSummary({ status: 'completed', autoMode: false } as any);
+
+    // Verify the sessions directory was never created
+    expect(fs.existsSync(sessionsRoot)).toBe(false);
   });
 
   it('Codex gate APPROVE → gate_verdict with runner=codex, tokensTotal', () => {
@@ -2298,15 +2307,19 @@ describe('Integration: one-shot sidecar replay', () => {
     // would need to mock runner to avoid actual subprocess; alternatively verify via checkGateSidecars unit
   });
 
-  it('legacy sidecar without runner field is skipped by checkGateSidecars', () => {
+  it('legacy sidecar (no runner) still replays but with runner=undefined', () => {
     const { checkGateSidecars } = require('../../src/phases/gate.js');
     const runDir = fs.mkdtempSync(path.join(os.tmpdir(), 'legacy-'));
     const legacy = { exitCode: 0, timestamp: Date.now() };  // no runner field
     fs.writeFileSync(path.join(runDir, 'gate-2-result.json'), JSON.stringify(legacy));
-    fs.writeFileSync(path.join(runDir, 'gate-2-raw.txt'), 'VERDICT: APPROVE');
+    fs.writeFileSync(path.join(runDir, 'gate-2-raw.txt'), 'VERDICT: APPROVE\ncomments: ok');
 
     const result = checkGateSidecars(runDir, 2);
-    expect(result).toBeNull();
+    expect(result).not.toBeNull();
+    expect(result?.type).toBe('verdict');
+    expect((result as any).recoveredFromSidecar).toBe(true);
+    expect((result as any).runner).toBeUndefined();
+    // handleGatePhase will skip logging emit when runner is undefined (Task 16)
   });
 });
 
@@ -2454,12 +2467,13 @@ Expected: 통과.
 - [ ] 서로 다른 harnessDir → 서로 다른 repoKey → 별도 session 디렉토리
 - [ ] Resume → events.jsonl 보존 + session_resumed 추가 + meta.resumedAt[] push
 - [ ] **One-shot sidecar replay**: first gate on resume → replays once; flag.value=false 후 consumed
-- [ ] **Legacy sidecar policy**: `runner` 필드 없는 sidecar → `checkGateSidecars` returns null (skip)
+- [ ] **Legacy sidecar policy**: `runner` 필드 없는 sidecar → `checkGateSidecars` returns replay result (`recoveredFromSidecar: true`); `handleGatePhase`에서 `gate_verdict`/`gate_error` emit만 skip (replay 자체는 유지 → crash-recovery 보존)
 - [ ] **Extended sidecar hydration**: `runner`/`promptBytes`/`durationMs`/`tokensTotal` 필드 있는 sidecar → GatePhaseResult에 hydrate
 - [ ] **State persistence**: `state.loggingEnabled=true`가 state.json에 저장, resume 시 계승
 - [ ] **reopenFromGate accuracy**: phase 5 reopen이 verify(6)인 경우 `phase_start.reopenFromGate === 6`, gate 7인 경우 `=== 7`
 - [ ] **config-cancel lazy bootstrap**: `onConfigCancel`이 `runPhaseLoop` 진입 전에 발동될 때 → `session_start` (또는 resume 시 `session_resumed`) emit 직후 `session_end { status: 'paused' }` emit; summary.json.status === 'paused'; meta.json 생성 및 `resumedAt[]`에 timestamp push (resume case)
 - [ ] **Verify throw path**: `runVerifyPhase` throw 시 `phase_end { status: 'failed', details: { reason: 'verify_throw' } }` emit 후 `handleVerifyError`로 라우팅; throw 전파 없음
+- [ ] **force_pass emit 단독성**: `forcePassGate`/`forcePassVerify` 경로에서 정확히 1개의 `force_pass` 이벤트만 emit. 해당 phase에 대한 `phase_start`/`phase_end`/`gate_verdict`/`verify_result` 이벤트는 추가로 발행되지 않음 (§5.8)
 
 ### Regression (전체 테스트)
 - [ ] 기존 테스트 전체 PASS (플래그 없이 실행 시 NoopLogger 경로로 효과 무)
