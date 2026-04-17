@@ -2,15 +2,16 @@ import { describe, it, expect, afterEach } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { writeState, readState, createInitialState } from '../src/state.js';
+import { writeState, readState, createInitialState, migrateState } from '../src/state.js';
 import type { HarnessState } from '../src/types.js';
+import { PHASE_DEFAULTS } from '../src/config.js';
 
 function makeTmpDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'state-test-'));
 }
 
 function makeState(): HarnessState {
-  return createInitialState('run-abc', 'test task', 'deadbeef', '/usr/local/bin/codex', false);
+  return createInitialState('run-abc', 'test task', 'deadbeef', false);
 }
 
 const tmpDirs: string[] = [];
@@ -98,13 +99,13 @@ describe('readState', () => {
 
 describe('createInitialState', () => {
   it('returns correct defaults', () => {
-    const state = createInitialState('my-run', 'do the thing', 'abc123', '/bin/codex', true);
+    const state = createInitialState('my-run', 'do the thing', 'abc123', true);
 
     expect(state.runId).toBe('my-run');
     expect(state.task).toBe('do the thing');
     expect(state.baseCommit).toBe('abc123');
     expect(state.implRetryBase).toBe('abc123');
-    expect(state.codexPath).toBe('/bin/codex');
+    expect(state.codexPath).toBeNull();
     expect(state.autoMode).toBe(true);
     expect(state.currentPhase).toBe(1);
     expect(state.status).toBe('in_progress');
@@ -147,5 +148,74 @@ describe('createInitialState', () => {
     expect(state.artifacts.decisionLog).toBe('.harness/my-run/decisions.md');
     expect(state.artifacts.checklist).toBe('.harness/my-run/checklist.json');
     expect(state.artifacts.evalReport).toBe('docs/process/evals/my-run-eval.md');
+  });
+});
+
+describe('createInitialState (updated)', () => {
+  it('sets codexPath to null', () => {
+    const state = createInitialState('run-1', 'task', 'abc123', false);
+    expect(state.codexPath).toBeNull();
+  });
+
+  it('initializes phasePresets from PHASE_DEFAULTS', () => {
+    const state = createInitialState('run-1', 'task', 'abc123', false);
+    expect(state.phasePresets['1']).toBe('opus-max');
+    expect(state.phasePresets['5']).toBe('sonnet-high');
+  });
+
+  it('initializes phaseReopenFlags to false', () => {
+    const state = createInitialState('run-1', 'task', 'abc123', false);
+    expect(state.phaseReopenFlags).toEqual({ '1': false, '3': false, '5': false });
+  });
+
+  it('initializes lastWorkspacePid fields to null', () => {
+    const state = createInitialState('run-1', 'task', 'abc123', false);
+    expect(state.lastWorkspacePid).toBeNull();
+    expect(state.lastWorkspacePidStartTime).toBeNull();
+  });
+});
+
+describe('migrateState', () => {
+  it('backfills missing phasePresets', () => {
+    const raw = { runId: 'test' };
+    const migrated = migrateState(raw);
+    for (const key of ['1', '2', '3', '4', '5', '7']) {
+      expect(migrated.phasePresets[key]).toBe(PHASE_DEFAULTS[Number(key)]);
+    }
+  });
+
+  it('backfills individual missing phase keys', () => {
+    const raw = { phasePresets: { '1': 'opus-max' } };
+    const migrated = migrateState(raw);
+    expect(migrated.phasePresets['3']).toBe('sonnet-high');
+  });
+
+  it('replaces invalid preset IDs with defaults', () => {
+    const raw = { phasePresets: { '1': 'nonexistent', '2': 'codex-high' } };
+    const migrated = migrateState(raw);
+    expect(migrated.phasePresets['1']).toBe('opus-max');
+    expect(migrated.phasePresets['2']).toBe('codex-high');
+  });
+
+  it('backfills lastWorkspacePid and phaseReopenFlags', () => {
+    const migrated = migrateState({});
+    expect(migrated.lastWorkspacePid).toBeNull();
+    expect(migrated.lastWorkspacePidStartTime).toBeNull();
+    expect(migrated.phaseReopenFlags).toEqual({ '1': false, '3': false, '5': false });
+  });
+
+  it('sets codexPath to null if missing', () => {
+    const migrated = migrateState({});
+    expect(migrated.codexPath).toBeNull();
+  });
+
+  it('preserves phaseReopenFlags values through write/read cycle', () => {
+    const state = createInitialState('run-1', 'task', 'abc', false);
+    state.phaseReopenFlags['1'] = true;
+    // Simulate JSON round-trip
+    const raw = JSON.parse(JSON.stringify(state));
+    const migrated = migrateState(raw);
+    expect(migrated.phaseReopenFlags['1']).toBe(true);
+    expect(migrated.phaseReopenFlags['3']).toBe(false);
   });
 });
