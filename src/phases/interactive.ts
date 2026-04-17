@@ -4,13 +4,13 @@ import { randomUUID } from 'crypto';
 import { execSync } from 'child_process';
 import chokidar from 'chokidar';
 import type { HarnessState, InteractivePhase, Artifacts } from '../types.js';
-import { PHASE_MODELS, PHASE_EFFORTS, PHASE_ARTIFACT_FILES } from '../config.js';
+import { PHASE_ARTIFACT_FILES, getPresetById } from '../config.js';
 import { writeState } from '../state.js';
 import { getHead } from '../git.js';
-import { sendKeysToPane, pollForPidFile } from '../tmux.js';
 import { isPidAlive } from '../process.js';
 import { assembleInteractivePrompt } from '../context/assembler.js';
 import { printAdvisorReminder } from '../ui.js';
+import { runClaudeInteractive } from '../runners/claude.js';
 
 export interface InteractiveResult {
   status: 'completed' | 'failed';
@@ -27,29 +27,29 @@ export function preparePhase(
   state: HarnessState,
   harnessDir: string,
   runDir: string,
-  cwd: string
+  cwd: string,
+  isReopen: boolean = false,
 ): HarnessState {
   void harnessDir;
 
-  // Delete existing sentinel if present
+  // Always delete sentinel + interrupt flag
   const sentinelPath = path.join(runDir, `phase-${phase}.done`);
   try { fs.unlinkSync(sentinelPath); } catch { /* ignore */ }
-
-  // Delete stale interrupt flag (ADR-10: prevent immediate settle on retry)
   const interruptFlagPath = path.join(runDir, `interrupted-${phase}.flag`);
   try { fs.unlinkSync(interruptFlagPath); } catch { /* ignore */ }
 
-  // Phase 1/3: delete output artifact files to prevent stale mtime
-  const artifactKeys = PHASE_ARTIFACT_FILES[phase] as (keyof Artifacts)[] | undefined;
-  if (artifactKeys) {
-    for (const key of artifactKeys) {
-      const relPath = state.artifacts[key];
-      const absPath = path.isAbsolute(relPath) ? relPath : path.join(cwd, relPath);
-      try { fs.unlinkSync(absPath); } catch { /* ignore */ }
+  // Delete artifacts only on first run (not reopen)
+  if (!isReopen) {
+    const artifactKeys = PHASE_ARTIFACT_FILES[phase] as (keyof Artifacts)[] | undefined;
+    if (artifactKeys) {
+      for (const key of artifactKeys) {
+        const relPath = state.artifacts[key];
+        const absPath = path.isAbsolute(relPath) ? relPath : path.join(cwd, relPath);
+        try { fs.unlinkSync(absPath); } catch { /* ignore */ }
+      }
     }
   }
 
-  // Mutate state in place so the caller's reference sees the updates
   state.phaseAttemptId = { ...state.phaseAttemptId, [String(phase)]: randomUUID() };
   state.phaseOpenedAt = {
     ...state.phaseOpenedAt,
@@ -60,6 +60,9 @@ export function preparePhase(
   if (phase === 5) {
     try { state.implRetryBase = getHead(cwd); } catch { /* no git */ }
   }
+
+  // Clear the reopen flag after using it
+  state.phaseReopenFlags = { ...state.phaseReopenFlags, [String(phase)]: false };
 
   writeState(runDir, state);
   return state;
@@ -157,7 +160,7 @@ export function isValidChecklistSchema(absPath: string): boolean {
 }
 
 /**
- * Run an interactive phase. Spawns Claude subprocess, watches for sentinel + artifacts.
+ * Run an interactive phase. Dispatches to claude or codex runner based on preset.
  */
 export async function runInteractivePhase(
   phase: InteractivePhase,
@@ -166,45 +169,47 @@ export async function runInteractivePhase(
   runDir: string,
   cwd: string
 ): Promise<InteractiveResult> {
-  // Step 1: Pre-spawn cleanup + state update
-  const updatedState = preparePhase(phase, state, harnessDir, runDir, cwd);
+  const isReopen = state.phaseReopenFlags[String(phase)] ?? false;
+  const updatedState = preparePhase(phase, state, harnessDir, runDir, cwd, isReopen);
 
-  // Step 2: Assemble prompt and write to file
+  // Resolve preset
+  const presetId = updatedState.phasePresets[String(phase)];
+  const preset = getPresetById(presetId);
+  if (!preset) {
+    return { status: 'failed' };
+  }
+
+  // Assemble prompt and write to file
   const prompt = assembleInteractivePrompt(phase, updatedState, harnessDir);
   const promptFile = path.join(runDir, `phase-${phase}-init-prompt.md`);
   fs.writeFileSync(promptFile, prompt, 'utf-8');
 
-  // Step 3: Spawn Claude in workspace pane via send-keys
-  printAdvisorReminder(phase);
+  printAdvisorReminder(phase, preset.runner);
   await new Promise<void>((resolve) => setTimeout(resolve, 300));
 
-  const sessionName = updatedState.tmuxSession;
-  const workspacePane = updatedState.tmuxWorkspacePane;
-
-  // Ctrl-C pre-send to clear any in-progress input (ADR-4)
-  sendKeysToPane(sessionName, workspacePane, 'C-c');
-  await new Promise<void>((resolve) => setTimeout(resolve, 300));
-
-  // PID file (phase/attempt scoped)
-  const pidFile = path.join(runDir, `claude-${phase}-${updatedState.phaseAttemptId[String(phase)]}.pid`);
-  if (fs.existsSync(pidFile)) fs.unlinkSync(pidFile);
-
-  // Launch Claude via exec wrapper (PID file = Claude's PID)
-  const claudeArgs = `--dangerously-skip-permissions --model ${PHASE_MODELS[phase]} --effort ${PHASE_EFFORTS[phase]} @${path.resolve(promptFile)}`;
-  const wrappedCmd = `sh -c 'echo $$ > ${pidFile}; exec claude ${claudeArgs}'`;
-  sendKeysToPane(sessionName, workspacePane, wrappedCmd);
-
-  // Capture Claude PID
-  const claudePid = await pollForPidFile(pidFile, 5000);
-
-  const sentinelPath = path.join(runDir, `phase-${phase}.done`);
-  const attemptId = updatedState.phaseAttemptId[String(phase)] ?? '';
-
-  const phaseResult = await waitForPhaseCompletion(
-    sentinelPath, attemptId, claudePid, phase, updatedState, cwd, runDir
-  );
-
-  return phaseResult;
+  // Dispatch to runner
+  if (preset.runner === 'claude') {
+    const { pid: claudePid } = await runClaudeInteractive(
+      phase, updatedState, preset, harnessDir, runDir, promptFile,
+    );
+    const sentinelPath = path.join(runDir, `phase-${phase}.done`);
+    const attemptId = updatedState.phaseAttemptId[String(phase)] ?? '';
+    return await waitForPhaseCompletion(
+      sentinelPath, attemptId, claudePid, phase, updatedState, cwd, runDir
+    );
+  } else {
+    // Codex runner
+    const { runCodexInteractive } = await import('../runners/codex.js');
+    const result = await runCodexInteractive(
+      phase, updatedState, preset, harnessDir, runDir, promptFile, cwd,
+    );
+    if (result.status === 'failed') {
+      return { status: 'failed' };
+    }
+    // Validate artifacts after Codex completes
+    const valid = validatePhaseArtifacts(phase, updatedState, cwd);
+    return { status: valid ? 'completed' : 'failed' };
+  }
 }
 
 /**

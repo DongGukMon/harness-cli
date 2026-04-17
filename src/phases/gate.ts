@@ -1,11 +1,10 @@
 import fs from 'fs';
 import path from 'path';
-import { spawn } from 'child_process';
 import type { HarnessState, GatePhaseResult, GateResult } from '../types.js';
 import { assembleGatePrompt } from '../context/assembler.js';
-import { updateLockChild, clearLockChild } from '../lock.js';
-import { GATE_TIMEOUT_MS, SIGTERM_WAIT_MS } from '../config.js';
-import { getProcessStartTime, killProcessGroup } from '../process.js';
+import { getPresetById } from '../config.js';
+import { runClaudeGate } from '../runners/claude.js';
+import { runCodexGate } from '../runners/codex.js';
 import { parseVerdict, buildGateResult } from './verdict.js';
 export { parseVerdict, buildGateResult } from './verdict.js';
 
@@ -105,101 +104,33 @@ export async function runGatePhase(
   }
   const prompt = promptResult as string;
 
-  // Step 4: Spawn subprocess — prompt passed as positional arg (codex companion doesn't read stdin)
-  const child = spawn('node', [state.codexPath, 'task', '--effort', 'high', prompt], {
-    stdio: ['pipe', 'pipe', 'pipe'],
-    detached: true,
-    cwd,
-  });
+  // Step 4: Resolve preset and dispatch to runner
+  const presetId = state.phasePresets[String(phase)];
+  const preset = getPresetById(presetId);
+  if (!preset) {
+    return { type: 'error', error: `Unknown preset for phase ${phase}: ${presetId}` };
+  }
 
-  const childPid = child.pid!;
-  const childStartedAt = getProcessStartTime(childPid);
-  updateLockChild(harnessDir, childPid, phase, childStartedAt);
+  const result = preset.runner === 'claude'
+    ? await runClaudeGate(phase, preset, prompt, harnessDir, cwd)
+    : await runCodexGate(phase, preset, prompt, harnessDir, cwd);
 
-  let stdoutChunks: Buffer[] = [];
-  let stderrChunks: Buffer[] = [];
-
-  child.stdout.on('data', (chunk: Buffer) => { stdoutChunks.push(chunk); });
-  child.stderr.on('data', (chunk: Buffer) => {
-    stderrChunks.push(chunk);
-    // Stream [codex] progress lines to control panel
-    const text = chunk.toString();
-    for (const line of text.split('\n')) {
-      if (line.includes('[codex]')) {
-        process.stderr.write(`  ${line}\n`);
-      }
-    }
-  });
-
-  // Step 5: Wait for exit with timeout
-  const result = await new Promise<GatePhaseResult>((resolve) => {
-    let settled = false;
-
-    const timeoutHandle = setTimeout(async () => {
-      if (settled) return;
-      settled = true;
-
-      // Full PGID shutdown: SIGTERM → wait → SIGKILL → confirm ESRCH
-      await killProcessGroup(childPid, SIGTERM_WAIT_MS);
-
-      resolve({ type: 'error', error: `Gate phase ${phase} timed out after ${GATE_TIMEOUT_MS}ms` });
-    }, GATE_TIMEOUT_MS);
-
-    child.on('close', (code: number | null) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timeoutHandle);
-
-      const exitCode = code ?? 1;
-      const stdout = Buffer.concat(stdoutChunks).toString('utf-8');
-      const stderr = Buffer.concat(stderrChunks).toString('utf-8');
-
-      // Write sidecars immediately on exit
-      const gateResult: GateResult = {
-        exitCode,
-        timestamp: Date.now(),
-      };
-      try {
-        fs.writeFileSync(rawPath, stdout);
-        fs.writeFileSync(resultPath, JSON.stringify(gateResult, null, 2));
-      } catch {
-        // best-effort sidecar write
-      }
-
-      const phaseResult = buildGateResult(exitCode, stdout, stderr);
-
-      // Write error sidecar on failure
-      if (phaseResult.type === 'error') {
-        try {
-          const errorContent =
-            `# Gate ${phase} Error\n\n` +
-            `Exit Code: ${exitCode}\n\n` +
-            `## stdout\n\n\`\`\`\n${stdout}\n\`\`\`\n\n` +
-            `## stderr\n\n\`\`\`\n${stderr}\n\`\`\`\n`;
-          fs.writeFileSync(errorPath, errorContent);
-        } catch {
-          // best-effort
-        }
-      }
-
-      resolve(phaseResult);
-    });
-
-    child.on('error', (err: Error) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timeoutHandle);
-      resolve({ type: 'error', error: `Gate subprocess error: ${err.message}` });
-    });
-  });
-
-  // Step 6: Post-gate cleanup — wait for process group ESRCH, then clear lock
-  // (killProcessGroup is idempotent: if already dead, returns immediately)
-  await killProcessGroup(childPid, SIGTERM_WAIT_MS);
+  // Step 5: Write sidecars
+  const stdout = result.type === 'verdict' ? result.rawOutput : (result.rawOutput ?? '');
+  const exitCode = result.type === 'verdict' ? 0 : 1;
+  const gateResult: GateResult = { exitCode, timestamp: Date.now() };
   try {
-    clearLockChild(harnessDir);
-  } catch {
-    // best-effort
+    fs.writeFileSync(rawPath, stdout);
+    fs.writeFileSync(resultPath, JSON.stringify(gateResult, null, 2));
+  } catch { /* best-effort */ }
+
+  if (result.type === 'error') {
+    try {
+      fs.writeFileSync(
+        errorPath,
+        `# Gate ${phase} Error\n\nError: ${result.error}\n\n## stdout\n\n\`\`\`\n${stdout}\n\`\`\`\n`,
+      );
+    } catch { /* best-effort */ }
   }
 
   return result;

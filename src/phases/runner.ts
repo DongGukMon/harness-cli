@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import type { HarnessState, PendingAction, PhaseNumber, InteractivePhase, GatePhase } from '../types.js';
+import type { InputManager } from '../input.js';
 import {
   GATE_RETRY_LIMIT,
   GATE_TIMEOUT_MS,
@@ -159,7 +160,8 @@ export async function runPhaseLoop(
   state: HarnessState,
   harnessDir: string,
   runDir: string,
-  cwd: string
+  cwd: string,
+  inputManager: InputManager,
 ): Promise<void> {
   while (state.currentPhase < TERMINAL_PHASE) {
     const phase = state.currentPhase;
@@ -171,7 +173,7 @@ export async function runPhaseLoop(
       if (state.status === 'paused') return;
       if (state.phases[String(phase)] === 'failed') return;
     } else if (isGatePhase(phase)) {
-      await handleGatePhase(phase as GatePhase, state, harnessDir, runDir, cwd);
+      await handleGatePhase(phase as GatePhase, state, harnessDir, runDir, cwd, inputManager);
       if (state.status === 'paused') return;
       if (state.currentPhase === TERMINAL_PHASE) {
         // Completed
@@ -180,7 +182,7 @@ export async function runPhaseLoop(
         return;
       }
     } else if (isVerifyPhase(phase)) {
-      await handleVerifyPhase(state, harnessDir, runDir, cwd);
+      await handleVerifyPhase(state, harnessDir, runDir, cwd, inputManager);
       if (state.status === 'paused') return;
     }
   }
@@ -261,7 +263,8 @@ async function handleGatePhase(
   state: HarnessState,
   harnessDir: string,
   runDir: string,
-  cwd: string
+  cwd: string,
+  inputManager: InputManager,
 ): Promise<void> {
   state.phases[String(phase)] = 'in_progress';
   writeState(runDir, state);
@@ -291,7 +294,7 @@ async function handleGatePhase(
       }
     } else {
       // REJECT
-      await handleGateReject(phase, result.comments, state, harnessDir, runDir, cwd);
+      await handleGateReject(phase, result.comments, state, harnessDir, runDir, cwd, inputManager);
     }
   } else {
     // Error — but check if SIGUSR1 redirected first
@@ -300,7 +303,7 @@ async function handleGatePhase(
       renderControlPanel(state);
       return;
     }
-    await handleGateError(phase, result.error, state, runDir, cwd);
+    await handleGateError(phase, result.error, state, runDir, cwd, inputManager);
   }
 }
 
@@ -310,7 +313,8 @@ async function handleGateReject(
   state: HarnessState,
   _harnessDir: string,
   runDir: string,
-  cwd: string
+  cwd: string,
+  inputManager: InputManager,
 ): Promise<void> {
   state.phases[String(phase)] = 'pending';
 
@@ -361,7 +365,7 @@ async function handleGateReject(
     writeState(runDir, state);
   } else {
     // Escalation
-    await handleGateEscalation(phase, comments, state, runDir, cwd);
+    await handleGateEscalation(phase, comments, state, runDir, cwd, inputManager);
   }
 }
 
@@ -370,7 +374,8 @@ export async function handleGateEscalation(
   comments: string,
   state: HarnessState,
   runDir: string,
-  cwd: string
+  cwd: string,
+  inputManager: InputManager,
 ): Promise<void> {
   printWarning(`Gate ${phase} retry limit reached (${GATE_RETRY_LIMIT})`);
 
@@ -380,7 +385,8 @@ export async function handleGateEscalation(
       { key: 'C', label: 'Continue (reset retries, reopen)' },
       { key: 'S', label: 'Skip (force-pass)' },
       { key: 'Q', label: 'Quit (pause)' },
-    ]
+    ],
+    inputManager,
   );
 
   if (choice === 'C') {
@@ -451,7 +457,8 @@ async function handleGateError(
   error: string,
   state: HarnessState,
   runDir: string,
-  cwd: string
+  cwd: string,
+  inputManager: InputManager,
 ): Promise<void> {
   printError(`Gate ${phase} error: ${error}`);
 
@@ -461,7 +468,8 @@ async function handleGateError(
       { key: 'R', label: 'Retry' },
       { key: 'S', label: 'Skip (force-pass)' },
       { key: 'Q', label: 'Quit (pause)' },
-    ]
+    ],
+    inputManager,
   );
 
   if (choice === 'R') {
@@ -493,7 +501,8 @@ async function handleVerifyPhase(
   state: HarnessState,
   harnessDir: string,
   runDir: string,
-  cwd: string
+  cwd: string,
+  inputManager: InputManager,
 ): Promise<void> {
   // Note: runVerifyPhase internally sets phase to 'in_progress' and calls writeState
   const outcome = await runVerifyPhase(state, harnessDir, runDir, cwd);
@@ -539,7 +548,7 @@ async function handleVerifyPhase(
 
     renderControlPanel(state);
   } else if (outcome.type === 'fail') {
-    await handleVerifyFail(outcome.feedbackPath, state, runDir, cwd);
+    await handleVerifyFail(outcome.feedbackPath, state, runDir, cwd, inputManager);
   } else {
     // error — but check if SIGUSR1 redirected first
     if (state.currentPhase !== 6) {
@@ -547,7 +556,7 @@ async function handleVerifyPhase(
       renderControlPanel(state);
       return;
     }
-    await handleVerifyError(outcome.errorPath, state, harnessDir, runDir, cwd);
+    await handleVerifyError(outcome.errorPath, state, harnessDir, runDir, cwd, inputManager);
   }
 }
 
@@ -555,7 +564,8 @@ async function handleVerifyFail(
   feedbackPath: string,
   state: HarnessState,
   runDir: string,
-  cwd: string
+  cwd: string,
+  inputManager: InputManager,
 ): Promise<void> {
   state.verifyRetries += 1;
   const retryCount = state.verifyRetries;
@@ -592,7 +602,7 @@ async function handleVerifyFail(
     } catch { /* ignore */ }
   } else {
     // Escalation
-    await handleVerifyEscalation(feedbackPath, state, runDir, cwd);
+    await handleVerifyEscalation(feedbackPath, state, runDir, cwd, inputManager);
   }
 }
 
@@ -600,7 +610,8 @@ export async function handleVerifyEscalation(
   feedbackPath: string,
   state: HarnessState,
   runDir: string,
-  cwd: string
+  cwd: string,
+  inputManager: InputManager,
 ): Promise<void> {
   printWarning(`Verify retry limit reached (${VERIFY_RETRY_LIMIT})`);
 
@@ -610,7 +621,8 @@ export async function handleVerifyEscalation(
       { key: 'C', label: 'Continue (reset retries, reopen Phase 5)' },
       { key: 'S', label: 'Skip (force-pass verify)' },
       { key: 'Q', label: 'Quit (pause)' },
-    ]
+    ],
+    inputManager,
   );
 
   if (choice === 'C') {
@@ -702,7 +714,8 @@ export async function handleVerifyError(
   state: HarnessState,
   _harnessDir: string,
   runDir: string,
-  cwd: string
+  cwd: string,
+  inputManager: InputManager,
 ): Promise<void> {
   const errorInfo = errorPath ? ` (see ${errorPath})` : '';
   printError(`Verify error${errorInfo}`);
@@ -712,7 +725,8 @@ export async function handleVerifyError(
     [
       { key: 'R', label: 'Retry' },
       { key: 'Q', label: 'Quit (pause)' },
-    ]
+    ],
+    inputManager,
   );
 
   if (choice === 'R') {
