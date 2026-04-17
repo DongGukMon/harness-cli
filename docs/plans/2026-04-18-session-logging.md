@@ -34,7 +34,8 @@
 - `src/phases/verdict.ts` — extractCodexMetadata 헬퍼
 - `src/runners/codex.ts` — tokens/sessionId 파싱
 - `src/resume.ts` — NoopLogger threading (dead code 유지)
-- 기존 테스트 파일들: signature 변경 반영
+- `tests/phases/gate.test.ts` — legacy sidecar (skip) vs extended sidecar (hydrate) 분리
+- `tests/phases/runner.test.ts`, `tests/state.test.ts`, `tests/resume.test.ts`, `tests/commands/*.test.ts` — signature 변경 반영
 
 ---
 
@@ -43,7 +44,7 @@
 **Files:**
 - Modify: `src/types.ts`
 
-- [ ] **Step 1: `HarnessState`에 `loggingEnabled` 추가**
+- [ ] **Step 1: `HarnessState`에 `loggingEnabled` 및 `phaseReopenSource` 추가**
 
 `src/types.ts`의 `HarnessState` interface 맨 아래(`tmuxControlPane` 다음)에:
 
@@ -51,6 +52,9 @@
   tmuxControlPane: string;
   // --- Session logging (opt-in) ---
   loggingEnabled: boolean;
+  // Tracks which phase triggered a reopen (for phase_start.reopenFromGate)
+  // keys "1","3","5" → number (triggering phase 2/4/6/7) or null
+  phaseReopenSource: Record<string, number | null>;
 }
 ```
 
@@ -230,12 +234,18 @@ export function createInitialState(
 
 **주의:** 실제 시그니처는 코드 확인 후 `loggingEnabled`만 적절한 위치에 삽입. 마지막 optional 파라미터 앞 위치가 안전.
 
-- [ ] **Step 2: migrateState에 loggingEnabled 기본값 추가**
+- [ ] **Step 2: migrateState에 loggingEnabled + phaseReopenSource 기본값 추가**
 
 `migrateState` 함수 맨 아래 return 직전:
 
 ```ts
   if (raw.loggingEnabled === undefined) raw.loggingEnabled = false;
+  if (!raw.phaseReopenSource || typeof raw.phaseReopenSource !== 'object') {
+    raw.phaseReopenSource = { '1': null, '3': null, '5': null };
+  }
+  for (const key of ['1', '3', '5']) {
+    if (raw.phaseReopenSource[key] === undefined) raw.phaseReopenSource[key] = null;
+  }
   return raw as HarnessState;
 ```
 
@@ -663,6 +673,7 @@ export class FileSessionLogger implements SessionLogger {
       this.cachedStartedAt = meta.startedAt;
     } catch (err) {
       this.warnOnce(`session logger: writeMeta failed — ${(err as Error).message}`);
+      this.disabled = true;  // disable after first failure (spec §6.1)
     }
   }
 
@@ -697,6 +708,7 @@ export class FileSessionLogger implements SessionLogger {
       this.cachedStartedAt = meta.startedAt;
     } catch (err) {
       this.warnOnce(`session logger: updateMeta failed — ${(err as Error).message}`);
+      this.disabled = true;  // disable after first failure (spec §6.1)
     }
   }
 
@@ -710,6 +722,7 @@ export class FileSessionLogger implements SessionLogger {
       }
     } catch (err) {
       this.warnOnce(`session logger: appendFileSync failed — ${(err as Error).message}`);
+      this.disabled = true;  // disable after first failure (spec §6.1)
     }
   }
 
@@ -773,14 +786,15 @@ describe('FileSessionLogger.logEvent', () => {
     expect(e2.ts).toBeGreaterThanOrEqual(e1.ts);
   });
 
-  it('swallows appendFileSync errors and warns to stderr once', () => {
+  it('swallows appendFileSync errors, warns once, then disables further I/O', () => {
     const harnessDir = makeTempHarnessDir();
     const sessionsRoot = path.join(harnessDir, 'sessions-root');
     const logger = new FileSessionLogger('runF', harnessDir, { sessionsRoot });
     logger.writeMeta({ task: 't' });
 
+    let appendCalls = 0;
     const origAppend = fs.appendFileSync;
-    (fs as any).appendFileSync = () => { throw new Error('boom'); };
+    (fs as any).appendFileSync = () => { appendCalls++; throw new Error('boom'); };
     const stderrCalls: string[] = [];
     const origWrite = process.stderr.write.bind(process.stderr);
     (process.stderr as any).write = (s: string) => { stderrCalls.push(s); return true; };
@@ -789,6 +803,7 @@ describe('FileSessionLogger.logEvent', () => {
       expect(() => logger.logEvent({ event: 'phase_start', phase: 1 })).not.toThrow();
       expect(() => logger.logEvent({ event: 'phase_end', phase: 1, status: 'completed', durationMs: 0 })).not.toThrow();
       expect(stderrCalls.length).toBe(1); // warn once
+      expect(appendCalls).toBe(1); // disable prevents subsequent fs calls
     } finally {
       (fs as any).appendFileSync = origAppend;
       (process.stderr as any).write = origWrite;
@@ -990,6 +1005,7 @@ Expected: FAIL (finalizeSummary is no-op).
       fs.renameSync(tmpPath, this.summaryPath);
     } catch (err) {
       this.warnOnce(`session logger: finalizeSummary failed — ${(err as Error).message}`);
+      this.disabled = true;  // disable after first failure (spec §6.1)
     }
   }
 
@@ -1484,19 +1500,52 @@ async function handleInteractivePhase(state: HarnessState, phase: InteractivePha
 
 **주의:** 실제 `handleInteractivePhase` 구조는 파일 확인 후 적절히 삽입. 핵심은 phase_start → (redirect check) → phase_end 쌍을 모든 경로에서 보장.
 
-- [ ] **Step 2: reopenFromGate 추적 구조 추가**
+- [ ] **Step 2: reopenFromGate 정확한 source tracking**
 
-`state.phaseReopenFlags`는 boolean만 저장하므로, 어느 gate가 trigger했는지 추적하려면 별도 구조가 필요. 간단한 방법: runner.ts 파일 상단에 `const reopenSourceMap: Record<string, number | null>` 모듈 로컬 state를 두거나, gate reject/verify fail 시 state에 `phaseReopenSource` 필드로 저장. 
+`state.phaseReopenSource`(Task 1에서 추가)를 사용하여 정확한 trigger phase를 기록.
 
-최소 구현으로: reopenFromGate 필드를 생략하고 `reopenFromGate: null` 또는 phase number heuristic (phase 1은 항상 phase 2에서, phase 3은 phase 4에서, phase 5는 phase 6 or 7에서). 정확한 source는 v2로 연기:
+**handleGateReject**에서 phase reopen 설정 시 (gate 2 → phase 1, gate 4 → phase 3, gate 7 → phase 5 or 6):
+
+```ts
+// src/phases/runner.ts — handleGateReject 내부
+const reopenTarget = /* phase 1, 3, or 5 based on gate number */;
+state.phaseReopenFlags[String(reopenTarget)] = true;
+state.phaseReopenSource[String(reopenTarget)] = phase;  // triggering gate phase
+writeState(runDir, state);
+```
+
+**handleVerifyFail**에서 phase 5 reopen 설정 시:
+
+```ts
+// src/phases/runner.ts — handleVerifyFail 내부 (retry available path)
+state.phaseReopenFlags['5'] = true;
+state.phaseReopenSource['5'] = 6;  // verify phase triggered reopen
+writeState(runDir, state);
+```
+
+**handleInteractivePhase**에서 phase_start emit 시 `phaseReopenSource` 읽기:
 
 ```ts
 const reopenFromGate = state.phaseReopenFlags[String(phase)]
-  ? (phase === 1 ? 2 : phase === 3 ? 4 : null)  // heuristic; phase 5 reopen 출처는 gate 7 or verify 6
+  ? (state.phaseReopenSource[String(phase)] ?? undefined)
   : undefined;
+
+logger.logEvent({
+  event: 'phase_start',
+  phase,
+  attemptId,
+  reopenFromGate,
+});
+
+// consume the reopen flag and source
+if (state.phaseReopenFlags[String(phase)]) {
+  state.phaseReopenFlags[String(phase)] = false;
+  state.phaseReopenSource[String(phase)] = null;
+  writeState(runDir, state);
+}
 ```
 
-v1 scope 내에서는 heuristic으로 충분.
+이로써 phase 5 reopen의 출처(gate 7 vs verify 6)가 정확히 기록됨.
 
 - [ ] **Step 3: 빌드 및 테스트**
 
@@ -1659,22 +1708,57 @@ function checkGateSidecars(runDir: string, phase: GatePhase): GatePhaseResult | 
 }
 ```
 
-- [ ] **Step 4: 빌드 및 테스트**
+- [ ] **Step 4: 기존 gate 테스트 업데이트**
+
+`tests/phases/gate.test.ts`의 기존 테스트들이 legacy sidecar(`{ exitCode, timestamp }`만 있음)를 `checkGateSidecars`에 넘겨서 verdict 파싱을 기대하는 경우가 있다. 새 정책(legacy sidecar은 skip)에 맞게 테스트 분리:
+
+```bash
+rg -n "checkGateSidecars|GateResult" tests/phases/gate.test.ts
+```
+
+- 기존 legacy-sidecar 테스트: "returns null for legacy sidecar without runner field"으로 재작성
+- 신규 extended-sidecar 테스트: "hydrates runner/promptBytes/durationMs from extended sidecar"
+
+예시:
+
+```ts
+it('returns null for legacy sidecar without runner field (skipped by policy)', () => {
+  const runDir = setupTempRunDir();
+  fs.writeFileSync(path.join(runDir, 'gate-2-result.json'), JSON.stringify({ exitCode: 0, timestamp: 1700000000 }));
+  fs.writeFileSync(path.join(runDir, 'gate-2-raw.txt'), 'VERDICT: APPROVE');
+  const result = checkGateSidecars(runDir, 2);
+  expect(result).toBeNull();
+});
+
+it('hydrates metadata from extended sidecar', () => {
+  const runDir = setupTempRunDir();
+  const ext = { exitCode: 0, timestamp: 1700000000, runner: 'codex', promptBytes: 1000, durationMs: 30000, tokensTotal: 45000 };
+  fs.writeFileSync(path.join(runDir, 'gate-2-result.json'), JSON.stringify(ext));
+  fs.writeFileSync(path.join(runDir, 'gate-2-raw.txt'), 'VERDICT: APPROVE\ncomments: ok');
+  const result = checkGateSidecars(runDir, 2);
+  expect(result?.type).toBe('verdict');
+  expect((result as any).runner).toBe('codex');
+  expect((result as any).tokensTotal).toBe(45000);
+});
+```
+
+- [ ] **Step 5: 빌드 및 테스트**
 
 ```bash
 npm run build && npm test -- gate
 ```
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
-git add src/phases/gate.ts src/runners/codex.ts
+git add src/phases/gate.ts src/runners/codex.ts tests/phases/gate.test.ts
 git commit -m "feat(logging): gate.ts promptBytes + sidecarReplayAllowed one-shot + extended sidecar
 
 - runGatePhase accepts one-shot sidecarReplayAllowed object; consumed on first call
 - gate-N-result.json persists runner, promptBytes, durationMs, tokensTotal, codexSessionId
 - checkGateSidecars hydrates metadata; skips emit if legacy sidecar (no runner field)
-- runCodexGate returns tokensTotal/codexSessionId via extractCodexMetadata"
+- runCodexGate returns tokensTotal/codexSessionId via extractCodexMetadata
+- gate.test.ts split: legacy-sidecar (null) vs extended-sidecar (hydrated)"
 ```
 
 ---
@@ -2173,7 +2257,89 @@ describe('Integration: --enable-logging creates session files', () => {
     expect(meta.resumedAt.length).toBe(1);
   });
 });
+
+describe('Integration: one-shot sidecar replay', () => {
+  it('first gate on resume replays sidecar once', async () => {
+    const { runGatePhase } = await import('../../src/phases/gate.js');
+    // setup: create runDir with existing gate-N-result.json (new-schema)
+    const runDir = fs.mkdtempSync(path.join(os.tmpdir(), 'onshot-'));
+    const sidecar = { exitCode: 0, timestamp: Date.now(), runner: 'codex', promptBytes: 1000, durationMs: 10000 };
+    fs.writeFileSync(path.join(runDir, 'gate-2-result.json'), JSON.stringify(sidecar));
+    fs.writeFileSync(path.join(runDir, 'gate-2-raw.txt'), 'VERDICT: APPROVE\ncomments: ok');
+    // minimal state mock
+    const state = { gateRetries: { '2': 0 } } as any;
+
+    const flag = { value: true };
+    const result = await runGatePhase(state, 2, runDir, '/cwd', flag);
+    expect((result as any).recoveredFromSidecar).toBe(true);
+    expect(flag.value).toBe(false);  // consumed
+
+    // Second call should NOT replay
+    const sidecar2 = { exitCode: 0, timestamp: Date.now(), runner: 'codex', promptBytes: 500, durationMs: 5000 };
+    fs.writeFileSync(path.join(runDir, 'gate-2-result.json'), JSON.stringify(sidecar2));
+    // would need to mock runner to avoid actual subprocess; alternatively verify via checkGateSidecars unit
+  });
+
+  it('legacy sidecar without runner field is skipped by checkGateSidecars', () => {
+    const { checkGateSidecars } = require('../../src/phases/gate.js');
+    const runDir = fs.mkdtempSync(path.join(os.tmpdir(), 'legacy-'));
+    const legacy = { exitCode: 0, timestamp: Date.now() };  // no runner field
+    fs.writeFileSync(path.join(runDir, 'gate-2-result.json'), JSON.stringify(legacy));
+    fs.writeFileSync(path.join(runDir, 'gate-2-raw.txt'), 'VERDICT: APPROVE');
+
+    const result = checkGateSidecars(runDir, 2);
+    expect(result).toBeNull();
+  });
+});
+
+describe('Integration: CLI start --enable-logging end-to-end', () => {
+  it('state.loggingEnabled=true after start --enable-logging', async () => {
+    // Use startCommand programmatically with a minimal environment. Mock tmux if needed.
+    // This test sets HARNESS_ROOT to a temp dir and invokes startCommand with enableLogging=true.
+    // Verifies:
+    //   1. state.json has loggingEnabled: true
+    //   2. ~/.harness/sessions/<repoKey>/<runId>/ is created
+    // Due to tmux dependency, this may need heavy mocking or be deferred to manual verification.
+    // Placeholder: assert state file contains loggingEnabled after a scripted start.
+    const { readState } = await import('../../src/state.js');
+    // Setup minimal harness.dir structure, write initial state with loggingEnabled=true manually
+    const harnessRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'cli-'));
+    const harnessDir = path.join(harnessRoot, '.harness');
+    fs.mkdirSync(harnessDir, { recursive: true });
+    const runDir = path.join(harnessDir, 'runs', 'test-run');
+    fs.mkdirSync(runDir, { recursive: true });
+    const state = { runId: 'test-run', currentPhase: 1, status: 'in_progress', loggingEnabled: true, phases: {}, gateRetries: {}, verifyRetries: 0, /* ... minimal fields */ } as any;
+    fs.writeFileSync(path.join(runDir, 'state.json'), JSON.stringify(state));
+    const loaded = readState(runDir);
+    expect(loaded?.loggingEnabled).toBe(true);
+  });
+
+  it('state.loggingEnabled=false when start without flag', async () => {
+    const { readState } = await import('../../src/state.js');
+    const harnessRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'cli-'));
+    const runDir = path.join(harnessRoot, '.harness', 'runs', 'test-run2');
+    fs.mkdirSync(runDir, { recursive: true });
+    const state = { runId: 'test-run2', currentPhase: 1, status: 'in_progress', loggingEnabled: false, phases: {}, gateRetries: {}, verifyRetries: 0 } as any;
+    fs.writeFileSync(path.join(runDir, 'state.json'), JSON.stringify(state));
+    const loaded = readState(runDir);
+    expect(loaded?.loggingEnabled).toBe(false);
+  });
+
+  it('loggingEnabled persists across resume (via state)', async () => {
+    const { readState, migrateState } = await import('../../src/state.js');
+    // Simulate: start created state with loggingEnabled=true, resume reads state back
+    const state = { loggingEnabled: true, runId: 'r', currentPhase: 1, status: 'paused', phases: {}, gateRetries: {}, verifyRetries: 0 } as any;
+    const migrated = migrateState(JSON.parse(JSON.stringify(state)));
+    expect(migrated.loggingEnabled).toBe(true);
+    // Legacy state without field → migrateState defaults to false
+    const legacy = { runId: 'r2', currentPhase: 1, status: 'paused', phases: {}, gateRetries: {}, verifyRetries: 0 } as any;
+    const migratedLegacy = migrateState(legacy);
+    expect(migratedLegacy.loggingEnabled).toBe(false);
+  });
+});
 ```
+
+**주의:** 실제 `startCommand`/`resumeCommand` end-to-end 테스트는 tmux 의존성이 커서 mocking 비용이 높다. Task 20의 CLI-level 테스트는 **상태 레벨 검증** (state.json에 loggingEnabled 기록, migrate 시 기본값, resume 시 state에서 계승)으로 한정한다. 실제 `harness start --enable-logging` 실행은 수동 검증 (Eval Checklist의 "Spec Acceptance §9" 항목에서 체크).
 
 - [ ] **Step 2: 테스트 실행**
 
@@ -2246,7 +2412,8 @@ Expected: 통과.
 - [ ] `hasEmittedSessionOpen()` — session_start/resumed emit 후 true
 - [ ] `getStartedAt()` — meta.startedAt 값 반환
 - [ ] `logEvent` — `v:1` 포함, append-only, monotonic ts
-- [ ] `logEvent` fs 예외 → stderr 경고 1회 후 조용히 swallow
+- [ ] `logEvent`/`writeMeta`/`updateMeta`/`finalizeSummary` fs 예외 → stderr 경고 1회 후 **logger 비활성화** (§6.1). 이후 호출은 fs 접근 없음
+- [ ] `mkdirSync` 실패 시 constructor 생성 단계부터 disabled=true
 - [ ] `writeMeta` / `updateMeta` idempotent
 - [ ] `updateMeta` — meta.json 부재 시 bootstrapOnResume bootstrap
 - [ ] `finalizeSummary` — `.tmp` → rename atomic write
@@ -2268,6 +2435,11 @@ Expected: 통과.
 - [ ] recoveredFromSidecar=true + authoritative 있으면 summary에서 드롭
 - [ ] 서로 다른 harnessDir → 서로 다른 repoKey → 별도 session 디렉토리
 - [ ] Resume → events.jsonl 보존 + session_resumed 추가 + meta.resumedAt[] push
+- [ ] **One-shot sidecar replay**: first gate on resume → replays once; flag.value=false 후 consumed
+- [ ] **Legacy sidecar policy**: `runner` 필드 없는 sidecar → `checkGateSidecars` returns null (skip)
+- [ ] **Extended sidecar hydration**: `runner`/`promptBytes`/`durationMs`/`tokensTotal` 필드 있는 sidecar → GatePhaseResult에 hydrate
+- [ ] **State persistence**: `state.loggingEnabled=true`가 state.json에 저장, resume 시 계승
+- [ ] **reopenFromGate accuracy**: phase 5 reopen이 verify(6)인 경우 `phase_start.reopenFromGate === 6`, gate 7인 경우 `=== 7`
 
 ### Regression (전체 테스트)
 - [ ] 기존 테스트 전체 PASS (플래그 없이 실행 시 NoopLogger 경로로 효과 무)
