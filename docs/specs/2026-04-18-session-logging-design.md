@@ -1,6 +1,6 @@
 # Harness Session Logging — Design Spec
 
-- 상태: draft (rev 4, Codex gate feedback 3차 반영)
+- 상태: draft (rev 5, Codex gate feedback 4차 반영)
 - 작성일: 2026-04-18
 - 담당: Claude Code (engineer), Codex (reviewer)
 - 관련 문서:
@@ -296,7 +296,7 @@ return {
 };
 ```
 
-**주의:** sidecar replay 경로는 `runner`(claude|codex) 정보를 sidecar만으로 알 수 없다. 해결: `gate-N-result.json`에 `runner` 필드를 추가로 저장(Step 5 write 시). 기존 테스트는 이 필드가 없어도 읽기 호환(optional)으로.
+**주의:** sidecar replay 경로는 `runner`(claude|codex)와 `promptBytes` 정보를 sidecar만으로 알 수 없다. 해결: `gate-N-result.json`에 `runner`와 `promptBytes` 필드를 추가로 저장(원래 실행 시 write할 때). `checkGateSidecars`가 이 두 필드를 `GatePhaseResult`에 hydrate한다. 기존 sidecar에 해당 필드가 없을 경우(`promptBytes`가 없는 옛 sidecar): `gate_verdict` emit 시 `promptBytes: undefined` (recovered 이벤트는 optional로 허용). 기존 테스트는 이 필드가 없어도 읽기 호환(optional)으로.
 
 `src/resume.ts`는 본 스펙에서 변경 없음.
 
@@ -357,7 +357,53 @@ export function extractCodexMetadata(stdout: string): { tokensTotal?: number; co
 4. summary.json 재계산 시 이 dedupe 규칙을 적용.
 5. authoritative 이벤트가 누락된 경우(JSONL flush 이전 crash): recovered가 유일 증거로 사용.
 
-### 5.7 repoKey 계산
+### 5.8 Phase lifecycle event emission matrix
+
+`phase_start`와 `phase_end`의 정확한 emit 시점, status 값, `durationMs` 계산 방법을 핸들러별로 명세한다.
+
+**공통 규칙:**
+- `phase_start` emit 시 `phaseStartTs = Date.now()`를 핸들러 로컬 변수로 캡처.
+- `phase_end.durationMs = Date.now() - phaseStartTs`.
+- `phase_end.attemptId`는 interactive phase에서만 유효 (gate/verify는 null).
+
+| 핸들러 | phase_start 시점 | phase_end 시점 | phase_end.status | phase_end.reopenedFromGate |
+|---|---|---|---|---|
+| `handleInteractivePhase` | `runPhaseInteractive` 호출 직전 | phase 상태가 `completed`로 전환된 직후 | `'completed'` | null |
+| `handleInteractivePhase` (reopen) | 동일 | `state.phaseReopenFlags[phase] = true` 설정 직후 | `'reopened'` | null |
+| `handleGatePhase` (APPROVE) | `runGatePhase` 호출 직전 | `deleteGateSidecars` 호출 직후 | `'completed'` | N/A (gate는 phase_end emit 없음, 아래 참고) |
+| `handleGatePhase` (REJECT → retry) | `runGatePhase` 호출 직전 | gate retry limit 초과 → escalation 직전 | `'failed'` | N/A |
+| `handleGateError` | (phase_start 없음) | error 후 escalation 직전 | `'failed'` | N/A |
+| `handleVerifyPhase` (pass) | `runVerifyPhase` 호출 직전 | verify passed → 다음 phase 전환 직전 | `'completed'` | N/A |
+| `handleVerifyPhase` (fail) | 동일 | verify retry limit 초과 → escalation 직전 | `'failed'` | N/A |
+| `forcePassGate` | (phase_start 없음) | force pass 직후 | `'completed'` | N/A |
+| `forcePassVerify` | (phase_start 없음) | force pass 직후 | `'completed'` | N/A |
+
+**주의:** Gate phase(2/4/7)는 `phase_start`/`phase_end`를 **emit하지 않는다**. Gate 실행의 시작/종료는 `gate_verdict`/`gate_error`의 `retryIndex` + `durationMs`로 충분히 추적 가능하다.
+
+**`phase_start.reopenFromGate` 사용법:** interactive phase(1/3/5)가 gate REJECT 때문에 reopen될 때, 해당 phase_start에 `reopenFromGate: <gatePhaseNumber>`를 포함한다. 예: phase 2가 REJECT해서 phase 1이 reopen → `phase_start { phase: 1, reopenFromGate: 2 }`.
+
+**`handleInteractivePhase`의 `phase_end.attemptId`:** `src/phases/interactive.ts`의 `runPhaseInteractive`가 반환하는 `phaseAttemptId`를 사용. 이 값은 `phase_start`에도 동일하게 포함.
+
+### 5.9 config-cancel path
+
+`src/commands/inner.ts`의 `onConfigCancel` 콜백은 현재 `process.exit(0)`을 직접 호출한다. 이 경우 `try/finally` 블록이 실행되지 않아 `session_end`가 emit되지 않는다.
+
+**해결:** `onConfigCancel` 콜백 내에서 `process.exit(0)` 직전에 logger 정리를 명시적으로 수행한다:
+
+```ts
+onConfigCancel: () => {
+  logger.logEvent({ event: 'session_end', status: 'paused', totalWallMs: Date.now() - logger.getStartedAt() });
+  logger.finalizeSummary(state);
+  logger.close();
+  inputManager.stop();
+  releaseLock(harnessDir, runId);
+  process.exit(0);
+}
+```
+
+단, logger 초기화 이전에 `onConfigCancel`이 호출되는 경우는 없으므로 (config cancel은 pane이 뜬 후 사용자 입력에서 발생) logger null 체크는 불필요.
+
+### 5.10 repoKey 계산
 
 ```ts
 // src/logger.ts
