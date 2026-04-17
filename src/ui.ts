@@ -1,5 +1,6 @@
-import { PHASE_MODELS } from './config.js';
+import { MODEL_PRESETS, REQUIRED_PHASE_KEYS, getPresetById } from './config.js';
 import type { HarnessState } from './types.js';
+import type { InputManager } from './input.js';
 
 // ANSI color codes
 const GREEN = '\x1b[32m';
@@ -8,7 +9,7 @@ const YELLOW = '\x1b[33m';
 const BLUE = '\x1b[34m';
 const RESET = '\x1b[0m';
 
-const SEPARATOR = '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━';
+const SEPARATOR = '━'.repeat(64);
 
 function phaseLabel(phase: number): string {
   const labels: Record<number, string> = {
@@ -24,15 +25,14 @@ function phaseLabel(phase: number): string {
 }
 
 export function renderControlPanel(state: HarnessState): void {
-  const SEPARATOR = '━'.repeat(50);
   process.stdout.write('\x1b[2J\x1b[H'); // clear screen
   console.error(SEPARATOR);
   console.error(`${GREEN}▶${RESET} Harness Control Panel`);
   console.error(SEPARATOR);
   console.error(`  Run:   ${state.runId}`);
   console.error(`  Phase: ${state.currentPhase}/7 — ${phaseLabel(state.currentPhase)}`);
-  const model = PHASE_MODELS[state.currentPhase];
-  if (model) console.error(`  Model: ${model}`);
+  const preset = getPresetById(state.phasePresets?.[String(state.currentPhase)] ?? '');
+  if (preset) console.error(`  Model: ${preset.label}`);
   console.error('');
 
   for (let p = 1; p <= 7; p++) {
@@ -53,48 +53,17 @@ export function renderControlPanel(state: HarnessState): void {
  * Shows message + choices, waits for valid keypress.
  * choices example: [{ key: 'R', label: 'Retry' }, { key: 'S', label: 'Skip' }, { key: 'Q', label: 'Quit' }]
  */
-export function promptChoice(
+export async function promptChoice(
   message: string,
   choices: { key: string; label: string }[],
+  inputManager: InputManager,
 ): Promise<string> {
-  return new Promise((resolve, reject) => {
-    if (!process.stdin.isTTY) {
-      reject(new Error('stdin is not a TTY — cannot prompt for input'));
-      return;
-    }
-
-    const choiceText = choices.map((c) => `[${c.key.toUpperCase()}] ${c.label}`).join('  ');
-    process.stderr.write(`\n${message}\n${choiceText}\n`);
-
-    const validKeys = new Set(choices.map((c) => c.key.toLowerCase()));
-
-    process.stdin.setRawMode(true);
-    process.stdin.resume();
-
-    const onData = (buf: Buffer) => {
-      const key = buf.toString().toLowerCase();
-
-      // Handle Ctrl+C / Ctrl+D
-      if (key === '\x03' || key === '\x04') {
-        process.stdin.removeListener('data', onData);
-        process.stdin.setRawMode(false);
-        process.stdin.pause();
-        process.stderr.write('\n');
-        process.exit(1);
-      }
-
-      if (validKeys.has(key)) {
-        process.stdin.removeListener('data', onData);
-        process.stdin.setRawMode(false);
-        process.stdin.pause();
-        process.stderr.write('\n');
-        resolve(key.toUpperCase());
-      }
-      // Invalid key — ignore and keep waiting
-    };
-
-    process.stdin.on('data', onData);
-  });
+  const choiceText = choices.map((c) => `[${c.key.toUpperCase()}] ${c.label}`).join('  ');
+  process.stderr.write(`\n${message}\n${choiceText}\n`);
+  const validKeys = new Set(choices.map((c) => c.key.toLowerCase()));
+  const key = await inputManager.waitForKey(validKeys);
+  process.stderr.write('\n');
+  return key;
 }
 
 /**
@@ -103,7 +72,6 @@ export function promptChoice(
  *   ✓ Phase 2 완료 (Spec Gate — APPROVED)
  *   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
  *   ▶ Phase 3 시작: Plan 작성
- *     모델: claude-sonnet-4-6
  *   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
  */
 export function printPhaseTransition(
@@ -115,10 +83,6 @@ export function printPhaseTransition(
   console.error(`${GREEN}✓${RESET} Phase ${fromPhase} 완료 (${fromStatus})`);
   console.error(SEPARATOR);
   console.error(`${GREEN}▶${RESET} Phase ${toPhase} 시작: ${toLabel}`);
-  const model = PHASE_MODELS[toPhase];
-  if (model) {
-    console.error(`  모델: ${model}`);
-  }
   console.error(SEPARATOR);
 }
 
@@ -156,9 +120,8 @@ const ADVISOR_PURPOSE: Record<number, string> = {
   5: '구현에서 advisor가 복잡 로직 판단에 유용합니다.',
 };
 
-export function printAdvisorReminder(phase: number): void {
-  const YELLOW = '\x1b[33m';
-  const RESET = '\x1b[0m';
+export function printAdvisorReminder(phase: number, runner?: string): void {
+  if (runner === 'codex') return;
   const purpose = ADVISOR_PURPOSE[phase] ?? 'advisor 설정을 확인하세요.';
 
   console.error('');
@@ -171,7 +134,6 @@ export function printAdvisorReminder(phase: number): void {
 }
 
 export function renderWelcome(runId: string): void {
-  const SEPARATOR = '━'.repeat(50);
   process.stdout.write('\x1b[2J\x1b[H');
   console.error(SEPARATOR);
   console.error(`${GREEN}▶${RESET} Harness`);
@@ -179,4 +141,74 @@ export function renderWelcome(runId: string): void {
   console.error(`  Run: ${runId}`);
   console.error('');
   console.error('  What would you like to build?');
+}
+
+export function renderModelSelection(
+  phasePresets: Record<string, string>,
+  editablePhases?: Set<string>,
+): void {
+  process.stdout.write('\x1b[2J\x1b[H');
+  console.error(SEPARATOR);
+  console.error(`${GREEN}▶${RESET} Model Configuration`);
+  console.error(SEPARATOR);
+
+  const phaseLabels: Record<string, string> = {
+    '1': 'Spec 작성', '2': 'Spec Gate', '3': 'Plan 작성',
+    '4': 'Plan Gate', '5': '구현', '7': 'Eval Gate',
+  };
+
+  for (const key of REQUIRED_PHASE_KEYS) {
+    const preset = getPresetById(phasePresets[key]);
+    const label = preset?.label ?? 'unknown';
+    const editable = !editablePhases || editablePhases.has(key);
+    const prefix = editable ? `[${key}]` : `   `;
+    console.error(`  ${prefix} Phase ${key} (${phaseLabels[key]}):  ${label}`);
+  }
+  console.error(`      Phase 6 (검증):        harness-verify.sh (fixed)`);
+  console.error('');
+  console.error(`  Change? Phase 번호 입력 or Enter to confirm:`);
+  console.error(SEPARATOR);
+}
+
+export async function promptModelConfig(
+  currentPresets: Record<string, string>,
+  inputManager: InputManager,
+  editablePhases?: string[],
+): Promise<Record<string, string>> {
+  const presets = { ...currentPresets };
+  const editable = editablePhases ? new Set(editablePhases) : new Set(REQUIRED_PHASE_KEYS as readonly string[]);
+  const validPhaseKeys = new Set([...editable, '\r', '\n']);
+
+  while (true) {
+    renderModelSelection(presets, editable);
+    const key = await inputManager.waitForKey(validPhaseKeys);
+
+    if (key === '\r' || key === '\n' || key === '') {
+      return presets;
+    }
+
+    const phase = key;
+    if (!editable.has(phase)) continue;
+
+    const phaseLabels: Record<string, string> = {
+      '1': 'Spec 작성', '2': 'Spec Gate', '3': 'Plan 작성',
+      '4': 'Plan Gate', '5': '구현', '7': 'Eval Gate',
+    };
+    console.error('');
+    console.error(`  Phase ${phase} (${phaseLabels[phase]}) — model:`);
+
+    const presetKeys = new Set<string>();
+    MODEL_PRESETS.forEach((p, i) => {
+      const current = p.id === presets[phase] ? ` ${YELLOW}← current${RESET}` : '';
+      console.error(`  [${i + 1}] ${p.label}${current}`);
+      presetKeys.add(String(i + 1));
+    });
+    console.error(`  Select (1-${MODEL_PRESETS.length}):`);
+
+    const choice = await inputManager.waitForKey(presetKeys);
+    const idx = Number(choice) - 1;
+    if (idx >= 0 && idx < MODEL_PRESETS.length) {
+      presets[phase] = MODEL_PRESETS[idx].id;
+    }
+  }
 }
