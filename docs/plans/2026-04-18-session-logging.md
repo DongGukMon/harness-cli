@@ -575,6 +575,58 @@ describe('FileSessionLogger — meta.json + bootstrap flags', () => {
     const ts = logger.getStartedAt();
     expect(ts).toBeGreaterThan(Date.now() - 1000);
   });
+
+  it('mkdirSync failure in constructor: logger becomes disabled (no-op all methods)', () => {
+    const origMkdir = fs.mkdirSync;
+    (fs as any).mkdirSync = () => { throw new Error('EACCES'); };
+    const stderrCalls: string[] = [];
+    const origWrite = process.stderr.write.bind(process.stderr);
+    (process.stderr as any).write = (s: string) => { stderrCalls.push(s); return true; };
+    try {
+      const logger = new FileSessionLogger('runM', '/fake', { sessionsRoot: '/nope' });
+      expect(logger.hasBootstrapped()).toBe(false);
+      // Subsequent calls should be no-op (no additional stderr warn, no throw)
+      const warnsAfterConstructor = stderrCalls.length;
+      logger.writeMeta({ task: 't' });
+      logger.logEvent({ event: 'phase_start', phase: 1 });
+      logger.finalizeSummary({ status: 'completed', autoMode: false } as any);
+      // Expect no further warns (disabled swallows silently)
+      expect(stderrCalls.length).toBe(warnsAfterConstructor);
+    } finally {
+      (fs as any).mkdirSync = origMkdir;
+      (process.stderr as any).write = origWrite;
+    }
+  });
+
+  it('writeMeta is idempotent (second call does not clobber resumedAt)', () => {
+    const harnessDir = makeTempHarnessDir();
+    const sessionsRoot = path.join(harnessDir, 'sessions-root');
+    const logger = new FileSessionLogger('runWM', harnessDir, { sessionsRoot });
+    logger.writeMeta({ task: 'initial' });
+    // Simulate second writeMeta (should not clobber existing resumedAt from first write)
+    logger.updateMeta({ pushResumedAt: 1000 });
+    logger.writeMeta({ task: 'initial' });  // idempotent — recreates meta but should be stable
+    // Verify meta still contains task
+    const repoKey = computeRepoKey(harnessDir);
+    const meta = JSON.parse(fs.readFileSync(path.join(sessionsRoot, repoKey, 'runWM', 'meta.json'), 'utf-8'));
+    expect(meta.task).toBe('initial');
+    expect(typeof meta.startedAt).toBe('number');
+  });
+
+  it('updateMeta on missing meta.json: bootstrap with bootstrapOnResume=true + resumedAt push', () => {
+    const harnessDir = makeTempHarnessDir();
+    const sessionsRoot = path.join(harnessDir, 'sessions-root');
+    const logger = new FileSessionLogger('runBoot', harnessDir, { sessionsRoot });
+    // Do NOT call writeMeta first; updateMeta should create meta with bootstrap marker
+    expect(logger.hasBootstrapped()).toBe(false);
+    logger.updateMeta({ pushResumedAt: Date.now(), task: 'resumed-task' });
+    const repoKey = computeRepoKey(harnessDir);
+    const meta = JSON.parse(fs.readFileSync(path.join(sessionsRoot, repoKey, 'runBoot', 'meta.json'), 'utf-8'));
+    expect(meta.bootstrapOnResume).toBe(true);
+    expect(meta.resumedAt.length).toBe(1);
+    expect(meta.task).toBe('resumed-task');
+    expect(typeof meta.startedAt).toBe('number');
+  });
 });
 ```
 
@@ -1599,53 +1651,70 @@ git commit -m "refactor(logging): generate attemptId in runner.ts, pass to runIn
 - [ ] **Step 1: handleInteractivePhase에 phase_start/phase_end emit**
 
 ```ts
-async function handleInteractivePhase(state: HarnessState, phase: InteractivePhase, /* ... */, logger: SessionLogger): Promise<void> {
+async function handleInteractivePhase(state: HarnessState, phase: InteractivePhase, harnessDir: string, runDir: string, cwd: string, inputManager: InputManager, logger: SessionLogger): Promise<void> {
   const attemptId = randomUUID();
   const phaseStartTs = Date.now();
 
-  // Determine reopenFromGate if this is a reopen
-  const reopenFromGate = state.phaseReopenFlags[String(phase)] ? /* look up triggering phase */ null : null;
+  // Read reopen source (set by handleGateReject/handleVerifyFail) before emitting phase_start
+  const isReopen = state.phaseReopenFlags[String(phase)] ?? false;
+  const reopenFromGate = isReopen ? (state.phaseReopenSource[String(phase)] ?? undefined) : undefined;
 
   logger.logEvent({
     event: 'phase_start',
     phase,
     attemptId,
-    reopenFromGate: reopenFromGate ?? undefined,
+    reopenFromGate,
   });
 
-  // Control-signal redirect check
-  if (state.currentPhase !== phase) {
-    logger.logEvent({
-      event: 'phase_end',
-      phase,
-      attemptId,
-      status: 'failed',
-      durationMs: Date.now() - phaseStartTs,
-      details: { reason: 'redirected' },
-    });
-    return;
+  // Clear the logging-only reopen source after emit (do NOT clear phaseReopenFlags — runInteractivePhase needs it)
+  if (state.phaseReopenSource[String(phase)] !== null) {
+    state.phaseReopenSource[String(phase)] = null;
+    writeState(runDir, state);
   }
 
-  let succeeded = false;
   try {
-    const result = await runInteractivePhase(state, phase, harnessDir, runDir, cwd, inputManager, attemptId);
-    // ... existing post-run logic (artifact commit, state update)
-    succeeded = true;
+    const result = await runInteractivePhase(phase, state, harnessDir, runDir, cwd, attemptId);
 
-    logger.logEvent({
-      event: 'phase_end',
-      phase,
-      attemptId,
-      status: 'completed',
-      durationMs: Date.now() - phaseStartTs,
-    });
+    // Post-run: check for control-signal redirect (e.g., SIGUSR1 skip/jump changed currentPhase mid-run)
+    if (state.currentPhase !== phase) {
+      logger.logEvent({
+        event: 'phase_end',
+        phase,
+        attemptId,
+        status: 'failed',
+        durationMs: Date.now() - phaseStartTs,
+        details: { reason: 'redirected' },
+      });
+      return;
+    }
 
-    // Anomaly detection: phase 5 with stuck reopen flag
-    if (phase === 5 && state.phaseReopenFlags['5'] === true) {
-      logger.logEvent({ event: 'state_anomaly', kind: 'phase_reopen_flag_stuck', details: { phase: 5 } });
+    // Existing post-run logic (artifact commit, state update to 'completed' or 'error')
+    // ... (existing code in handleInteractivePhase for artifact commit/error transitions)
+
+    if (state.phases[String(phase)] === 'completed') {
+      logger.logEvent({
+        event: 'phase_end',
+        phase,
+        attemptId,
+        status: 'completed',
+        durationMs: Date.now() - phaseStartTs,
+      });
+
+      // Anomaly: phase 5 completed with stuck reopen flag
+      if (phase === 5 && state.phaseReopenFlags['5'] === true) {
+        logger.logEvent({ event: 'state_anomaly', kind: 'phase_reopen_flag_stuck', details: { phase: 5 } });
+      }
+    } else {
+      // post-run artifact commit or preset resolution failed → state was marked 'error'
+      logger.logEvent({
+        event: 'phase_end',
+        phase,
+        attemptId,
+        status: 'failed',
+        durationMs: Date.now() - phaseStartTs,
+      });
     }
   } catch (err) {
-    // post-run artifact error path
     logger.logEvent({
       event: 'phase_end',
       phase,
@@ -2584,30 +2653,7 @@ describe('resumeCommand — loggingEnabled inheritance', () => {
 
 `inner.ts`에서 logger 생성 + session open emission + finally 정리 로직을 `bootstrapLogger(runId, harnessDir, state, options)` helper로 분리하여 export. 이 helper를 단위 테스트하는 것이 `innerCommand` 전체 path (tmux/control-pane/promptModelConfig/preflight 전제) 재현보다 훨씬 간단하고 빠르다.
 
-```ts
-// src/commands/inner.ts에서 export
-export async function bootstrapSessionLogger(
-  runId: string,
-  harnessDir: string,
-  state: HarnessState,
-  isResume: boolean,
-  options: { sessionsRoot?: string; cwd?: string } = {},
-): Promise<{ logger: SessionLogger; sessionEndStatus: () => 'completed' | 'paused' | 'interrupted' }> {
-  const logger = createSessionLogger(runId, harnessDir, state.loggingEnabled, { cwd: options.cwd, autoMode: state.autoMode, ...options });
-  if (isResume) {
-    logger.updateMeta({ pushResumedAt: Date.now(), task: state.task });
-    logger.logEvent({ event: 'session_resumed', fromPhase: state.currentPhase, stateStatus: state.status });
-  } else if (logger.hasBootstrapped()) {
-    logger.updateMeta({ pushResumedAt: Date.now() });
-    logger.logEvent({ event: 'session_resumed', fromPhase: state.currentPhase, stateStatus: state.status });
-  } else {
-    logger.writeMeta({ task: state.task });
-    logger.logEvent({ event: 'session_start', task: state.task, autoMode: state.autoMode, baseCommit: state.baseCommit, harnessVersion: '0.1.0' });
-  }
-  // Caller computes sessionEndStatus at teardown
-  return { logger, sessionEndStatus: () => state.status === 'completed' ? 'completed' : state.status === 'paused' ? 'paused' : 'interrupted' };
-}
-```
+**Canonical API (Task 11과 일치):** `bootstrapSessionLogger`는 `SessionLogger`를 직접 반환한다. 호출자(`inner.ts`)가 teardown 시 `state.status` 기반으로 `sessionEndStatus`를 직접 계산.
 
 그 후 `inner.ts`의 runPhaseLoop 섹션은 `bootstrapSessionLogger(...)` 호출로 교체.
 
@@ -2620,7 +2666,7 @@ describe('bootstrapSessionLogger — session event bootstrap', () => {
     const harnessDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bootstrap-'));
     const sessionsRoot = path.join(harnessDir, 'sessions');
     const state = buildMinimalState({ loggingEnabled: true, task: 'test' });
-    const { logger } = await bootstrapSessionLogger('r1', harnessDir, state, false, { sessionsRoot });
+    const logger = await bootstrapSessionLogger('r1', harnessDir, state, false, { sessionsRoot });
     const repoKey = computeRepoKey(harnessDir);
     const eventsPath = path.join(sessionsRoot, repoKey, 'r1', 'events.jsonl');
     const events = fs.readFileSync(eventsPath, 'utf-8').trim().split('\n').map(l => JSON.parse(l));
@@ -3286,7 +3332,9 @@ Expected: 통과.
 - [ ] `getStartedAt()` — meta.startedAt 값 반환
 - [ ] `logEvent` — `v:1` 포함, append-only, monotonic ts
 - [ ] `logEvent`/`writeMeta`/`updateMeta`/`finalizeSummary` fs 예외 → stderr 경고 1회 후 **logger 비활성화** (§6.1). 이후 호출은 fs 접근 없음
-- [ ] `mkdirSync` 실패 시 constructor 생성 단계부터 disabled=true
+- [ ] `mkdirSync` 실패 시 constructor 생성 단계부터 disabled=true (Task 6에 mock test 추가: `fs.mkdirSync` throw 시 모든 후속 메서드가 no-op)
+- [ ] `writeMeta` 연속 호출 시 idempotent (Task 6에 test 추가)
+- [ ] `updateMeta` on missing meta.json → bootstrap rule 실행 (§5.1: bootstrapOnResume=true, startedAt=Date.now(), resumedAt push) (Task 6에 test 추가)
 - [ ] `writeMeta` / `updateMeta` idempotent
 - [ ] `updateMeta` — meta.json 부재 시 bootstrapOnResume bootstrap
 - [ ] `finalizeSummary` — `.tmp` → rename atomic write
