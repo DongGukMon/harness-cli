@@ -1526,7 +1526,8 @@ writeState(runDir, state);
 **handleInteractivePhase**에서 phase_start emit 시 `phaseReopenSource` 읽기:
 
 ```ts
-const reopenFromGate = state.phaseReopenFlags[String(phase)]
+const isReopen = state.phaseReopenFlags[String(phase)] ?? false;
+const reopenFromGate = isReopen
   ? (state.phaseReopenSource[String(phase)] ?? undefined)
   : undefined;
 
@@ -1537,13 +1538,15 @@ logger.logEvent({
   reopenFromGate,
 });
 
-// consume the reopen flag and source
-if (state.phaseReopenFlags[String(phase)]) {
-  state.phaseReopenFlags[String(phase)] = false;
+// DO NOT clear phaseReopenFlags here — runInteractivePhase still needs it to detect reopen.
+// Only clear the logging source (no downstream reader in the current codebase).
+if (state.phaseReopenSource[String(phase)] !== null) {
   state.phaseReopenSource[String(phase)] = null;
   writeState(runDir, state);
 }
 ```
+
+**중요**: `phaseReopenFlags`는 `runInteractivePhase` 내부(`preparePhase`)에서 `isReopen` 판단에 사용되므로 **phase_start emit 직후에 clear하면 안 된다**. 기존 runInteractivePhase/preparePhase의 flag clear 타이밍을 그대로 유지. 본 plan에서는 `phaseReopenSource`만 logging-only state로 취급하여 소비.
 
 이로써 phase 5 reopen의 출처(gate 7 vs verify 6)가 정확히 기록됨.
 
@@ -1664,9 +1667,9 @@ export async function runGatePhase(
 }
 ```
 
-- [ ] **Step 3: checkGateSidecars — metadata 필드 hydrate**
+- [ ] **Step 3: checkGateSidecars — metadata 필드 hydrate (legacy 호환)**
 
-기존 `checkGateSidecars` 함수에서 sidecar를 읽고 GatePhaseResult를 조립할 때, 신규 metadata 필드를 hydrate하되 legacy sidecar에서 없으면 undefined로 통과:
+기존 `checkGateSidecars` 함수는 replay 결과를 계속 반환한다. Legacy sidecar(`runner` 필드 없음)에서는 metadata 필드를 `undefined`로 두고, runner.ts가 emit 시 `runner` 부재를 감지하여 logging 이벤트만 skip한다. **sidecar replay 자체는 유지**(기존 동작 보존):
 
 ```ts
 function checkGateSidecars(runDir: string, phase: GatePhase): GatePhaseResult | null {
@@ -1677,18 +1680,18 @@ function checkGateSidecars(runDir: string, phase: GatePhase): GatePhaseResult | 
   const rawPath = path.join(runDir, `gate-${phase}-raw.txt`);
   const rawOutput = fs.existsSync(rawPath) ? fs.readFileSync(rawPath, 'utf-8') : '';
 
-  // Legacy sidecar: skip if runner field is missing (per §5.2 policy)
-  if (!gateResult.runner) return null;
-
+  // Hydrate new metadata fields; for legacy sidecars (no runner field),
+  // these will be undefined and runner.ts will skip logging emission per §5.2.
   if (gateResult.exitCode !== 0) {
     return {
       type: 'error',
       error: 'gate subprocess exited with non-zero code',
-      runner: gateResult.runner,
-      promptBytes: gateResult.promptBytes,
-      durationMs: gateResult.durationMs,
+      runner: gateResult.runner,              // may be undefined (legacy)
+      promptBytes: gateResult.promptBytes,    // may be undefined (legacy)
+      durationMs: gateResult.durationMs,      // may be undefined (legacy)
       exitCode: gateResult.exitCode,
       rawOutput,
+      recoveredFromSidecar: true,
     };
   }
 
@@ -1699,14 +1702,17 @@ function checkGateSidecars(runDir: string, phase: GatePhase): GatePhaseResult | 
     verdict,
     comments,
     rawOutput,
-    runner: gateResult.runner,
-    promptBytes: gateResult.promptBytes,
-    durationMs: gateResult.durationMs,
+    runner: gateResult.runner,              // may be undefined (legacy)
+    promptBytes: gateResult.promptBytes,    // may be undefined (legacy)
+    durationMs: gateResult.durationMs,      // may be undefined (legacy)
     tokensTotal: gateResult.tokensTotal,
     codexSessionId: gateResult.codexSessionId,
+    recoveredFromSidecar: true,
   };
 }
 ```
+
+**주의: legacy sidecar는 replay 유지** — 기존 crash-recovery 동작을 깨지 않는다. Logger emit skip은 runner.ts에서 처리 (다음 task).
 
 - [ ] **Step 4: 기존 gate 테스트 업데이트**
 
@@ -1782,18 +1788,21 @@ async function handleGatePhase(
   const result = await runGatePhase(state, phase, runDir, cwd, sidecarReplayAllowed);
 
   if (result.type === 'verdict' && result.verdict === 'APPROVE') {
-    logger.logEvent({
-      event: 'gate_verdict',
-      phase,
-      retryIndex,
-      runner: result.runner ?? 'codex',
-      verdict: 'APPROVE',
-      durationMs: result.durationMs,
-      tokensTotal: result.tokensTotal,
-      promptBytes: result.promptBytes,
-      codexSessionId: result.codexSessionId,
-      recoveredFromSidecar: result.recoveredFromSidecar ?? false,
-    });
+    // Legacy sidecar policy: skip emit if runner unknown (§5.2)
+    if (result.runner) {
+      logger.logEvent({
+        event: 'gate_verdict',
+        phase,
+        retryIndex,
+        runner: result.runner,
+        verdict: 'APPROVE',
+        durationMs: result.durationMs,
+        tokensTotal: result.tokensTotal,
+        promptBytes: result.promptBytes,
+        codexSessionId: result.codexSessionId,
+        recoveredFromSidecar: result.recoveredFromSidecar ?? false,
+      });
+    }
     state.phases[String(phase)] = 'completed';
     deleteGateSidecars(runDir, phase);
 
@@ -1802,31 +1811,35 @@ async function handleGatePhase(
       logger.logEvent({ event: 'state_anomaly', kind: 'pending_action_stale_after_approve', details: { phase, pendingActionType: state.pendingAction.type } });
     }
   } else if (result.type === 'verdict' && result.verdict === 'REJECT') {
-    logger.logEvent({
-      event: 'gate_verdict',
-      phase,
-      retryIndex,
-      runner: result.runner ?? 'codex',
-      verdict: 'REJECT',
-      durationMs: result.durationMs,
-      tokensTotal: result.tokensTotal,
-      promptBytes: result.promptBytes,
-      codexSessionId: result.codexSessionId,
-      recoveredFromSidecar: result.recoveredFromSidecar ?? false,
-    });
+    if (result.runner) {
+      logger.logEvent({
+        event: 'gate_verdict',
+        phase,
+        retryIndex,
+        runner: result.runner,
+        verdict: 'REJECT',
+        durationMs: result.durationMs,
+        tokensTotal: result.tokensTotal,
+        promptBytes: result.promptBytes,
+        codexSessionId: result.codexSessionId,
+        recoveredFromSidecar: result.recoveredFromSidecar ?? false,
+      });
+    }
     await handleGateReject(state, phase, /* ... */, logger, retryIndex);
   } else {
     // error
-    logger.logEvent({
-      event: 'gate_error',
-      phase,
-      retryIndex,
-      runner: result.runner,
-      error: result.error,
-      exitCode: result.exitCode,
-      durationMs: result.durationMs,
-      recoveredFromSidecar: result.recoveredFromSidecar ?? false,
-    });
+    if (result.runner) {
+      logger.logEvent({
+        event: 'gate_error',
+        phase,
+        retryIndex,
+        runner: result.runner,
+        error: result.error,
+        exitCode: result.exitCode,
+        durationMs: result.durationMs,
+        recoveredFromSidecar: result.recoveredFromSidecar ?? false,
+      });
+    }
     await handleGateError(state, phase, /* ... */, logger, retryIndex);
   }
 }
@@ -1920,14 +1933,19 @@ async function handleVerifyPhase(state, /* ... */, logger: SessionLogger): Promi
   try {
     outcome = await runVerifyPhase(state, /* ... */);
   } catch (err) {
+    // Spec §5.8: throw path → emit phase_end, set state.error, route to handleVerifyError
     logger.logEvent({
       event: 'phase_end',
       phase: 6,
       status: 'failed',
       durationMs: Date.now() - phaseStartTs,
+      details: { reason: 'verify_throw' },
     });
-    // ... existing error state handling
-    throw err;
+    // Convert throw to structured error outcome so downstream flow (escalation, retry) is unchanged
+    state.phases['6'] = 'error';
+    writeState(runDir, state);
+    await handleVerifyError(state, /* ... */, logger);
+    return;  // do not rethrow — error is fully handled via escalation path
   }
 
   const durationMs = Date.now() - phaseStartTs;
@@ -2440,6 +2458,8 @@ Expected: 통과.
 - [ ] **Extended sidecar hydration**: `runner`/`promptBytes`/`durationMs`/`tokensTotal` 필드 있는 sidecar → GatePhaseResult에 hydrate
 - [ ] **State persistence**: `state.loggingEnabled=true`가 state.json에 저장, resume 시 계승
 - [ ] **reopenFromGate accuracy**: phase 5 reopen이 verify(6)인 경우 `phase_start.reopenFromGate === 6`, gate 7인 경우 `=== 7`
+- [ ] **config-cancel lazy bootstrap**: `onConfigCancel`이 `runPhaseLoop` 진입 전에 발동될 때 → `session_start` (또는 resume 시 `session_resumed`) emit 직후 `session_end { status: 'paused' }` emit; summary.json.status === 'paused'; meta.json 생성 및 `resumedAt[]`에 timestamp push (resume case)
+- [ ] **Verify throw path**: `runVerifyPhase` throw 시 `phase_end { status: 'failed', details: { reason: 'verify_throw' } }` emit 후 `handleVerifyError`로 라우팅; throw 전파 없음
 
 ### Regression (전체 테스트)
 - [ ] 기존 테스트 전체 PASS (플래그 없이 실행 시 NoopLogger 경로로 효과 무)
