@@ -1,17 +1,45 @@
-export const PHASE_MODELS: Record<number, string> = {
-  1: 'claude-opus-4-6',
-  3: 'claude-sonnet-4-6',
-  5: 'claude-sonnet-4-6',
+import type { PendingAction } from './types.js';
+
+export interface ModelPreset {
+  id: string;
+  label: string;
+  runner: 'claude' | 'codex';
+  model: string;
+  effort: string;
+}
+
+export const MODEL_PRESETS: ModelPreset[] = [
+  { id: 'opus-max',     label: 'Claude Opus 4.6 / max',    runner: 'claude', model: 'claude-opus-4-6',   effort: 'max' },
+  { id: 'opus-high',    label: 'Claude Opus 4.6 / high',   runner: 'claude', model: 'claude-opus-4-6',   effort: 'high' },
+  { id: 'sonnet-high',  label: 'Claude Sonnet 4.6 / high', runner: 'claude', model: 'claude-sonnet-4-6', effort: 'high' },
+  { id: 'codex-high',   label: 'Codex / high',             runner: 'codex',  model: 'gpt-5.4',           effort: 'high' },
+  { id: 'codex-medium', label: 'Codex / medium',           runner: 'codex',  model: 'gpt-5.4',           effort: 'medium' },
+];
+
+export const PHASE_DEFAULTS: Record<number, string> = {
+  1: 'opus-max',
+  2: 'codex-high',
+  3: 'sonnet-high',
+  4: 'codex-high',
+  5: 'sonnet-high',
+  7: 'codex-high',
 };
 
-export const PHASE_EFFORTS: Record<number, string> = {
-  1: 'max',
-  3: 'high',
-  5: 'high',
-};
+export const REQUIRED_PHASE_KEYS = ['1', '2', '3', '4', '5', '7'] as const;
+
+export function getPresetById(id: string): ModelPreset | undefined {
+  return MODEL_PRESETS.find(p => p.id === id);
+}
+
+export function getEffectiveReopenTarget(pa: PendingAction): number | null {
+  if (pa.type === 'reopen_phase') return pa.targetPhase;
+  if (pa.type === 'show_escalation') return pa.sourcePhase;
+  return null;
+}
 
 export const GATE_TIMEOUT_MS = 360_000;  // 6 min — Codex high-effort typically takes 2-4 min
 export const VERIFY_TIMEOUT_MS = 300_000;
+export const INTERACTIVE_TIMEOUT_MS = 1_800_000; // 30 min
 export const SIGTERM_WAIT_MS = 5_000;
 export const GROUP_DRAIN_WAIT_MS = 5_000;
 export const HANDOFF_TIMEOUT_MS = 5_000;

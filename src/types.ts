@@ -3,8 +3,8 @@ export type InteractivePhase = 1 | 3 | 5;
 export type GatePhase = 2 | 4 | 7;
 export type PhaseStatus = 'pending' | 'in_progress' | 'completed' | 'failed' | 'error';
 export type RunStatus = 'in_progress' | 'completed' | 'paused';
-export type PauseReason = 'gate-escalation' | 'verify-escalation' | 'gate-error' | 'verify-error';
-export type PendingActionType = 'reopen_phase' | 'rerun_gate' | 'rerun_verify' | 'show_escalation' | 'show_verify_error' | 'skip_phase';
+export type PauseReason = 'gate-escalation' | 'verify-escalation' | 'gate-error' | 'verify-error' | 'config-cancel';
+export type PendingActionType = 'reopen_phase' | 'rerun_gate' | 'rerun_verify' | 'show_escalation' | 'show_verify_error' | 'skip_phase' | 'reopen_config';
 
 export interface PendingAction {
   type: PendingActionType;
@@ -29,7 +29,7 @@ export interface HarnessState {
   task: string;
   baseCommit: string;
   implRetryBase: string;
-  codexPath: string;
+  codexPath: string | null;
   externalCommitsDetected: boolean;
   artifacts: Artifacts;
   phases: Record<string, PhaseStatus>; // keys "1"-"7"
@@ -45,6 +45,10 @@ export interface HarnessState {
   pendingAction: PendingAction | null;
   phaseOpenedAt: Record<string, number | null>; // keys "1","3","5" — epoch ms
   phaseAttemptId: Record<string, string | null>; // keys "1","3","5" — UUID v4
+  phasePresets: Record<string, string>;         // keys "1"-"7" (excl 6), values = preset ID
+  phaseReopenFlags: Record<string, boolean>;    // keys "1","3","5"
+  lastWorkspacePid: number | null;
+  lastWorkspacePidStartTime: number | null;
   tmuxSession: string;
   tmuxMode: 'dedicated' | 'reused';
   tmuxWindows: string[];
@@ -99,6 +103,6 @@ export type VerifyOutcome =
   | { type: 'fail'; feedbackPath: string }
   | { type: 'error'; errorPath?: string };
 
-export type PreflightItem = 'git' | 'head' | 'node' | 'claude' | 'claudeAtFile' | 'verifyScript' | 'jq' | 'codexPath' | 'platform' | 'tty' | 'tmux';
+export type PreflightItem = 'git' | 'head' | 'node' | 'claude' | 'claudeAtFile' | 'verifyScript' | 'jq' | 'codexPath' | 'platform' | 'tty' | 'tmux' | 'codexCli';
 
 export type PhaseType = 'interactive' | 'gate' | 'verify' | 'terminal' | 'ui_only';

@@ -1,45 +1,60 @@
 import { describe, it, expect } from 'vitest';
-import { PHASE_MODELS, PHASE_EFFORTS } from '../../src/config.js';
+import { MODEL_PRESETS, PHASE_DEFAULTS, REQUIRED_PHASE_KEYS, getPresetById, getEffectiveReopenTarget } from '../../src/config.js';
+import type { PendingAction } from '../../src/types.js';
 
-describe('PHASE_MODELS conformance', () => {
-  it('Phase 1 uses claude-opus-4-6', () => {
-    expect(PHASE_MODELS[1]).toBe('claude-opus-4-6');
+describe('MODEL_PRESETS conformance', () => {
+  it('contains at least one claude and one codex preset', () => {
+    expect(MODEL_PRESETS.some(p => p.runner === 'claude')).toBe(true);
+    expect(MODEL_PRESETS.some(p => p.runner === 'codex')).toBe(true);
   });
 
-  it('Phase 3 uses claude-sonnet-4-6', () => {
-    expect(PHASE_MODELS[3]).toBe('claude-sonnet-4-6');
+  it('every preset has all required fields', () => {
+    for (const p of MODEL_PRESETS) {
+      expect(p.id).toBeTruthy();
+      expect(p.label).toBeTruthy();
+      expect(['claude', 'codex']).toContain(p.runner);
+      expect(p.model).toBeTruthy();
+      expect(p.effort).toBeTruthy();
+    }
   });
 
-  it('Phase 5 uses claude-sonnet-4-6', () => {
-    expect(PHASE_MODELS[5]).toBe('claude-sonnet-4-6');
-  });
-
-  it('does not define models for non-interactive phases', () => {
-    expect(PHASE_MODELS[2]).toBeUndefined();
-    expect(PHASE_MODELS[4]).toBeUndefined();
-    expect(PHASE_MODELS[6]).toBeUndefined();
-    expect(PHASE_MODELS[7]).toBeUndefined();
-  });
-
-  it('defines exactly three entries (for phases 1, 3, 5)', () => {
-    expect(Object.keys(PHASE_MODELS).sort()).toEqual(['1', '3', '5']);
+  it('preset IDs are unique', () => {
+    const ids = MODEL_PRESETS.map(p => p.id);
+    expect(new Set(ids).size).toBe(ids.length);
   });
 });
 
-describe('PHASE_EFFORTS conformance', () => {
-  it('Phase 1 uses max effort', () => {
-    expect(PHASE_EFFORTS[1]).toBe('max');
+describe('PHASE_DEFAULTS conformance', () => {
+  it('defines defaults for all required phases', () => {
+    for (const key of REQUIRED_PHASE_KEYS) {
+      expect(PHASE_DEFAULTS[Number(key)]).toBeDefined();
+    }
   });
 
-  it('Phase 3 uses high effort', () => {
-    expect(PHASE_EFFORTS[3]).toBe('high');
+  it('all default preset IDs are valid', () => {
+    for (const presetId of Object.values(PHASE_DEFAULTS)) {
+      expect(getPresetById(presetId)).toBeDefined();
+    }
   });
 
-  it('Phase 5 uses high effort', () => {
-    expect(PHASE_EFFORTS[5]).toBe('high');
+  it('does not define Phase 6', () => {
+    expect(PHASE_DEFAULTS[6]).toBeUndefined();
+  });
+});
+
+describe('getEffectiveReopenTarget', () => {
+  it('returns targetPhase for reopen_phase', () => {
+    const pa: PendingAction = { type: 'reopen_phase', targetPhase: 1, sourcePhase: 2, feedbackPaths: [] };
+    expect(getEffectiveReopenTarget(pa)).toBe(1);
   });
 
-  it('defines exactly three entries (for phases 1, 3, 5)', () => {
-    expect(Object.keys(PHASE_EFFORTS).sort()).toEqual(['1', '3', '5']);
+  it('returns sourcePhase for show_escalation', () => {
+    const pa: PendingAction = { type: 'show_escalation', targetPhase: 2, sourcePhase: 1, feedbackPaths: [] };
+    expect(getEffectiveReopenTarget(pa)).toBe(1);
+  });
+
+  it('returns null for reopen_config', () => {
+    const pa: PendingAction = { type: 'reopen_config', targetPhase: 1, sourcePhase: null, feedbackPaths: [] };
+    expect(getEffectiveReopenTarget(pa)).toBeNull();
   });
 });
