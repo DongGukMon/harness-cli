@@ -1748,12 +1748,13 @@ export async function runCodexGate(/* ... */): Promise<{ exitCode: number; rawOu
 
 - [ ] **Step 2: gate.ts — runGatePhase에 allowSidecarReplay 및 promptBytes**
 
-`src/phases/gate.ts`의 `runGatePhase` 시그니처 확장:
+`src/phases/gate.ts`의 `runGatePhase` 기존 시그니처를 유지하고 `allowSidecarReplay`를 **마지막** 파라미터로 추가. 실제 현재 시그니처 `runGatePhase(phase, state, harnessDir, runDir, cwd)`에 맞춰:
 
 ```ts
 export async function runGatePhase(
-  state: HarnessState,
   phase: GatePhase,
+  state: HarnessState,
+  harnessDir: string,
   runDir: string,
   cwd: string,
   allowSidecarReplay?: { value: boolean },
@@ -2498,6 +2499,56 @@ describe('resumeCommand — loggingEnabled inheritance', () => {
 });
 ```
 
+**inner.test.ts 추가 테스트 예시 (end-to-end acceptance §9):**
+
+```ts
+describe('innerCommand — logging bootstrap end-to-end', () => {
+  it('--enable-logging state creates sessions dir + events.jsonl + meta.json', async () => {
+    // Use existing mocks for tmux/pane/runner/lock; override HOME or pass sessionsRoot via env
+    const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-home-'));
+    process.env.HOME = tmpHome;  // redirect ~/.harness/sessions
+    // Setup: state.json with loggingEnabled=true and completed phases (so phase loop exits quickly)
+    writeState(runDir, { ...baseState, loggingEnabled: true, status: 'completed', currentPhase: 8 });
+    await innerCommand(runId, { root: harnessRoot });
+    // Assert session files created
+    const sessionsRoot = path.join(tmpHome, '.harness', 'sessions');
+    const repoKey = computeRepoKey(harnessDir);
+    const sessionDir = path.join(sessionsRoot, repoKey, runId);
+    expect(fs.existsSync(path.join(sessionDir, 'meta.json'))).toBe(true);
+    expect(fs.existsSync(path.join(sessionDir, 'events.jsonl'))).toBe(true);
+    expect(fs.existsSync(path.join(sessionDir, 'summary.json'))).toBe(true);
+    // Verify session_start + session_end in events
+    const events = fs.readFileSync(path.join(sessionDir, 'events.jsonl'), 'utf-8').trim().split('\n').map(l => JSON.parse(l));
+    expect(events.some(e => e.event === 'session_start')).toBe(true);
+    expect(events.some(e => e.event === 'session_end')).toBe(true);
+  });
+
+  it('without --enable-logging: no files under ~/.harness/sessions', async () => {
+    const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-home-'));
+    process.env.HOME = tmpHome;
+    writeState(runDir, { ...baseState, loggingEnabled: false, status: 'completed', currentPhase: 8 });
+    await innerCommand(runId, { root: harnessRoot });
+    const sessionsRoot = path.join(tmpHome, '.harness', 'sessions');
+    expect(fs.existsSync(sessionsRoot)).toBe(false);
+  });
+
+  it('resume appends session_resumed + meta.resumedAt[] push', async () => {
+    const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-home-'));
+    process.env.HOME = tmpHome;
+    writeState(runDir, { ...baseState, loggingEnabled: true, status: 'completed', currentPhase: 8 });
+    await innerCommand(runId, { root: harnessRoot });  // initial run
+    await innerCommand(runId, { root: harnessRoot, resume: true });  // resume
+    const sessionDir = path.join(tmpHome, '.harness', 'sessions', computeRepoKey(harnessDir), runId);
+    const events = fs.readFileSync(path.join(sessionDir, 'events.jsonl'), 'utf-8').trim().split('\n').map(l => JSON.parse(l));
+    expect(events.some(e => e.event === 'session_resumed')).toBe(true);
+    const meta = JSON.parse(fs.readFileSync(path.join(sessionDir, 'meta.json'), 'utf-8'));
+    expect(meta.resumedAt.length).toBeGreaterThanOrEqual(1);
+  });
+});
+```
+
+이 테스트들은 `HOME` env 리다이렉트와 기존 tmux/runner mock 조합으로 `innerCommand`의 실제 실행을 수행한다. Phase loop이 빠르게 종료되도록 `status='completed'` 초기 state를 사용.
+
 **주의:** 위 테스트들은 기존 mock 구조(tmux, lock, terminal, subprocess spawn)를 재사용한다. 실제 subprocess는 spawn되지 않고 arguments만 capture하여 검증. `startCommand`/`resumeCommand` 시그니처가 각각 `enableLogging?: boolean` 옵션을 받도록 Task 10에서 이미 확장됨.
 
 - [ ] **Step 4: 전체 테스트 실행**
@@ -2566,8 +2617,8 @@ describe('Integration: --enable-logging creates session files', () => {
     expect(fs.existsSync(path.join(sessionDir, 'summary.json'))).toBe(true);
   });
 
-  it('with loggingEnabled=false, createSessionLogger returns NoopLogger and no files are created', () => {
-    const { createSessionLogger } = require('../../src/logger.js');
+  it('with loggingEnabled=false, createSessionLogger returns NoopLogger and no files are created', async () => {
+    const { createSessionLogger } = await import('../../src/logger.js');
     const harnessDir = tempHarnessDir();
     const sessionsRoot = path.join(harnessDir, 'sessions-root');
     const logger = createSessionLogger('run-noop', harnessDir, false, { sessionsRoot });
@@ -2773,8 +2824,8 @@ describe('Integration: one-shot sidecar replay', () => {
     }
   });
 
-  it('legacy sidecar (no runner) still replays but with runner=undefined', () => {
-    const { checkGateSidecars } = require('../../src/phases/gate.js');
+  it('legacy sidecar (no runner) still replays but with runner=undefined', async () => {
+    const { checkGateSidecars } = await import('../../src/phases/gate.js');
     const runDir = fs.mkdtempSync(path.join(os.tmpdir(), 'legacy-'));
     const legacy = { exitCode: 0, timestamp: Date.now() };  // no runner field
     fs.writeFileSync(path.join(runDir, 'gate-2-result.json'), JSON.stringify(legacy));
@@ -2789,54 +2840,28 @@ describe('Integration: one-shot sidecar replay', () => {
   });
 });
 
-describe('Integration: CLI start --enable-logging end-to-end', () => {
-  it('state.loggingEnabled=true after start --enable-logging', async () => {
-    // Use startCommand programmatically with a minimal environment. Mock tmux if needed.
-    // This test sets HARNESS_ROOT to a temp dir and invokes startCommand with enableLogging=true.
-    // Verifies:
-    //   1. state.json has loggingEnabled: true
-    //   2. ~/.harness/sessions/<repoKey>/<runId>/ is created
-    // Due to tmux dependency, this may need heavy mocking or be deferred to manual verification.
-    // Placeholder: assert state file contains loggingEnabled after a scripted start.
-    const { readState } = await import('../../src/state.js');
-    // Setup minimal harness.dir structure, write initial state with loggingEnabled=true manually
-    const harnessRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'cli-'));
-    const harnessDir = path.join(harnessRoot, '.harness');
-    fs.mkdirSync(harnessDir, { recursive: true });
-    const runDir = path.join(harnessDir, 'runs', 'test-run');
-    fs.mkdirSync(runDir, { recursive: true });
-    const state = { runId: 'test-run', currentPhase: 1, status: 'in_progress', loggingEnabled: true, phases: {}, gateRetries: {}, verifyRetries: 0, /* ... minimal fields */ } as any;
-    fs.writeFileSync(path.join(runDir, 'state.json'), JSON.stringify(state));
-    const loaded = readState(runDir);
-    expect(loaded?.loggingEnabled).toBe(true);
+describe('Integration: state persistence via migrateState', () => {
+  it('migrateState backfills loggingEnabled=false for legacy state.json', async () => {
+    const { migrateState } = await import('../../src/state.js');
+    const legacy = { runId: 'r', currentPhase: 1, status: 'paused', phases: {}, gateRetries: {}, verifyRetries: 0 } as any;
+    expect(migrateState(legacy).loggingEnabled).toBe(false);
   });
 
-  it('state.loggingEnabled=false when start without flag', async () => {
-    const { readState } = await import('../../src/state.js');
-    const harnessRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'cli-'));
-    const runDir = path.join(harnessRoot, '.harness', 'runs', 'test-run2');
-    fs.mkdirSync(runDir, { recursive: true });
-    const state = { runId: 'test-run2', currentPhase: 1, status: 'in_progress', loggingEnabled: false, phases: {}, gateRetries: {}, verifyRetries: 0 } as any;
-    fs.writeFileSync(path.join(runDir, 'state.json'), JSON.stringify(state));
-    const loaded = readState(runDir);
-    expect(loaded?.loggingEnabled).toBe(false);
-  });
-
-  it('loggingEnabled persists across resume (via state)', async () => {
-    const { readState, migrateState } = await import('../../src/state.js');
-    // Simulate: start created state with loggingEnabled=true, resume reads state back
+  it('migrateState preserves loggingEnabled=true across resume', async () => {
+    const { migrateState } = await import('../../src/state.js');
     const state = { loggingEnabled: true, runId: 'r', currentPhase: 1, status: 'paused', phases: {}, gateRetries: {}, verifyRetries: 0 } as any;
-    const migrated = migrateState(JSON.parse(JSON.stringify(state)));
-    expect(migrated.loggingEnabled).toBe(true);
-    // Legacy state without field → migrateState defaults to false
-    const legacy = { runId: 'r2', currentPhase: 1, status: 'paused', phases: {}, gateRetries: {}, verifyRetries: 0 } as any;
-    const migratedLegacy = migrateState(legacy);
-    expect(migratedLegacy.loggingEnabled).toBe(false);
+    expect(migrateState(JSON.parse(JSON.stringify(state))).loggingEnabled).toBe(true);
   });
 });
 ```
 
-**주의:** 실제 `startCommand`/`resumeCommand` end-to-end 테스트는 tmux 의존성이 커서 mocking 비용이 높다. Task 20의 CLI-level 테스트는 **상태 레벨 검증** (state.json에 loggingEnabled 기록, migrate 시 기본값, resume 시 state에서 계승)으로 한정한다. 실제 `harness start --enable-logging` 실행은 수동 검증 (Eval Checklist의 "Spec Acceptance §9" 항목에서 체크).
+**End-to-end CLI 검증은 Task 19 Step 3에서 수행한다.** `tests/commands/run.test.ts`와 `tests/commands/resume-cmd.test.ts`는 이미 tmux/lock/terminal을 mock하고 `startCommand`/`resumeCommand`를 실제 호출한다. 이 mock 구조를 사용하여:
+- `startCommand('task', { enableLogging: true })` → state.json.loggingEnabled === true
+- `__inner` spawn args capture → `--enable-logging` 플래그 없음 (state-driven)
+- `resumeCommand(runId)` → 기존 state.loggingEnabled 계승
+- `innerCommand` bootstrap → `~/.harness/sessions/<repoKey>/<runId>/` 디렉토리 및 events.jsonl/meta.json 생성 (innerCommand의 I/O를 tempdir로 리다이렉트)
+
+수동 검증은 제거. 모든 spec §9 acceptance criteria는 자동 테스트로 커버.
 
 ### 추가 엣지 케이스 테스트 (§5.8/§5.9 커버리지)
 
