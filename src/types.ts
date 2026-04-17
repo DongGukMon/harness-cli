@@ -56,6 +56,11 @@ export interface HarnessState {
   tmuxOriginalWindow?: string;
   tmuxWorkspacePane: string;
   tmuxControlPane: string;
+  // --- Session logging (opt-in) ---
+  loggingEnabled: boolean;
+  // Tracks which phase triggered a reopen (for phase_start.reopenFromGate)
+  // keys "1","3","5" → number (triggering phase 2/4/6/7) or null
+  phaseReopenSource: Record<string, number | null>;
 }
 
 export interface LockData {
@@ -73,6 +78,12 @@ export interface LockData {
 export interface GateResult {
   exitCode: number;
   timestamp: number;
+  // Session logging metadata (v1: optional for backward compat)
+  runner?: 'claude' | 'codex';
+  promptBytes?: number;
+  durationMs?: number;
+  tokensTotal?: number;
+  codexSessionId?: string;
 }
 
 export interface VerifyResult {
@@ -88,12 +99,25 @@ export interface GateOutcome {
   verdict: GateVerdict;
   comments: string;
   rawOutput: string;
+  // Session logging metadata
+  runner?: 'claude' | 'codex';
+  promptBytes?: number;
+  durationMs?: number;
+  tokensTotal?: number;
+  codexSessionId?: string;
+  recoveredFromSidecar?: boolean;
 }
 
 export interface GateError {
   type: 'error';
   error: string;
   rawOutput?: string;
+  // Session logging metadata
+  runner?: 'claude' | 'codex';
+  promptBytes?: number;
+  durationMs?: number;
+  exitCode?: number;
+  recoveredFromSidecar?: boolean;
 }
 
 export type GatePhaseResult = GateOutcome | GateError;
@@ -106,3 +130,73 @@ export type VerifyOutcome =
 export type PreflightItem = 'git' | 'head' | 'node' | 'claude' | 'claudeAtFile' | 'verifyScript' | 'jq' | 'codexPath' | 'platform' | 'tty' | 'tmux' | 'codexCli';
 
 export type PhaseType = 'interactive' | 'gate' | 'verify' | 'terminal' | 'ui_only';
+
+// --- Session Logging Events ---
+
+export interface LogEventBase {
+  v: number;
+  ts: number;
+  runId: string;
+  phase?: number;
+  attemptId?: string | null;
+}
+
+export type LogEvent =
+  | (LogEventBase & { event: 'session_start'; task: string; autoMode: boolean; baseCommit: string; harnessVersion: string })
+  | (LogEventBase & { event: 'session_resumed'; fromPhase: number; stateStatus: RunStatus })
+  | (LogEventBase & { event: 'phase_start'; phase: number; attemptId?: string | null; reopenFromGate?: number | null; retryIndex?: number })
+  | (LogEventBase & {
+      event: 'gate_verdict';
+      phase: number;
+      retryIndex: number;
+      runner: 'claude' | 'codex';
+      verdict: GateVerdict;
+      durationMs?: number;
+      tokensTotal?: number;
+      promptBytes?: number;
+      codexSessionId?: string;
+      recoveredFromSidecar?: boolean;
+    })
+  | (LogEventBase & {
+      event: 'gate_error';
+      phase: number;
+      retryIndex: number;
+      runner?: 'claude' | 'codex';
+      error: string;
+      exitCode?: number;
+      durationMs?: number;
+      recoveredFromSidecar?: boolean;
+    })
+  | (LogEventBase & { event: 'gate_retry'; phase: number; retryIndex: number; retryCount: number; retryLimit: number; feedbackPath: string; feedbackBytes: number; feedbackPreview: string })
+  | (LogEventBase & { event: 'escalation'; phase: number; reason: 'gate-retry-limit' | 'gate-error' | 'verify-limit' | 'verify-error'; userChoice?: 'C' | 'S' | 'Q' | 'R' })
+  | (LogEventBase & { event: 'force_pass'; phase: number; by: 'auto' | 'user' })
+  | (LogEventBase & { event: 'verify_result'; passed: boolean; retryIndex: number; durationMs: number; failedChecks?: string[] })
+  | (LogEventBase & { event: 'phase_end'; phase: number; attemptId?: string | null; status: 'completed' | 'failed'; durationMs: number; details?: { reason: string } })
+  | (LogEventBase & { event: 'state_anomaly'; kind: string; details: Record<string, unknown> })
+  | (LogEventBase & { event: 'session_end'; status: 'completed' | 'paused' | 'interrupted'; totalWallMs: number });
+
+export interface SessionMeta {
+  v: number;
+  runId: string;
+  repoKey: string;
+  harnessDir: string;
+  cwd: string;
+  gitBranch?: string;
+  task: string;
+  startedAt: number;
+  autoMode: boolean;
+  harnessVersion: string;
+  resumedAt: number[];
+  bootstrapOnResume?: boolean;
+}
+
+export interface SessionLogger {
+  logEvent(event: Omit<LogEvent, 'v' | 'ts' | 'runId'>): void;
+  writeMeta(partial: Partial<SessionMeta> & { task: string }): void;
+  updateMeta(update: { pushResumedAt?: number; task?: string }): void;
+  finalizeSummary(state: HarnessState): void;
+  close(): void;
+  hasBootstrapped(): boolean;
+  hasEmittedSessionOpen(): boolean;
+  getStartedAt(): number;
+}
