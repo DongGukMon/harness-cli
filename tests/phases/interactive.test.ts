@@ -25,6 +25,13 @@ vi.mock('../../src/tmux.js', () => ({
 
 vi.mock('../../src/process.js', () => ({
   isPidAlive: vi.fn(() => false),
+  getProcessStartTime: vi.fn(() => 1234567890),
+  killProcessGroup: vi.fn(async () => {}),
+}));
+
+vi.mock('../../src/lock.js', () => ({
+  updateLockChild: vi.fn(),
+  clearLockChild: vi.fn(),
 }));
 
 vi.mock('../../src/context/assembler.js', () => ({
@@ -579,7 +586,7 @@ describe('runInteractivePhase — advisor reminder fires before sendKeysToPane',
     expect(reminderOrder).toBeDefined();
     expect(sendKeysToPaneOrder).toBeDefined();
     expect(reminderOrder).toBeLessThan(sendKeysToPaneOrder);
-    expect(vi.mocked(printAdvisorReminder)).toHaveBeenCalledWith(1);
+    expect(vi.mocked(printAdvisorReminder)).toHaveBeenCalledWith(1, 'claude');
   });
 
   it('sendKeysToPane command includes --dangerously-skip-permissions and --effort', async () => {
