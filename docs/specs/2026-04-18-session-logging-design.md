@@ -1,6 +1,6 @@
 # Harness Session Logging — Design Spec
 
-- 상태: draft (rev 11, Codex gate feedback 10차 반영)
+- 상태: draft (rev 12, Codex gate feedback 11차 반영)
 - 작성일: 2026-04-18
 - 담당: Claude Code (engineer), Codex (reviewer)
 - 관련 문서:
@@ -289,6 +289,16 @@ async function innerCommand(runId, options) {
 
 **Gate sidecar replay** (`src/phases/gate.ts` → `checkGateSidecars`): sidecar가 존재해서 Codex 재실행 없이 결과를 리턴하는 경우, `GatePhaseResult`에 `recoveredFromSidecar: true`를 설정한다. `runner.ts`의 `handleGatePhase`는 이 플래그를 그대로 `gate_verdict.recoveredFromSidecar`로 emit.
 
+**Sidecar cleanup 정책 (v1 확정):** 정상 reject/error 재시도가 stale sidecar를 잘못 replay하는 것을 방지하기 위해, `gate-N-result.json`은 다음 모든 경로에서 삭제된다:
+- APPROVE 후 (`handleGatePhase` 기존 로직)
+- REJECT 후 `handleGateReject`에서 retry 전에 `deleteGateSidecars(runDir, phase)` 호출
+- Gate error 후 `handleGateError`에서 retry 전에 동일
+- Force pass 후 (기존)
+
+이렇게 하면 `checkGateSidecars`가 non-null을 리턴하는 경로는 **이전 `__inner` 프로세스 crash로 인한 resume recovery** 케이스만 남는다. 이게 `recoveredFromSidecar: true`의 의도된 의미이다.
+
+만약 구현 상 REJECT 시 sidecar 삭제가 어려우면 대안으로 `checkGateSidecars`를 `options.resume === true` 케이스에서만 실행하도록 gate runner에 isResume 플래그를 전달해도 된다. 둘 중 한 가지 경로를 impl plan에서 선택한다.
+
 ```ts
 // src/phases/gate.ts — checkGateSidecars 수정 (결과 조립 시)
 return {
@@ -329,6 +339,8 @@ return {
 ### 5.3 Gate verdict 추출 순서 및 promptBytes 플럼빙
 
 `src/phases/gate.ts`의 `runGatePhase` 내부에서 prompt 문자열을 조립한 직후 `promptBytes = Buffer.byteLength(prompt, 'utf8')`을 계산해 `GatePhaseResult`에 포함한다. `runner.ts`는 이 값을 그대로 전달한다.
+
+**`retryIndex` 캡처 규칙:** `gate_verdict`, `gate_error`, `verify_result`, `gate_retry` 이벤트의 `retryIndex`는 **mutation 이전에 캡처한 값**을 사용한다. 즉, `handleGateReject`/`handleGateError`/`handleVerifyFail`가 `state.gateRetries[phase]++` 또는 `state.verifyRetries++`를 하기 **전에** 현재 값을 읽어서 이벤트에 넣는다. 첫 번째 시도(실패 없음)는 `retryIndex: 0`. 첫 번째 reject/fail 이벤트의 `retryIndex`도 `0`이며, 그 다음 재시도의 `phase_start`가 `retryIndex: 1`을 가진다.
 
 `src/phases/runner.ts` → `handleGatePhase` APPROVE 분기:
 
@@ -399,7 +411,9 @@ export function extractCodexMetadata(stdout: string): { tokensTotal?: number; co
 |---|---|---|---|
 | `handleInteractivePhase` (normal complete) | `runInteractivePhase` 호출 직전 | `runInteractivePhase` 성공 리턴 직후 (post-run artifact 작업 포함) | `'completed'` |
 | `handleInteractivePhase` (post-run artifact error) | 동일 | post-run 작업(artifact auto-commit 등) 실패 → phase status `error` 설정 직전 | `'failed'` |
+| `handleInteractivePhase` (control-signal redirect) | 동일 | `state.currentPhase !== phase` 감지 후 early return 직전 | `'failed'` (redirect로 이 시도가 버려짐을 표현; `details.reason='redirected'`를 attemptId와 함께 기록) |
 | `handleVerifyPhase` (pass) | `runVerifyPhase` 호출 직전 | verify passed → 다음 phase 전환 직전 | `'completed'` |
+| `handleVerifyPhase` (fail, retry 가능) | 동일 | `handleVerifyFail`가 phase 5 reopen 설정 직전 | `'failed'` |
 | `handleVerifyPhase` (fail → retry limit) | 동일 | escalation 직전 | `'failed'` |
 | `handleVerifyPhase` (runVerifyPhase throw) | 동일 | try/catch로 감싸 catch 블록에서 emit; state는 error로 설정 | `'failed'` |
 | `forcePassVerify` | (없음 — phase_start 없음) | force pass 직후 | `'completed'` |
@@ -421,7 +435,7 @@ export function extractCodexMetadata(stdout: string): { tokensTotal?: number; co
 | `gate_verdict` | APPROVE/REJECT 판단 직후, `deleteGateSidecars` 이전 | `runGatePhase` 내부 타이밍 (`runCodexGate`/`runClaudeGate` 실행 시간) |
 | `gate_error` | gate 실패 확정 직후 | 동일 |
 
-**`phase_start.reopenFromGate` 사용법:** interactive phase(1/3/5)가 gate REJECT 때문에 reopen될 때, 해당 phase_start에 `reopenFromGate: <gatePhaseNumber>`를 포함한다. 예: phase 2가 REJECT해서 phase 1이 reopen → `phase_start { phase: 1, reopenFromGate: 2 }`.
+**`phase_start.reopenFromGate` 사용법:** interactive phase(1/3/5)가 gate REJECT 또는 verify fail로 reopen될 때, 해당 phase_start에 `reopenFromGate: <triggerPhaseNumber>`를 포함한다. 예: phase 2 REJECT → phase 1 reopen → `phase_start { phase: 1, reopenFromGate: 2 }`. 또 phase 6(verify) fail → phase 5 reopen → `phase_start { phase: 5, reopenFromGate: 6 }`. (필드 이름은 역사적 이유로 `reopenFromGate`지만 verify trigger도 포함.)
 
 **`handleInteractivePhase`의 `phase_end.attemptId`:** `src/phases/interactive.ts`의 `runInteractivePhase`가 반환하는 `phaseAttemptId`를 사용. 이 값은 `phase_start`에도 동일하게 포함.
 
