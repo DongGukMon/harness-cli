@@ -133,6 +133,10 @@ export type PhaseType = 'interactive' | 'gate' | 'verify' | 'terminal' | 'ui_onl
 
 // --- Session Logging Events ---
 
+// Distributive Omit: applies Omit to each member of a union separately,
+// preserving discriminated-union specificity (needed for LogEvent variants).
+export type DistributiveOmit<T, K extends keyof any> = T extends any ? Omit<T, K> : never;
+
 export interface LogEventBase {
   v: number;
   ts: number;
@@ -191,7 +195,7 @@ export interface SessionMeta {
 }
 
 export interface SessionLogger {
-  logEvent(event: Omit<LogEvent, 'v' | 'ts' | 'runId'>): void;
+  logEvent(event: DistributiveOmit<LogEvent, 'v' | 'ts' | 'runId'>): void;
   writeMeta(partial: Partial<SessionMeta> & { task: string }): void;
   updateMeta(update: { pushResumedAt?: number; task?: string }): void;
   finalizeSummary(state: HarnessState): void;

@@ -24,8 +24,7 @@ describe('computeRepoKey', () => {
 describe('NoopLogger', () => {
   it('all methods are no-op and do not throw', () => {
     const logger = new NoopLogger();
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    expect(() => logger.logEvent({ event: 'session_start', task: 't', autoMode: false, baseCommit: '', harnessVersion: '', phase: 1 } as any)).not.toThrow();
+    expect(() => logger.logEvent({ event: 'session_start', task: 't', autoMode: false, baseCommit: '', harnessVersion: '', phase: 1 })).not.toThrow();
     expect(() => logger.writeMeta({ task: 't' })).not.toThrow();
     expect(() => logger.updateMeta({ pushResumedAt: 1 })).not.toThrow();
     expect(() => logger.finalizeSummary({} as HarnessState)).not.toThrow();
