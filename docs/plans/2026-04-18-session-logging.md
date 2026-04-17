@@ -1266,23 +1266,55 @@ import type { SessionLogger } from '../types.js';
 1. logger 변수는 inner.ts 함수 초반에 생성 (state 로드 후)
 2. onConfigCancel 등록 시점에 logger 참조 가능하도록
 
-- [ ] **Step 4: 빌드 확인**
+- [ ] **Step 4: config-cancel handler-level 테스트 (tests/commands/inner.test.ts)**
 
-```bash
-npm run build
+기존 `tests/commands/inner.test.ts`에 추가. InputManager를 mock하여 `onConfigCancel()` 를 강제 트리거하고, events.jsonl 및 summary.json을 검증:
+
+```ts
+describe('inner.ts — onConfigCancel lazy bootstrap', () => {
+  it('fresh start config-cancel: emits session_start → session_end(paused), summary.status=paused', async () => {
+    const harnessRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-fresh-'));
+    // setup minimal harness dir + state with loggingEnabled=true, fresh (no meta.json)
+    // mock tmux/InputManager: InputManager that fires onConfigCancel after registration
+    const sessionsRoot = path.join(harnessRoot, 'sessions');
+    // ... (specific setup depends on inner.ts testability; may need DI or partial mock)
+
+    // Assert (after innerCommand returns via process.exit mocked):
+    //   - events.jsonl has session_start then session_end(paused)
+    //   - summary.json.status === 'paused'
+  });
+
+  it('resume config-cancel: emits session_resumed → session_end(paused), resumedAt pushed', async () => {
+    // Pre-create meta.json (simulating prior start)
+    // Invoke inner.ts with options.resume=true
+    // Force onConfigCancel before runPhaseLoop
+    // Assert: session_resumed emitted, meta.resumedAt.length === 1
+  });
+});
 ```
 
-- [ ] **Step 5: Commit**
+**주의:** `inner.ts`의 `process.exit(0)` 호출이 테스트 환경에서 프로세스를 실제로 죽이지 않도록 `process.exit`을 spy로 대체해야 한다. 또한 tmux/pane 관련 I/O는 mock 필요. 복잡도가 높으면 이 테스트는 "handler-level simulation"으로 축소: `onConfigCancel` 콜백을 `inner.ts`에서 export하거나 dependency injection으로 분리하여 단독 테스트.
+
+**간이 대안:** 실제 `innerCommand` 호출 대신 `onConfigCancel` 콜백을 빌드하는 helper 함수 (`buildConfigCancelHandler(logger, state, isResume, ...)`)를 `inner.ts`에 export하고, 해당 함수를 단독 테스트. 이 경우 Task 11 Step 3의 onConfigCancel 본문을 별도 함수로 리팩터.
+
+- [ ] **Step 5: 빌드 확인**
 
 ```bash
-git add src/commands/inner.ts
-git commit -m "feat(logging): inner.ts logger lifecycle + lazy bootstrap
+npm run build && npm test -- inner
+```
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add src/commands/inner.ts tests/commands/inner.test.ts
+git commit -m "feat(logging): inner.ts logger lifecycle + lazy bootstrap + handler tests
 
 - Logger created early (before onConfigCancel) to satisfy config-cancel lazy bootstrap
 - session_start/session_resumed emitted before runPhaseLoop
 - session_end + finalizeSummary in finally block
 - onConfigCancel lazy-bootstraps missing session_open event via hasEmittedSessionOpen()
-- sidecarReplayAllowed one-shot flag created per resume session"
+- sidecarReplayAllowed one-shot flag created per resume session
+- Handler-level tests verify config-cancel emits session_start/resumed + session_end"
 ```
 
 ---
@@ -1550,21 +1582,96 @@ if (state.phaseReopenSource[String(phase)] !== null) {
 
 이로써 phase 5 reopen의 출처(gate 7 vs verify 6)가 정확히 기록됨.
 
-- [ ] **Step 3: 빌드 및 테스트**
+- [ ] **Step 3: handler-level 테스트 추가 (tests/phases/runner.test.ts)**
+
+기존 `tests/phases/runner.test.ts`에 `handleInteractivePhase` 호출 시 실제로 올바른 이벤트가 emit되는지 검증 테스트 추가:
+
+```ts
+import { FileSessionLogger, computeRepoKey } from '../../src/logger.js';
+
+function makeLogger(runId: string): { logger: FileSessionLogger; eventsPath: string; cleanup: () => void } {
+  const harnessDir = fs.mkdtempSync(path.join(os.tmpdir(), 'handler-test-'));
+  const sessionsRoot = path.join(harnessDir, 'sessions');
+  const logger = new FileSessionLogger(runId, harnessDir, { sessionsRoot });
+  logger.writeMeta({ task: 't' });
+  const eventsPath = path.join(sessionsRoot, computeRepoKey(harnessDir), runId, 'events.jsonl');
+  return { logger, eventsPath, cleanup: () => fs.rmSync(harnessDir, { recursive: true, force: true }) };
+}
+
+function readEvents(eventsPath: string): any[] {
+  return fs.readFileSync(eventsPath, 'utf-8').trim().split('\n').filter(Boolean).map(l => JSON.parse(l));
+}
+
+describe('handleInteractivePhase — event emission', () => {
+  it('emits phase_start then phase_end completed on successful run', async () => {
+    const { logger, eventsPath, cleanup } = makeLogger('ht1');
+    try {
+      // Mock runInteractivePhase to return success quickly
+      const interactive = await import('../../src/phases/interactive.js');
+      const spy = vi.spyOn(interactive, 'runInteractivePhase').mockResolvedValue({ status: 'completed', attemptId: 'mock-id' } as any);
+      const state = buildMinimalState({ phase: 1 });
+      await handleInteractivePhase(state, 1, /* ... */, logger);
+      const events = readEvents(eventsPath);
+      expect(events[0].event).toBe('phase_start');
+      expect(events[0].phase).toBe(1);
+      expect(events[events.length - 1].event).toBe('phase_end');
+      expect(events[events.length - 1].status).toBe('completed');
+      spy.mockRestore();
+    } finally { cleanup(); }
+  });
+
+  it('emits phase_end with reopenFromGate=6 when verify (6) triggered phase 5 reopen', async () => {
+    const { logger, eventsPath, cleanup } = makeLogger('ht2');
+    try {
+      const state = buildMinimalState({ phase: 5 });
+      state.phaseReopenFlags['5'] = true;
+      state.phaseReopenSource['5'] = 6;  // verify triggered
+      const spy = vi.spyOn(/* interactive */, 'runInteractivePhase').mockResolvedValue({ status: 'completed', attemptId: 'a1' } as any);
+      await handleInteractivePhase(state, 5, /* ... */, logger);
+      const events = readEvents(eventsPath);
+      const phaseStart = events.find(e => e.event === 'phase_start');
+      expect(phaseStart.reopenFromGate).toBe(6);
+      spy.mockRestore();
+    } finally { cleanup(); }
+  });
+
+  it('emits state_anomaly phase_reopen_flag_stuck when phase 5 finishes with flag still set', async () => {
+    const { logger, eventsPath, cleanup } = makeLogger('ht3');
+    try {
+      const state = buildMinimalState({ phase: 5 });
+      // preparePhase/runInteractivePhase would normally clear the flag;
+      // mock it to leave the flag set to simulate the stuck case
+      state.phaseReopenFlags['5'] = true;
+      vi.spyOn(/* interactive */, 'runInteractivePhase').mockImplementation(async (s) => {
+        // deliberately do NOT clear reopenFlags — simulate the anomaly
+        return { status: 'completed', attemptId: 'a1' } as any;
+      });
+      await handleInteractivePhase(state, 5, /* ... */, logger);
+      const events = readEvents(eventsPath);
+      expect(events.some(e => e.event === 'state_anomaly' && e.kind === 'phase_reopen_flag_stuck')).toBe(true);
+    } finally { cleanup(); }
+  });
+});
+```
+
+`buildMinimalState` 헬퍼는 기존 runner.test.ts에서 이미 존재하거나, 필요 필드만 포함한 minimal `HarnessState` 빌드 함수로 정의.
+
+- [ ] **Step 4: 빌드 및 테스트**
 
 ```bash
 npm run build && npm test -- runner
 ```
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
-git add src/phases/runner.ts
-git commit -m "feat(logging): emit phase_start/phase_end for interactive phases
+git add src/phases/runner.ts tests/phases/runner.test.ts
+git commit -m "feat(logging): emit phase_start/phase_end for interactive phases + handler-level tests
 
-- phase_start with attemptId + reopenFromGate heuristic
+- phase_start with attemptId + reopenFromGate (from phaseReopenSource)
 - phase_end completed/failed/redirected paths
-- state_anomaly for phase 5 stuck reopen flag"
+- state_anomaly for phase 5 stuck reopen flag
+- Handler-level tests spy on runInteractivePhase; verify real emission sequence"
 ```
 
 ---
@@ -1911,21 +2018,158 @@ async function forcePassGate(state, phase, logger: SessionLogger, by: 'auto' | '
 }
 ```
 
-- [ ] **Step 5: 빌드 및 테스트**
+- [ ] **Step 5: handler-level 테스트 (escalation + force_pass + gate_verdict)**
+
+`tests/phases/runner.test.ts`에 handler-level 검증 추가:
+
+```ts
+describe('handleGateEscalation / handleGateError / handleVerifyEscalation / handleVerifyError — event emission', () => {
+  it('handleGateEscalation emits exactly one escalation event AFTER userChoice resolved', async () => {
+    const { logger, eventsPath, cleanup } = makeLogger('esc1');
+    try {
+      const inputManager = mockInputManagerWithChoice('C');  // user picks continue
+      const state = buildMinimalState({ phase: 2 });
+      state.gateRetries['2'] = 3;  // at limit
+      await handleGateEscalation(state, 2, /* ... */, inputManager, logger);
+      const events = readEvents(eventsPath);
+      const escs = events.filter(e => e.event === 'escalation');
+      expect(escs.length).toBe(1);
+      expect(escs[0].reason).toBe('gate-retry-limit');
+      expect(escs[0].userChoice).toBe('C');
+      // Assert emission order: escalation event MUST come after prompt resolution
+      expect(inputManager.promptWasCalledBefore(escs[0].ts)).toBe(true);
+    } finally { cleanup(); }
+  });
+
+  it('handleVerifyEscalation emits exactly one escalation with reason=verify-limit', async () => {
+    const { logger, eventsPath, cleanup } = makeLogger('esc2');
+    try {
+      const inputManager = mockInputManagerWithChoice('R');
+      const state = buildMinimalState({ phase: 6 });
+      state.verifyRetries = 3;  // at limit
+      await handleVerifyEscalation(state, /* ... */, inputManager, logger);
+      const events = readEvents(eventsPath);
+      const escs = events.filter(e => e.event === 'escalation');
+      expect(escs.length).toBe(1);
+      expect(escs[0].reason).toBe('verify-limit');
+      expect(escs[0].userChoice).toBe('R');
+    } finally { cleanup(); }
+  });
+
+  it('handleGateError emits escalation with reason=gate-error when retries exhausted', async () => {
+    const { logger, eventsPath, cleanup } = makeLogger('esc3');
+    try {
+      const inputManager = mockInputManagerWithChoice('Q');
+      const state = buildMinimalState({ phase: 2 });
+      await handleGateError(state, 2, /* ... error payload ... */, inputManager, logger);
+      const events = readEvents(eventsPath);
+      const escs = events.filter(e => e.event === 'escalation');
+      expect(escs.length).toBe(1);
+      expect(escs[0].reason).toBe('gate-error');
+      expect(escs[0].userChoice).toBe('Q');
+    } finally { cleanup(); }
+  });
+});
+
+describe('forcePassGate / forcePassVerify — emit exclusivity', () => {
+  it('forcePassGate emits exactly one force_pass; no phase_start/phase_end/gate_verdict', async () => {
+    const { logger, eventsPath, cleanup } = makeLogger('fp1');
+    try {
+      const state = buildMinimalState({ phase: 2 });
+      await forcePassGate(state, 2, logger, 'user');
+      const events = readEvents(eventsPath);
+      const fps = events.filter(e => e.event === 'force_pass');
+      expect(fps.length).toBe(1);
+      expect(fps[0].by).toBe('user');
+      expect(events.some(e => e.event === 'phase_start' && e.phase === 2)).toBe(false);
+      expect(events.some(e => e.event === 'phase_end' && e.phase === 2)).toBe(false);
+      expect(events.some(e => e.event === 'gate_verdict' && e.phase === 2)).toBe(false);
+    } finally { cleanup(); }
+  });
+
+  it('forcePassVerify emits exactly one force_pass; no phase_end/verify_result', async () => {
+    const { logger, eventsPath, cleanup } = makeLogger('fp2');
+    try {
+      const state = buildMinimalState({ phase: 6 });
+      await forcePassVerify(state, logger, 'auto');
+      const events = readEvents(eventsPath);
+      const fps = events.filter(e => e.event === 'force_pass');
+      expect(fps.length).toBe(1);
+      expect(fps[0].by).toBe('auto');
+      expect(events.some(e => e.event === 'phase_end' && e.phase === 6)).toBe(false);
+      expect(events.some(e => e.event === 'verify_result')).toBe(false);
+    } finally { cleanup(); }
+  });
+});
+
+describe('handleGatePhase — gate_verdict emission', () => {
+  it('APPROVE path emits gate_verdict with runner=codex when Codex preset', async () => {
+    const { logger, eventsPath, cleanup } = makeLogger('gv1');
+    try {
+      const state = buildMinimalState({ phase: 2 });
+      state.phasePresets['2'] = 'codex-high';  // real Codex preset from config.ts
+      vi.spyOn(/* codex */, 'runCodexGate').mockResolvedValue({ exitCode: 0, rawOutput: 'VERDICT: APPROVE', tokensTotal: 45000 } as any);
+      await handleGatePhase(state, 2, /* ... */, logger, { value: false });
+      const events = readEvents(eventsPath);
+      const verdicts = events.filter(e => e.event === 'gate_verdict');
+      expect(verdicts.length).toBe(1);
+      expect(verdicts[0].runner).toBe('codex');
+      expect(verdicts[0].verdict).toBe('APPROVE');
+      expect(verdicts[0].tokensTotal).toBe(45000);
+    } finally { cleanup(); }
+  });
+
+  it('REJECT path emits gate_verdict then gate_retry in order', async () => {
+    const { logger, eventsPath, cleanup } = makeLogger('gv2');
+    try {
+      const state = buildMinimalState({ phase: 2 });
+      // Mock runCodexGate → REJECT; feedback file exists
+      await handleGatePhase(state, 2, /* ... REJECT setup ... */, logger, { value: false });
+      const events = readEvents(eventsPath);
+      const verdict = events.find(e => e.event === 'gate_verdict');
+      const retry = events.find(e => e.event === 'gate_retry');
+      expect(verdict).toBeDefined();
+      expect(verdict.verdict).toBe('REJECT');
+      expect(retry).toBeDefined();
+      expect(events.indexOf(verdict)).toBeLessThan(events.indexOf(retry));
+    } finally { cleanup(); }
+  });
+
+  it('Legacy sidecar replay path does NOT emit gate_verdict (runner=undefined)', async () => {
+    const { logger, eventsPath, cleanup } = makeLogger('gv3');
+    try {
+      // Pre-populate runDir with a legacy sidecar (no runner field)
+      const state = buildMinimalState({ phase: 2 });
+      // Force sidecarReplayAllowed.value = true and have replay return result with runner=undefined
+      await handleGatePhase(state, 2, /* ... with legacy sidecar ... */, logger, { value: true });
+      const events = readEvents(eventsPath);
+      expect(events.some(e => e.event === 'gate_verdict')).toBe(false);  // logger emit skipped per §5.2
+    } finally { cleanup(); }
+  });
+});
+```
+
+**주의:** 테스트 작성 시 실제 runner.ts handler 시그니처에 맞춰 파라미터 전달. mockInputManagerWithChoice 등 헬퍼는 실제 InputManager 인터페이스에 기반한 test double로 구현 (prompt timing 추적 포함).
+
+- [ ] **Step 6: 빌드 및 테스트**
 
 ```bash
 npm run build && npm test
 ```
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
-git add src/phases/runner.ts
-git commit -m "feat(logging): emit gate_verdict/gate_error/gate_retry/escalation/force_pass
+git add src/phases/runner.ts tests/phases/runner.test.ts
+git commit -m "feat(logging): emit gate_verdict/gate_error/gate_retry/escalation/force_pass + handler tests
 
 - retryIndex captured pre-mutation for all gate events
 - state_anomaly for pending_action stale after APPROVE
-- deleteGateSidecars after gate_verdict emit (not before)"
+- deleteGateSidecars after gate_verdict emit (not before)
+- Escalation: exactly one event per path, after userChoice resolved
+- force_pass exclusivity: no accompanying phase_end/gate_verdict/verify_result
+- Legacy sidecar replay preserves result but skips logger emit
+- Handler-level tests spy on runner/prompt to verify real emission sequences"
 ```
 
 ---
@@ -2001,21 +2245,88 @@ async function handleVerifyEscalation(state, /* ... */, logger: SessionLogger): 
 }
 ```
 
-- [ ] **Step 3: 빌드 및 테스트**
+- [ ] **Step 3: handler-level 테스트 (verify pass/fail/error/throw paths)**
+
+`tests/phases/runner.test.ts`에 추가:
+
+```ts
+describe('handleVerifyPhase — event emission', () => {
+  it('pass path: verify_result(passed=true) + phase_end(completed)', async () => {
+    const { logger, eventsPath, cleanup } = makeLogger('v1');
+    try {
+      const state = buildMinimalState({ phase: 6 });
+      vi.spyOn(/* verify */, 'runVerifyPhase').mockResolvedValue({ type: 'pass' } as any);
+      await handleVerifyPhase(state, /* ... */, logger);
+      const events = readEvents(eventsPath);
+      const vr = events.find(e => e.event === 'verify_result');
+      const pe = events.find(e => e.event === 'phase_end');
+      expect(vr.passed).toBe(true);
+      expect(pe.status).toBe('completed');
+    } finally { cleanup(); }
+  });
+
+  it('fail (retry available) path: verify_result(passed=false) + phase_end(failed), then reopen', async () => {
+    const { logger, eventsPath, cleanup } = makeLogger('v2');
+    try {
+      const state = buildMinimalState({ phase: 6 });
+      state.verifyRetries = 0;
+      vi.spyOn(/* verify */, 'runVerifyPhase').mockResolvedValue({ type: 'fail', feedbackPath: '/x' } as any);
+      await handleVerifyPhase(state, /* ... */, logger);
+      const events = readEvents(eventsPath);
+      const vr = events.find(e => e.event === 'verify_result');
+      expect(vr.passed).toBe(false);
+      expect(events.some(e => e.event === 'phase_end' && e.status === 'failed')).toBe(true);
+    } finally { cleanup(); }
+  });
+
+  it('throw path: phase_end with details.reason=verify_throw, then escalation (no rethrow)', async () => {
+    const { logger, eventsPath, cleanup } = makeLogger('v3');
+    try {
+      const state = buildMinimalState({ phase: 6 });
+      vi.spyOn(/* verify */, 'runVerifyPhase').mockImplementation(async () => { throw new Error('script missing'); });
+      const inputManager = mockInputManagerWithChoice('Q');
+      // Should not throw
+      await expect(handleVerifyPhase(state, /* ... */, inputManager, logger)).resolves.toBeUndefined();
+      const events = readEvents(eventsPath);
+      const pe = events.find(e => e.event === 'phase_end');
+      expect(pe.status).toBe('failed');
+      expect(pe.details?.reason).toBe('verify_throw');
+      expect(events.some(e => e.event === 'escalation' && e.reason === 'verify-error')).toBe(true);
+    } finally { cleanup(); }
+  });
+
+  it('error (non-throw) path: runVerifyPhase returns {type:error} → phase_end failed + escalation', async () => {
+    const { logger, eventsPath, cleanup } = makeLogger('v4');
+    try {
+      const state = buildMinimalState({ phase: 6 });
+      vi.spyOn(/* verify */, 'runVerifyPhase').mockResolvedValue({ type: 'error', errorPath: '/x' } as any);
+      const inputManager = mockInputManagerWithChoice('Q');
+      await handleVerifyPhase(state, /* ... */, inputManager, logger);
+      const events = readEvents(eventsPath);
+      expect(events.find(e => e.event === 'phase_end')?.status).toBe('failed');
+      expect(events.some(e => e.event === 'escalation' && e.reason === 'verify-error')).toBe(true);
+    } finally { cleanup(); }
+  });
+});
+```
+
+- [ ] **Step 4: 빌드 및 테스트**
 
 ```bash
 npm run build && npm test
 ```
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
-git add src/phases/runner.ts
-git commit -m "feat(logging): emit verify_result/phase_start/phase_end for verify phase
+git add src/phases/runner.ts tests/phases/runner.test.ts
+git commit -m "feat(logging): emit verify_result/phase_start/phase_end for verify phase + handler tests
 
 - Covers pass, fail (retry/limit), error (non-throw), and throw paths
 - verify_result includes retryIndex pre-mutation and durationMs
-- escalation event on verify retry limit / error"
+- Escalation event on verify retry limit / error
+- Throw path routes to handleVerifyError (no rethrow); phase_end details.reason=verify_throw
+- Handler-level tests spy on runVerifyPhase; verify emission order and escalation routing"
 ```
 
 ---
@@ -2311,18 +2622,19 @@ describe('Integration: one-shot sidecar replay', () => {
     expect(flag.value).toBe(false);  // consumed after first use
   });
 
-  it('second gate call with consumed flag does NOT replay (forces fresh run)', async () => {
-    // Use vi.mock or spy on runCodexGate/runClaudeGate to detect invocation.
+  it('second gate call with consumed flag does NOT replay (forces fresh run via codex)', async () => {
+    // Use a Codex preset so the runner spy matches the actual runner selected.
+    // Check src/config.ts for the correct preset id (e.g., 'codex-high' or similar).
     const gateModule = await import('../../src/phases/gate.js');
     const runDir = fs.mkdtempSync(path.join(os.tmpdir(), 'second-call-'));
     const sidecar = { exitCode: 0, timestamp: Date.now(), runner: 'codex', promptBytes: 1000, durationMs: 10000 };
     fs.writeFileSync(path.join(runDir, 'gate-2-result.json'), JSON.stringify(sidecar));
     fs.writeFileSync(path.join(runDir, 'gate-2-raw.txt'), 'VERDICT: APPROVE\ncomments: ok');
-    const state = { gateRetries: { '2': 0 }, phasePresets: { '2': 'sonnet-high' } } as any;
+    // Use actual Codex preset (check src/config.ts MODEL_PRESETS for runner:'codex' entries)
+    const state = { gateRetries: { '2': 0 }, phasePresets: { '2': 'codex-high' } } as any;
 
     const flag = { value: false };  // already consumed
 
-    // Spy on the runner to detect if fresh gate execution happens
     const codexModule = await import('../../src/runners/codex.js');
     const spy = vi.spyOn(codexModule, 'runCodexGate').mockResolvedValue({ exitCode: 0, rawOutput: 'VERDICT: APPROVE' } as any);
 
@@ -2330,6 +2642,25 @@ describe('Integration: one-shot sidecar replay', () => {
       const result = await gateModule.runGatePhase(state, 2, runDir, '/cwd', flag);
       expect((result as any).recoveredFromSidecar).toBeFalsy();
       expect(spy).toHaveBeenCalledTimes(1);  // fresh run, not replay
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('same scenario with Claude preset: runClaudeGate is called (fresh run)', async () => {
+    const gateModule = await import('../../src/phases/gate.js');
+    const runDir = fs.mkdtempSync(path.join(os.tmpdir(), 'second-claude-'));
+    const sidecar = { exitCode: 0, timestamp: Date.now(), runner: 'claude', promptBytes: 500, durationMs: 5000 };
+    fs.writeFileSync(path.join(runDir, 'gate-2-result.json'), JSON.stringify(sidecar));
+    fs.writeFileSync(path.join(runDir, 'gate-2-raw.txt'), 'VERDICT: APPROVE');
+    const state = { gateRetries: { '2': 0 }, phasePresets: { '2': 'sonnet-high' } } as any;
+    const flag = { value: false };
+    const claudeModule = await import('../../src/runners/claude.js');
+    const spy = vi.spyOn(claudeModule, 'runClaudeGate').mockResolvedValue({ exitCode: 0, rawOutput: 'VERDICT: APPROVE' } as any);
+    try {
+      const result = await gateModule.runGatePhase(state, 2, runDir, '/cwd', flag);
+      expect((result as any).recoveredFromSidecar).toBeFalsy();
+      expect(spy).toHaveBeenCalledTimes(1);
     } finally {
       spy.mockRestore();
     }
