@@ -1195,35 +1195,49 @@ import { createSessionLogger } from '../logger.js';
 import type { SessionLogger } from '../types.js';
 ```
 
-- [ ] **Step 2: Logger 생성 및 session 이벤트 emit**
+- [ ] **Step 2: Logger 생성 및 session 이벤트 emit (via bootstrapSessionLogger helper)**
 
-`runPhaseLoop` 호출 직전, `inputManager.enterPhaseLoop()` 다음에 logger 생성 및 bootstrap 로직 추가:
+테스트 가능성을 위해 logger 생성 + session_start/resumed emission 로직을 `bootstrapSessionLogger` helper로 분리하여 export (Task 19 Step 3의 unit test에서 단독 호출 가능).
+
+`src/commands/inner.ts`에 다음 helper를 export:
+
+```ts
+export async function bootstrapSessionLogger(
+  runId: string,
+  harnessDir: string,
+  state: HarnessState,
+  isResume: boolean,
+  options: { sessionsRoot?: string; cwd?: string } = {},
+): Promise<SessionLogger> {
+  const logger = createSessionLogger(runId, harnessDir, state.loggingEnabled, {
+    cwd: options.cwd ?? process.cwd(),
+    autoMode: state.autoMode,
+    sessionsRoot: options.sessionsRoot,
+  });
+  if (isResume) {
+    logger.updateMeta({ pushResumedAt: Date.now(), task: state.task });
+    logger.logEvent({ event: 'session_resumed', fromPhase: state.currentPhase, stateStatus: state.status });
+  } else if (logger.hasBootstrapped()) {
+    // Idempotent case: meta.json already exists on disk (e.g., crash re-entry)
+    logger.updateMeta({ pushResumedAt: Date.now() });
+    logger.logEvent({ event: 'session_resumed', fromPhase: state.currentPhase, stateStatus: state.status });
+  } else {
+    logger.writeMeta({ task: state.task });
+    logger.logEvent({ event: 'session_start', task: state.task, autoMode: state.autoMode, baseCommit: state.baseCommit, harnessVersion: '0.1.0' });
+  }
+  return logger;
+}
+```
+
+`runPhaseLoop` 호출 직전, `inputManager.enterPhaseLoop()` 다음에 이 helper 호출:
 
 ```ts
   inputManager.enterPhaseLoop();
 
-  // --- Session logging bootstrap ---
-  const logger: SessionLogger = createSessionLogger(state.runId, harnessDir, state.loggingEnabled, {
-    cwd,
-    autoMode: state.autoMode,
-    gitBranch: process.env.HARNESS_GIT_BRANCH,
-    baseCommit: state.baseCommit,
-  });
+  // --- Session logging bootstrap via helper ---
   const isResume = options.resume === true;
+  const logger = await bootstrapSessionLogger(state.runId, harnessDir, state, isResume, { cwd });
   let sessionEndStatus: 'completed' | 'paused' | 'interrupted' = 'interrupted';
-
-  if (isResume) {
-    logger.updateMeta({ pushResumedAt: Date.now(), task: state.task });
-    logger.logEvent({ event: 'session_resumed', fromPhase: state.currentPhase, stateStatus: state.status });
-  } else {
-    if (logger.hasBootstrapped()) {
-      logger.updateMeta({ pushResumedAt: Date.now() });
-      logger.logEvent({ event: 'session_resumed', fromPhase: state.currentPhase, stateStatus: state.status });
-    } else {
-      logger.writeMeta({ task: state.task });
-      logger.logEvent({ event: 'session_start', task: state.task, autoMode: state.autoMode, baseCommit: state.baseCommit, harnessVersion: '0.1.0' });
-    }
-  }
 
   // Create session-scoped one-shot flag for gate sidecar replay
   const sidecarReplayAllowed = { value: isResume };
@@ -1389,9 +1403,30 @@ export async function runPhaseLoop(
 ): Promise<void>
 ```
 
-- [ ] **Step 3: 모든 내부 handler 호출부 업데이트**
+- [ ] **Step 3: 모든 내부 handler 호출부 업데이트 + per-phase finalizeSummary**
 
 `runPhaseLoop` 내에서 `handleInteractivePhase(state, ...)`, `handleGatePhase(state, ...)`, `handleVerifyPhase(state, ...)` 호출부에 logger와 필요시 sidecarReplayAllowed 전달.
+
+**Per-phase summary rewrite (spec §4.4 "summary.json은 phase 종료마다 rewrite"):**
+`runPhaseLoop`의 phase iteration 루프 본문 말미(각 handler 호출 직후)에 `logger.finalizeSummary(state)` 호출 추가. 이렇게 하면 중간 crash 시에도 최신 phase까지 집계가 유지된다:
+
+```ts
+// src/phases/runner.ts — runPhaseLoop 내부 루프
+while (/* phase advancing condition */) {
+  const phase = state.currentPhase;
+  if (/* interactive */) {
+    await handleInteractivePhase(state, phase, harnessDir, runDir, cwd, inputManager, logger);
+  } else if (/* gate */) {
+    await handleGatePhase(state, phase, harnessDir, runDir, cwd, inputManager, logger, sidecarReplayAllowed);
+  } else if (/* verify */) {
+    await handleVerifyPhase(state, harnessDir, runDir, cwd, inputManager, logger);
+  }
+  // Per-phase summary rewrite (best-effort)
+  logger.finalizeSummary(state);
+}
+```
+
+`finalizeSummary` 내부는 이미 try/catch로 감싸 있어 실패해도 phase loop을 중단하지 않는다 (§6.1).
 
 `handleGatePhase`는 sidecarReplayAllowed도 전달:
 
@@ -1944,7 +1979,7 @@ async function handleGatePhase(
   sidecarReplayAllowed: { value: boolean },
 ): Promise<void> {
   const retryIndex = state.gateRetries[String(phase)] ?? 0;   // pre-mutation capture
-  const result = await runGatePhase(state, phase, runDir, cwd, sidecarReplayAllowed);
+  const result = await runGatePhase(phase, state, harnessDir, runDir, cwd, sidecarReplayAllowed);
 
   if (result.type === 'verdict' && result.verdict === 'APPROVE') {
     // Legacy sidecar policy: skip emit if runner unknown (§5.2)
@@ -2499,17 +2534,98 @@ describe('resumeCommand — loggingEnabled inheritance', () => {
 });
 ```
 
-**inner.test.ts 추가 테스트 예시 (end-to-end acceptance §9):**
+**inner.test.ts 추가 테스트 (권장: logger bootstrap helper 추출):**
+
+`inner.ts`에서 logger 생성 + session open emission + finally 정리 로직을 `bootstrapLogger(runId, harnessDir, state, options)` helper로 분리하여 export. 이 helper를 단위 테스트하는 것이 `innerCommand` 전체 path (tmux/control-pane/promptModelConfig/preflight 전제) 재현보다 훨씬 간단하고 빠르다.
+
+```ts
+// src/commands/inner.ts에서 export
+export async function bootstrapSessionLogger(
+  runId: string,
+  harnessDir: string,
+  state: HarnessState,
+  isResume: boolean,
+  options: { sessionsRoot?: string; cwd?: string } = {},
+): Promise<{ logger: SessionLogger; sessionEndStatus: () => 'completed' | 'paused' | 'interrupted' }> {
+  const logger = createSessionLogger(runId, harnessDir, state.loggingEnabled, { cwd: options.cwd, autoMode: state.autoMode, ...options });
+  if (isResume) {
+    logger.updateMeta({ pushResumedAt: Date.now(), task: state.task });
+    logger.logEvent({ event: 'session_resumed', fromPhase: state.currentPhase, stateStatus: state.status });
+  } else if (logger.hasBootstrapped()) {
+    logger.updateMeta({ pushResumedAt: Date.now() });
+    logger.logEvent({ event: 'session_resumed', fromPhase: state.currentPhase, stateStatus: state.status });
+  } else {
+    logger.writeMeta({ task: state.task });
+    logger.logEvent({ event: 'session_start', task: state.task, autoMode: state.autoMode, baseCommit: state.baseCommit, harnessVersion: '0.1.0' });
+  }
+  // Caller computes sessionEndStatus at teardown
+  return { logger, sessionEndStatus: () => state.status === 'completed' ? 'completed' : state.status === 'paused' ? 'paused' : 'interrupted' };
+}
+```
+
+그 후 `inner.ts`의 runPhaseLoop 섹션은 `bootstrapSessionLogger(...)` 호출로 교체.
+
+**Unit test 예시 (tests/commands/inner.test.ts):**
+
+```ts
+describe('bootstrapSessionLogger — session event bootstrap', () => {
+  it('fresh start: writes meta + emits session_start; no prior meta.json', async () => {
+    const { bootstrapSessionLogger } = await import('../../src/commands/inner.js');
+    const harnessDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bootstrap-'));
+    const sessionsRoot = path.join(harnessDir, 'sessions');
+    const state = buildMinimalState({ loggingEnabled: true, task: 'test' });
+    const { logger } = await bootstrapSessionLogger('r1', harnessDir, state, false, { sessionsRoot });
+    const repoKey = computeRepoKey(harnessDir);
+    const eventsPath = path.join(sessionsRoot, repoKey, 'r1', 'events.jsonl');
+    const events = fs.readFileSync(eventsPath, 'utf-8').trim().split('\n').map(l => JSON.parse(l));
+    expect(events[0].event).toBe('session_start');
+    expect(events[0].task).toBe('test');
+  });
+
+  it('resume: emits session_resumed and pushes resumedAt', async () => {
+    const { bootstrapSessionLogger } = await import('../../src/commands/inner.js');
+    const harnessDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bootstrap-resume-'));
+    const sessionsRoot = path.join(harnessDir, 'sessions');
+    const state = buildMinimalState({ loggingEnabled: true, task: 'test' });
+    // First bootstrap = fresh
+    await bootstrapSessionLogger('r2', harnessDir, state, false, { sessionsRoot });
+    // Second bootstrap with isResume=true
+    await bootstrapSessionLogger('r2', harnessDir, state, true, { sessionsRoot });
+    const repoKey = computeRepoKey(harnessDir);
+    const events = fs.readFileSync(path.join(sessionsRoot, repoKey, 'r2', 'events.jsonl'), 'utf-8').trim().split('\n').map(l => JSON.parse(l));
+    expect(events.filter(e => e.event === 'session_resumed').length).toBe(1);
+    const meta = JSON.parse(fs.readFileSync(path.join(sessionsRoot, repoKey, 'r2', 'meta.json'), 'utf-8'));
+    expect(meta.resumedAt.length).toBe(1);
+  });
+
+  it('loggingEnabled=false: NoopLogger, no files created', async () => {
+    const { bootstrapSessionLogger } = await import('../../src/commands/inner.js');
+    const harnessDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bootstrap-noop-'));
+    const sessionsRoot = path.join(harnessDir, 'sessions');
+    const state = buildMinimalState({ loggingEnabled: false, task: 'test' });
+    await bootstrapSessionLogger('r3', harnessDir, state, false, { sessionsRoot });
+    expect(fs.existsSync(sessionsRoot)).toBe(false);
+  });
+});
+```
+
+이 helper 분리로 full tmux path 없이 §9 acceptance criteria의 핵심 동작(session file 생성, session_start/resumed emit, opt-out no-files, resume inheritance)을 자동 검증 가능.
+
+**(Optional) 전체 innerCommand e2e 테스트는 v2로 연기** — tmux/control-pane/preflight mocks가 많이 필요하고 ROI가 낮음. bootstrapSessionLogger unit test + Task 19의 startCommand/resumeCommand mocking 테스트 조합으로 §9 acceptance 충분히 커버됨.
+
+<details>
+<summary>(참고) 전체 innerCommand e2e 테스트 예시 (미채택)</summary>
 
 ```ts
 describe('innerCommand — logging bootstrap end-to-end', () => {
   it('--enable-logging state creates sessions dir + events.jsonl + meta.json', async () => {
-    // Use existing mocks for tmux/pane/runner/lock; override HOME or pass sessionsRoot via env
+    // Requires: mock tmux paneExists=true, splitPane, runInteractivePhase, promptModelConfig,
+    // runRunnerAwarePreflight, and pass { controlPane: 'mock-pane', root: harnessRoot }.
+    // Set HOME to tempdir.
     const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-home-'));
-    process.env.HOME = tmpHome;  // redirect ~/.harness/sessions
-    // Setup: state.json with loggingEnabled=true and completed phases (so phase loop exits quickly)
+    process.env.HOME = tmpHome;
     writeState(runDir, { ...baseState, loggingEnabled: true, status: 'completed', currentPhase: 8 });
-    await innerCommand(runId, { root: harnessRoot });
+    await innerCommand(runId, { root: harnessRoot, controlPane: 'mock-pane' });
     // Assert session files created
     const sessionsRoot = path.join(tmpHome, '.harness', 'sessions');
     const repoKey = computeRepoKey(harnessDir);
@@ -2548,6 +2664,8 @@ describe('innerCommand — logging bootstrap end-to-end', () => {
 ```
 
 이 테스트들은 `HOME` env 리다이렉트와 기존 tmux/runner mock 조합으로 `innerCommand`의 실제 실행을 수행한다. Phase loop이 빠르게 종료되도록 `status='completed'` 초기 state를 사용.
+
+</details>
 
 **주의:** 위 테스트들은 기존 mock 구조(tmux, lock, terminal, subprocess spawn)를 재사용한다. 실제 subprocess는 spawn되지 않고 arguments만 capture하여 검증. `startCommand`/`resumeCommand` 시그니처가 각각 `enableLogging?: boolean` 옵션을 받도록 Task 10에서 이미 확장됨.
 
@@ -2775,7 +2893,8 @@ describe('Integration: one-shot sidecar replay', () => {
     const state = { gateRetries: { '2': 0 } } as any;
 
     const flag = { value: true };
-    const result = await runGatePhase(state, 2, runDir, '/cwd', flag);
+    const harnessDir = path.dirname(runDir);
+    const result = await runGatePhase(2, state, harnessDir, runDir, '/cwd', flag);
     expect((result as any).recoveredFromSidecar).toBe(true);
     expect(flag.value).toBe(false);  // consumed after first use
   });
@@ -2797,7 +2916,8 @@ describe('Integration: one-shot sidecar replay', () => {
     const spy = vi.spyOn(codexModule, 'runCodexGate').mockResolvedValue({ exitCode: 0, rawOutput: 'VERDICT: APPROVE' } as any);
 
     try {
-      const result = await gateModule.runGatePhase(state, 2, runDir, '/cwd', flag);
+      const harnessDir = path.dirname(runDir);
+      const result = await gateModule.runGatePhase(2, state, harnessDir, runDir, '/cwd', flag);
       expect((result as any).recoveredFromSidecar).toBeFalsy();
       expect(spy).toHaveBeenCalledTimes(1);  // fresh run, not replay
     } finally {
@@ -2816,7 +2936,8 @@ describe('Integration: one-shot sidecar replay', () => {
     const claudeModule = await import('../../src/runners/claude.js');
     const spy = vi.spyOn(claudeModule, 'runClaudeGate').mockResolvedValue({ exitCode: 0, rawOutput: 'VERDICT: APPROVE' } as any);
     try {
-      const result = await gateModule.runGatePhase(state, 2, runDir, '/cwd', flag);
+      const harnessDir = path.dirname(runDir);
+      const result = await gateModule.runGatePhase(2, state, harnessDir, runDir, '/cwd', flag);
       expect((result as any).recoveredFromSidecar).toBeFalsy();
       expect(spy).toHaveBeenCalledTimes(1);
     } finally {
