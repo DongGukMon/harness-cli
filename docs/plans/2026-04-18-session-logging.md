@@ -906,6 +906,24 @@ describe('FileSessionLogger.finalizeSummary', () => {
     expect(summary.phases['2'].attempts.length).toBe(1);
   });
 
+  it('pairs phase_start with phase_end to preserve reopenFromGate in summary attempts', () => {
+    const harnessDir = makeTempHarnessDir();
+    const sessionsRoot = path.join(harnessDir, 'sessions-root');
+    const logger = new FileSessionLogger('run-pair', harnessDir, { sessionsRoot });
+    logger.writeMeta({ task: 't' });
+    logger.logEvent({ event: 'phase_start', phase: 5, attemptId: 'a1' });
+    logger.logEvent({ event: 'phase_end', phase: 5, attemptId: 'a1', status: 'completed', durationMs: 100 });
+    logger.logEvent({ event: 'phase_start', phase: 5, attemptId: 'a2', reopenFromGate: 6 });
+    logger.logEvent({ event: 'phase_end', phase: 5, attemptId: 'a2', status: 'completed', durationMs: 200 });
+    logger.finalizeSummary({ status: 'completed', autoMode: false } as HarnessState);
+    const repoKey = computeRepoKey(harnessDir);
+    const summary = JSON.parse(fs.readFileSync(path.join(sessionsRoot, repoKey, 'run-pair', 'summary.json'), 'utf-8'));
+    const attempts = summary.phases['5'].attempts;
+    expect(attempts.length).toBe(2);
+    expect(attempts[0].reopenFromGate).toBeNull();
+    expect(attempts[1].reopenFromGate).toBe(6);
+  });
+
   it('multiple session_end events: last one wins (paused→resumed→completed flow)', () => {
     const harnessDir = makeTempHarnessDir();
     const sessionsRoot = path.join(harnessDir, 'sessions-root');
@@ -983,12 +1001,29 @@ Expected: FAIL (finalizeSummary is no-op).
         }
       }
 
+      // Build a map of phase_start events by (phase, attemptId) to pair with phase_end
+      // Preserves reopenFromGate provenance and authoritative startedAt.
+      const phaseStartMap = new Map<string, any>();
+      for (const e of events) {
+        if (e.event === 'phase_start' && e.attemptId) {
+          phaseStartMap.set(`${e.phase}:${e.attemptId}`, e);
+        }
+      }
+
       for (const e of events) {
         const pstr = String((e as any).phase ?? '');
         if (!phases[pstr] && pstr) phases[pstr] = { attempts: [], totalDurationMs: 0 };
 
         if (e.event === 'phase_end') {
-          phases[pstr].attempts.push({ attemptId: e.attemptId ?? null, startedAt: e.ts - (e.durationMs ?? 0), durationMs: e.durationMs, status: e.status, reopenFromGate: null });
+          // Pair with phase_start to recover reopenFromGate and authoritative startedAt
+          const startEvent = e.attemptId ? phaseStartMap.get(`${e.phase}:${e.attemptId}`) : null;
+          phases[pstr].attempts.push({
+            attemptId: e.attemptId ?? null,
+            startedAt: startEvent ? startEvent.ts : (e.ts - (e.durationMs ?? 0)),
+            durationMs: e.durationMs,
+            status: e.status,
+            reopenFromGate: startEvent?.reopenFromGate ?? null,
+          });
           phases[pstr].totalDurationMs += e.durationMs;
         } else if (e.event === 'gate_verdict') {
           const key = `${e.phase}:${e.retryIndex}`;
@@ -1229,14 +1264,25 @@ export async function bootstrapSessionLogger(
 }
 ```
 
-`runPhaseLoop` 호출 직전, `inputManager.enterPhaseLoop()` 다음에 이 helper 호출:
+**순서 중요:** `bootstrapSessionLogger` 호출은 **`InputManager` 생성 직전**에 수행한다. `inputManager.onConfigCancel = () => { ... logger.logEvent(...) ... }` 콜백 등록 시점에 logger가 이미 생성돼 있어야 하기 때문. 구조:
 
 ```ts
-  inputManager.enterPhaseLoop();
+// inner.ts의 실행 순서:
+// 1. state 로드, task 캡처, signal handlers 등 기존 로직
+// 2. const logger = await bootstrapSessionLogger(runId, harnessDir, state, isResume, { cwd });  ← 신규
+// 3. const inputManager = new InputManager();
+// 4. inputManager.onConfigCancel = () => { ... logger.logEvent(session_end) ... process.exit(0); };
+// 5. inputManager.start('configuring');
+// 6. await promptModelConfig(...); runRunnerAwarePreflight(...);
+// 7. inputManager.enterPhaseLoop();
+// 8. try { await runPhaseLoop(..., logger, sidecarReplayAllowed); } finally { ... logger.logEvent(session_end) ... }
+```
 
-  // --- Session logging bootstrap via helper ---
-  const isResume = options.resume === true;
-  const logger = await bootstrapSessionLogger(state.runId, harnessDir, state, isResume, { cwd });
+`bootstrapSessionLogger` 호출 결과는 이 helper 함수의 반환값 `logger`:
+
+```ts
+  // (inputManager.enterPhaseLoop() is called above, before try/finally)
+  // Logger was already created via bootstrapSessionLogger before InputManager setup.
   let sessionEndStatus: 'completed' | 'paused' | 'interrupted' = 'interrupted';
 
   // Create session-scoped one-shot flag for gate sidecar replay
@@ -1494,20 +1540,20 @@ git commit -m "refactor(logging): thread logger + sidecarReplayAllowed; export h
 `src/phases/interactive.ts`의 `runInteractivePhase` 함수에 `attemptId: string` 파라미터를 추가하고, 반환 타입에 `attemptId`를 포함하도록 수정. 내부에서 `state.phaseAttemptId`를 외부 파라미터 값으로 설정:
 
 ```ts
+// Preserve existing arg order (phase, state, harnessDir, runDir, cwd) and append attemptId
 export async function runInteractivePhase(
-  state: HarnessState,
   phase: InteractivePhase,
+  state: HarnessState,
   harnessDir: string,
   runDir: string,
   cwd: string,
-  inputManager: InputManager,
-  attemptId: string,   // 신규 파라미터
+  attemptId: string,   // 신규 파라미터 (마지막에 추가)
 ): Promise<InteractiveResult & { attemptId: string }> {
   // Use externally-generated attemptId instead of generating one inside preparePhase
   state.phaseAttemptId[String(phase)] = attemptId;
   writeState(runDir, state);
 
-  // ... existing logic
+  // ... existing logic (preparePhase uses state.phaseAttemptId set above)
   return { ...result, attemptId };
 }
 ```
@@ -1523,7 +1569,7 @@ import { randomUUID } from 'crypto';
 // ...
 const attemptId = randomUUID();
 // phase_start emit은 Task 14에서 추가
-const result = await runInteractivePhase(state, phase, harnessDir, runDir, cwd, inputManager, attemptId);
+const result = await runInteractivePhase(phase, state, harnessDir, runDir, cwd, attemptId);
 ```
 
 - [ ] **Step 3: 빌드 및 테스트**
@@ -2275,7 +2321,7 @@ async function handleVerifyPhase(state, /* ... */, logger: SessionLogger): Promi
   try {
     outcome = await runVerifyPhase(state, /* ... */);
   } catch (err) {
-    // Spec §5.8: throw path → emit phase_end, set state.error, route to handleVerifyError
+    // Spec §5.8: throw path → emit phase_end + escalation only (NO verify_result; that's for pass/fail outcomes)
     logger.logEvent({
       event: 'phase_end',
       phase: 6,
@@ -2283,7 +2329,6 @@ async function handleVerifyPhase(state, /* ... */, logger: SessionLogger): Promi
       durationMs: Date.now() - phaseStartTs,
       details: { reason: 'verify_throw' },
     });
-    // Convert throw to structured error outcome so downstream flow (escalation, retry) is unchanged
     state.phases['6'] = 'error';
     writeState(runDir, state);
     await handleVerifyError(state, /* ... */, logger);
@@ -2301,8 +2346,7 @@ async function handleVerifyPhase(state, /* ... */, logger: SessionLogger): Promi
     logger.logEvent({ event: 'phase_end', phase: 6, status: 'failed', durationMs });
     await handleVerifyFail(state, /* ... */, logger);
   } else {
-    // error
-    logger.logEvent({ event: 'verify_result', passed: false, retryIndex, durationMs });
+    // error — §5.8: phase_end + escalation only, NO verify_result (that's for pass/fail outcomes)
     logger.logEvent({ event: 'phase_end', phase: 6, status: 'failed', durationMs });
     await handleVerifyError(state, /* ... */, logger);
   }
@@ -2378,7 +2422,7 @@ describe('handleVerifyPhase — event emission', () => {
     } finally { cleanup(); }
   });
 
-  it('error (non-throw) path: runVerifyPhase returns {type:error} → phase_end failed + escalation', async () => {
+  it('error (non-throw) path: runVerifyPhase returns {type:error} → phase_end failed + escalation (no verify_result)', async () => {
     const { logger, eventsPath, cleanup } = makeLogger('v4');
     try {
       const state = buildMinimalState({ phase: 6 });
@@ -2388,6 +2432,8 @@ describe('handleVerifyPhase — event emission', () => {
       const events = readEvents(eventsPath);
       expect(events.find(e => e.event === 'phase_end')?.status).toBe('failed');
       expect(events.some(e => e.event === 'escalation' && e.reason === 'verify-error')).toBe(true);
+      // Error/throw paths do NOT emit verify_result (only pass/fail outcomes do)
+      expect(events.some(e => e.event === 'verify_result')).toBe(false);
     } finally { cleanup(); }
   });
 });
@@ -2958,6 +3004,57 @@ describe('Integration: one-shot sidecar replay', () => {
     expect((result as any).recoveredFromSidecar).toBe(true);
     expect((result as any).runner).toBeUndefined();
     // handleGatePhase will skip logging emit when runner is undefined (Task 16)
+  });
+});
+
+describe('Integration: real runPhaseLoop lifecycle wiring', () => {
+  it('bootstrap → single gate APPROVE → session_end → summary.json exists and has phase aggregation', async () => {
+    // Exercises real bootstrapSessionLogger + runPhaseLoop wiring (not logger directly).
+    // Phase 1/3/5 interactive runners mocked to auto-complete; gate 2/4/7 mocked to APPROVE;
+    // verify mocked to pass.
+    const { bootstrapSessionLogger } = await import('../../src/commands/inner.js');
+    const { runPhaseLoop } = await import('../../src/phases/runner.js');
+
+    const harnessDir = fs.mkdtempSync(path.join(os.tmpdir(), 'int-lifecycle-'));
+    const sessionsRoot = path.join(harnessDir, 'sessions');
+    const runDir = path.join(harnessDir, 'runs', 'int1');
+    fs.mkdirSync(runDir, { recursive: true });
+
+    // Mock interactive/gate/verify runners to return quickly
+    const interactive = await import('../../src/phases/interactive.js');
+    const gate = await import('../../src/phases/gate.js');
+    const verify = await import('../../src/phases/verify.js');
+    vi.spyOn(interactive, 'runInteractivePhase').mockImplementation(async (s, p) => {
+      s.phases[String(p)] = 'completed';
+      return { status: 'completed', attemptId: 'mock' } as any;
+    });
+    vi.spyOn(gate, 'runGatePhase').mockResolvedValue({
+      type: 'verdict', verdict: 'APPROVE', comments: 'ok', rawOutput: 'APPROVE',
+      runner: 'codex', promptBytes: 1000, durationMs: 5000, tokensTotal: 10000,
+    } as any);
+    vi.spyOn(verify, 'runVerifyPhase').mockResolvedValue({ type: 'pass' } as any);
+
+    const state = buildMinimalState({ loggingEnabled: true, currentPhase: 1, task: 'test task' });
+    const inputManager = mockInputManagerMinimal();
+    const logger = await bootstrapSessionLogger('int1', harnessDir, state, false, { sessionsRoot });
+    try {
+      await runPhaseLoop(state, harnessDir, runDir, '/cwd', inputManager, logger, { value: false });
+      logger.logEvent({ event: 'session_end', status: 'completed', totalWallMs: Date.now() - logger.getStartedAt() });
+      logger.finalizeSummary(state);
+
+      const repoKey = computeRepoKey(harnessDir);
+      const sessionDir = path.join(sessionsRoot, repoKey, 'int1');
+      expect(fs.existsSync(path.join(sessionDir, 'meta.json'))).toBe(true);
+      expect(fs.existsSync(path.join(sessionDir, 'events.jsonl'))).toBe(true);
+      expect(fs.existsSync(path.join(sessionDir, 'summary.json'))).toBe(true);
+
+      const summary = JSON.parse(fs.readFileSync(path.join(sessionDir, 'summary.json'), 'utf-8'));
+      expect(summary.status).toBe('completed');
+      expect(summary.phases['2']).toBeDefined();  // gate 2 logged
+      expect(summary.phases['2'].attempts.some((a: any) => a.verdict === 'APPROVE')).toBe(true);
+    } finally {
+      vi.restoreAllMocks();
+    }
   });
 });
 
