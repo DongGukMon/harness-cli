@@ -132,12 +132,16 @@ export function validatePhaseArtifacts(
     try {
       const head = execSync('git rev-parse HEAD', { cwd, encoding: 'utf-8' }).trim();
       const base = state.implRetryBase;
-      // HEAD must have advanced beyond the retry base
-      if (head === base) return false;
-
-      // Working tree must be clean
       const status = execSync('git status --porcelain', { cwd, encoding: 'utf-8' }).trim();
-      return status === '';
+      // Working tree must always be clean
+      if (status !== '') return false;
+      // HEAD advanced — always valid
+      if (head !== base) return true;
+      // HEAD did not advance. Accept only on reopen (implCommit already set):
+      // a verify-failure reopen may legitimately require only gitignored artifact
+      // fixes (e.g., checklist.json) and no further impl commits. First-attempt
+      // zero-commit is still rejected to prevent empty sessions passing through.
+      return state.implCommit !== null;
     } catch {
       return false;
     }
