@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import { randomUUID } from 'crypto';
 import type { HarnessState, PendingAction, PhaseNumber, InteractivePhase, GatePhase, SessionLogger } from '../types.js';
 import type { InputManager } from '../input.js';
 import {
@@ -209,7 +210,8 @@ export async function handleInteractivePhase(
   state.phases[String(phase)] = 'in_progress';
   writeState(runDir, state);
 
-  const result = await runInteractivePhase(phase, state, harnessDir, runDir, cwd);
+  const attemptId = randomUUID();
+  const result = await runInteractivePhase(phase, state, harnessDir, runDir, cwd, attemptId);
 
   if (result.status === 'completed') {
     // Normalize artifact commits for Phase 1/3. Failure → error (not completed).

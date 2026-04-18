@@ -114,7 +114,7 @@ function createNoOpInputManager(): InputManager {
 }
 
 function mockInteractive(result: InteractiveResult): void {
-  vi.mocked(runInteractivePhase).mockResolvedValueOnce(result);
+  vi.mocked(runInteractivePhase).mockResolvedValueOnce({ ...result, attemptId: 'test-attempt-id' });
 }
 
 function mockGate(result: GatePhaseResult): void {
@@ -143,7 +143,7 @@ describe('Test 1: Phase 1 completed → dispatches gate Phase 2', () => {
 
     await runPhaseLoop(state, HDIR, runDir, CWD, createNoOpInputManager(), new NoopLogger(), { value: false });
 
-    expect(vi.mocked(runInteractivePhase)).toHaveBeenCalledWith(1, expect.any(Object), HDIR, runDir, CWD);
+    expect(vi.mocked(runInteractivePhase)).toHaveBeenCalledWith(1, expect.any(Object), HDIR, runDir, CWD, expect.any(String));
     expect(vi.mocked(runGatePhase)).toHaveBeenCalledWith(2, expect.any(Object), HDIR, runDir, CWD);
   });
 });
