@@ -91,7 +91,7 @@ describe('renderModelSelection — flow-aware row visibility', () => {
     console.error = (...args: any[]) => { captured.push(args.join(' ')); };
     try {
       renderModelSelection(
-        { '1': 'opus-max', '5': 'sonnet-high', '7': 'codex-high' },
+        { '1': 'opus-xhigh', '5': 'sonnet-high', '7': 'codex-high' },
         new Set(['1', '5', '7']),
       );
     } finally {

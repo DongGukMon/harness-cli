@@ -242,7 +242,7 @@ describe('migrateState', () => {
   });
 
   it('backfills individual missing phase keys', () => {
-    const raw = { phasePresets: { '1': 'opus-max' } };
+    const raw = { phasePresets: { '1': 'opus-xhigh' } };
     const migrated = migrateState(raw);
     expect(migrated.phasePresets['3']).toBe('sonnet-high');
   });
@@ -252,6 +252,14 @@ describe('migrateState', () => {
     const migrated = migrateState(raw);
     expect(migrated.phasePresets['1']).toBe('opus-high');
     expect(migrated.phasePresets['2']).toBe('codex-high');
+  });
+
+  it('renames legacy opus-max to opus-xhigh on any phase (same lineage)', () => {
+    const raw = { phasePresets: { '1': 'opus-max', '3': 'sonnet-high', '5': 'opus-max' } };
+    const migrated = migrateState(raw);
+    expect(migrated.phasePresets['1']).toBe('opus-xhigh');
+    expect(migrated.phasePresets['3']).toBe('sonnet-high');
+    expect(migrated.phasePresets['5']).toBe('opus-xhigh');
   });
 
   it('backfills lastWorkspacePid and phaseReopenFlags', () => {

@@ -449,7 +449,7 @@ import type { FlowMode, PhaseNumber, Artifacts, GatePhase, InteractivePhase } fr
 export const LIGHT_REQUIRED_PHASE_KEYS = ['1', '5', '7'] as const;
 
 export const LIGHT_PHASE_DEFAULTS: Record<number, string> = {
-  1: 'opus-max',
+  1: 'opus-xhigh',
   5: 'sonnet-high',
   7: 'codex-high',
 };
@@ -2044,7 +2044,7 @@ describe('renderModelSelection — flow-aware row visibility', () => {
     console.error = (...args: any[]) => { captured.push(args.join(' ')); };
     try {
       renderModelSelection(
-        { '1': 'opus-max', '5': 'sonnet-high', '7': 'codex-high' },
+        { '1': 'opus-xhigh', '5': 'sonnet-high', '7': 'codex-high' },
         new Set(['1', '5', '7']),
       );
     } finally {
@@ -2452,7 +2452,7 @@ P1 design(=brainstorm+plan) → [P2/P3/P4 skipped] → P5 impl → P6 verify →
 - **skipped phases**: `phases['2'|'3'|'4']` initialize to the new `'skipped'` `PhaseStatus`. `runPhaseLoop` short-circuits past them.
 - **Phase 1 output**: single combined doc at `docs/specs/<runId>-design.md` containing a mandatory `## Implementation Plan` section. `checklist.json` stays a separate file so `harness-verify.sh` still parses it.
 - **Phase 7 REJECT**: routed back to Phase 1 (not Phase 5 — the combined doc is re-authored). `state.carryoverFeedback` survives the P1 completion that clears `pendingAction` and is consumed by P5 on re-entry.
-- **Defaults**: P1 = `opus-max`, P5 = `sonnet-high`, P7 = `codex-high`. Same presets as full flow, minus P2/P3/P4.
+- **Defaults**: P1 = `opus-xhigh`, P5 = `sonnet-high`, P7 = `codex-high`. Same presets as full flow, minus P2/P3/P4.
 - **Activation**: `harness start --light "task"` (or `harness run --light …`). `--light` composes with `--auto`.
 - **When full flow is still right**: migration/security/contract work, anything wanting independent pre-impl review.
 ````
