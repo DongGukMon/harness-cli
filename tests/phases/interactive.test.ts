@@ -573,8 +573,8 @@ describe('validatePhaseArtifacts — Phase 5', () => {
 
 // ─── runInteractivePhase: advisor reminder ordering ──────────────────────────
 
-describe('runInteractivePhase — advisor reminder fires before sendKeysToPane', () => {
-  it('printAdvisorReminder is called before sendKeysToPane', async () => {
+describe('runInteractivePhase — advisor reminder fires after runClaudeInteractive', () => {
+  it('printAdvisorReminder is called after all sendKeysToPane calls', async () => {
     const { sendKeysToPane } = await import('../../src/tmux.js');
     const { printAdvisorReminder } = await import('../../src/ui.js');
     const { runInteractivePhase } = await import('../../src/phases/interactive.js');
@@ -593,12 +593,14 @@ describe('runInteractivePhase — advisor reminder fires before sendKeysToPane',
     await runInteractivePhase(1, state, harnessDir, runDir, repoDir, 'test-attempt-id');
 
     const reminderOrder = vi.mocked(printAdvisorReminder).mock.invocationCallOrder[0];
-    // sendKeysToPane is called twice: C-c pre-clear, then the actual command
-    const sendKeysToPaneOrder = vi.mocked(sendKeysToPane).mock.invocationCallOrder[0];
+    // sendKeysToPane is called multiple times (C-c pre-clear, wrapped cmd);
+    // reminder should fire after all of them (post-dispatch).
+    const sendKeysCalls = vi.mocked(sendKeysToPane).mock.invocationCallOrder;
+    const lastSendKeysOrder = sendKeysCalls[sendKeysCalls.length - 1];
 
     expect(reminderOrder).toBeDefined();
-    expect(sendKeysToPaneOrder).toBeDefined();
-    expect(reminderOrder).toBeLessThan(sendKeysToPaneOrder);
+    expect(lastSendKeysOrder).toBeDefined();
+    expect(reminderOrder).toBeGreaterThan(lastSendKeysOrder);
     expect(vi.mocked(printAdvisorReminder)).toHaveBeenCalledWith(1, 'claude');
   });
 
