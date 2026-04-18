@@ -141,31 +141,69 @@ export async function runCodexInteractive(
   return result;
 }
 
-export async function runCodexGate(
-  phase: number,
-  preset: ModelPreset,
-  prompt: string,
-  harnessDir: string,
-  cwd: string,
-): Promise<GatePhaseResult> {
-  const codexBin = resolveCodexBin();
+// ─── Error taxonomy for gate runs (spec §4.5) ────────────────────────────────
+// Kept internal: runCodexGate's external contract remains GatePhaseResult.
+type RawCategory =
+  | 'success_verdict'
+  | 'success_no_verdict'
+  | 'session_missing'
+  | 'nonzero_exit_other'
+  | 'timeout'
+  | 'spawn_error';
 
-  const child = spawn(codexBin, [
-    'exec',
-    '--model', preset.model,
-    '-c', `model_reasoning_effort="${preset.effort}"`,
-    '-',
-  ], {
+interface RawExecResult {
+  category: RawCategory;
+  exitCode: number | null;
+  stdout: string;
+  stderr: string;
+  spawnError?: string;
+  timedOut?: boolean;
+}
+
+interface RawExecInput {
+  mode: 'fresh' | 'resume';
+  sessionId?: string | null;
+  prompt: string;
+  preset: ModelPreset;
+  harnessDir: string;
+  cwd: string;
+  phase: number;
+}
+
+/**
+ * Detect "session not found / missing / expired" stderr patterns.
+ * Spec §9 Q#1: exact regex finalized from Task 0 pilot results (deferred —
+ * using conservative pattern that matches Codex CLI conventions).
+ */
+function isResumeSessionMissingError(stderr: string): boolean {
+  return /session\s+(not\s+found|missing|expired|does\s+not\s+exist)|no\s+such\s+session/i.test(stderr);
+}
+
+async function runCodexExecRaw(input: RawExecInput): Promise<RawExecResult> {
+  const codexBin = resolveCodexBin();
+  // `codex exec resume`의 CLI contract (spec §2): `[SESSION_ID] [PROMPT]`가 positional.
+  // sessionId를 '--model' 같은 플래그 뒤에 두면 parser가 flag value로 오인할 위험이 있다.
+  // 반드시 'resume' 직후 sessionId → 플래그들 → prompt placeholder(`-`) 순서.
+  const args = input.mode === 'resume'
+    ? ['exec', 'resume', input.sessionId!,
+       '--model', input.preset.model,
+       '-c', `model_reasoning_effort="${input.preset.effort}"`,
+       '-']
+    : ['exec',
+       '--model', input.preset.model,
+       '-c', `model_reasoning_effort="${input.preset.effort}"`,
+       '-'];
+
+  const child = spawn(codexBin, args, {
     stdio: ['pipe', 'pipe', 'pipe'],
     detached: true,
-    cwd,
+    cwd: input.cwd,
   });
-
   const childPid = child.pid!;
   const startTime = getProcessStartTime(childPid);
-  updateLockChild(harnessDir, childPid, phase, startTime);
+  updateLockChild(input.harnessDir, childPid, input.phase, startTime);
 
-  child.stdin.write(prompt);
+  child.stdin.write(input.prompt);
   child.stdin.end();
 
   const stdoutChunks: Buffer[] = [];
@@ -179,36 +217,142 @@ export async function runCodexGate(
     }
   });
 
-  const result = await new Promise<GatePhaseResult>((resolve) => {
+  const finishResult = await new Promise<{
+    exitCode: number | null;
+    spawnError?: string;
+    timedOut?: boolean;
+  }>((resolve) => {
     let settled = false;
     const timeout = setTimeout(async () => {
       if (settled) return;
       settled = true;
       await killProcessGroup(childPid, SIGTERM_WAIT_MS);
-      resolve({ type: 'error', error: `Codex gate timed out after ${GATE_TIMEOUT_MS}ms` });
+      resolve({ exitCode: null, timedOut: true });
     }, GATE_TIMEOUT_MS);
-
-    child.on('close', (code: number | null) => {
+    child.on('close', (code) => {
       if (settled) return;
       settled = true;
       clearTimeout(timeout);
-      const stdout = Buffer.concat(stdoutChunks).toString('utf-8');
-      const stderr = Buffer.concat(stderrChunks).toString('utf-8');
-      const baseResult = buildGateResult(code ?? 1, stdout, stderr);
-      const metadata = extractCodexMetadata(stdout);
-      resolve({ ...baseResult, ...metadata });
+      resolve({ exitCode: code ?? 1 });
     });
-
-    child.on('error', (err: Error) => {
+    child.on('error', (err) => {
       if (settled) return;
       settled = true;
       clearTimeout(timeout);
-      resolve({ type: 'error', error: `Codex gate error: ${err.message}` });
+      resolve({ exitCode: null, spawnError: err.message });
     });
   });
 
   await killProcessGroup(childPid, SIGTERM_WAIT_MS);
-  try { clearLockChild(harnessDir); } catch { /* best-effort */ }
+  try { clearLockChild(input.harnessDir); } catch { /* best-effort */ }
 
-  return result;
+  const stdout = Buffer.concat(stdoutChunks).toString('utf-8');
+  const stderr = Buffer.concat(stderrChunks).toString('utf-8');
+
+  let category: RawCategory;
+  if (finishResult.spawnError !== undefined) category = 'spawn_error';
+  else if (finishResult.timedOut) category = 'timeout';
+  else if (finishResult.exitCode !== null && finishResult.exitCode !== 0) {
+    category = isResumeSessionMissingError(stderr) ? 'session_missing' : 'nonzero_exit_other';
+  } else {
+    category = parseVerdictPresent(stdout) ? 'success_verdict' : 'success_no_verdict';
+  }
+
+  return {
+    category,
+    exitCode: finishResult.exitCode,
+    stdout,
+    stderr,
+    spawnError: finishResult.spawnError,
+    timedOut: finishResult.timedOut,
+  };
+}
+
+function parseVerdictPresent(stdout: string): boolean {
+  // Lightweight presence check — full parse happens in buildGateResult.
+  return /^##\s+verdict\s*$/im.test(stdout);
+}
+
+function rawToResult(
+  raw: RawExecResult,
+  preset: ModelPreset,
+  resumedFrom: string | null,
+  resumeFallback: boolean,
+): GatePhaseResult {
+  const metadata = extractCodexMetadata(raw.stdout);
+  const sourcePreset = { model: preset.model, effort: preset.effort };
+
+  if (raw.category === 'success_verdict') {
+    const built = buildGateResult(0, raw.stdout, raw.stderr);
+    return { ...built, ...metadata, runner: 'codex', sourcePreset, resumedFrom, resumeFallback };
+  }
+
+  // All error categories project through a single error branch; messages distinct per category.
+  const errorMessage =
+    raw.category === 'timeout' ? `Codex gate timed out after ${GATE_TIMEOUT_MS}ms` :
+    raw.category === 'spawn_error' ? `Codex gate error: ${raw.spawnError ?? 'unknown spawn failure'}` :
+    raw.category === 'success_no_verdict' ? 'Gate output missing ## Verdict header' :
+    raw.category === 'session_missing' ? `Codex resume failed: session not found (stderr: ${raw.stderr.trim().slice(0, 200)})` :
+    `Gate subprocess exited with code ${raw.exitCode ?? 'null'}`;
+
+  return {
+    type: 'error',
+    error: errorMessage,
+    rawOutput: raw.stdout,
+    runner: 'codex',
+    exitCode: raw.exitCode ?? undefined,
+    sourcePreset,
+    resumedFrom,
+    resumeFallback,
+    ...metadata,
+  };
+}
+
+export async function runCodexGate(
+  phase: number,
+  preset: ModelPreset,
+  prompt: string,
+  harnessDir: string,
+  cwd: string,
+  resumeSessionId?: string | null,
+  buildFreshPromptOnFallback?: () => string | { error: string },
+): Promise<GatePhaseResult> {
+  const mode: 'fresh' | 'resume' = resumeSessionId ? 'resume' : 'fresh';
+  const first = await runCodexExecRaw({
+    mode,
+    sessionId: resumeSessionId ?? null,
+    prompt,
+    preset,
+    harnessDir,
+    cwd,
+    phase,
+  });
+
+  // §4.5 fallback: only for session_missing, and only when we were actually resuming.
+  if (mode === 'resume' && first.category === 'session_missing' && buildFreshPromptOnFallback) {
+    const freshPrompt = buildFreshPromptOnFallback();
+    if (typeof freshPrompt !== 'string') {
+      return {
+        type: 'error',
+        error: `Resume fallback failed: ${freshPrompt.error}`,
+        rawOutput: first.stdout,
+        runner: 'codex',
+        sourcePreset: { model: preset.model, effort: preset.effort },
+        resumedFrom: resumeSessionId ?? null,
+        resumeFallback: true,
+      };
+    }
+    const fresh = await runCodexExecRaw({
+      mode: 'fresh',
+      sessionId: null,
+      prompt: freshPrompt,
+      preset,
+      harnessDir,
+      cwd,
+      phase,
+    });
+    return rawToResult(fresh, preset, resumeSessionId ?? null, /* resumeFallback */ true);
+  }
+
+  return rawToResult(first, preset, resumeSessionId ?? null, /* resumeFallback */ false);
 }
