@@ -2,6 +2,9 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import { bootstrapSessionLogger } from '../../src/commands/inner.js';
+import { computeRepoKey } from '../../src/logger.js';
+import type { HarnessState } from '../../src/types.js';
 
 // Mock dependencies before imports
 vi.mock('../../src/lock.js', () => ({
@@ -157,5 +160,83 @@ describe('inner.ts: tmux cleanup on completion', () => {
     expect(state.tmuxMode).toBe('reused');
     expect(state.tmuxWindows).toEqual(['@1', '@2']);
     expect(state.tmuxOriginalWindow).toBe('@0');
+  });
+});
+
+describe('bootstrapSessionLogger', () => {
+  function tempHarnessDir(): string {
+    return fs.mkdtempSync(path.join(os.tmpdir(), 'bootstrap-'));
+  }
+
+  function buildState(overrides: Partial<HarnessState> = {}): HarnessState {
+    const base: HarnessState = {
+      runId: 'r1', currentPhase: 1, status: 'in_progress', autoMode: false,
+      task: 'test task', baseCommit: '', implRetryBase: '', codexPath: null,
+      externalCommitsDetected: false,
+      artifacts: { spec: 's', plan: 'p', decisionLog: 'd', checklist: 'c', evalReport: 'e' },
+      phases: { '1': 'pending', '2': 'pending', '3': 'pending', '4': 'pending', '5': 'pending', '6': 'pending', '7': 'pending' },
+      gateRetries: { '2': 0, '4': 0, '7': 0 },
+      verifyRetries: 0,
+      pauseReason: null, specCommit: null, planCommit: null, implCommit: null,
+      evalCommit: null, verifiedAtHead: null, pausedAtHead: null, pendingAction: null,
+      phaseOpenedAt: { '1': null, '3': null, '5': null },
+      phaseAttemptId: { '1': null, '3': null, '5': null },
+      phasePresets: {}, phaseReopenFlags: { '1': false, '3': false, '5': false },
+      phaseReopenSource: { '1': null, '3': null, '5': null },
+      lastWorkspacePid: null, lastWorkspacePidStartTime: null,
+      tmuxSession: '', tmuxMode: 'dedicated', tmuxWindows: [],
+      tmuxControlWindow: '', tmuxWorkspacePane: '', tmuxControlPane: '',
+      loggingEnabled: true,
+    };
+    return { ...base, ...overrides };
+  }
+
+  it('fresh start: writes meta + emits session_start', async () => {
+    const harnessDir = tempHarnessDir();
+    const sessionsRoot = path.join(harnessDir, 'sessions');
+    const state = buildState();
+    await bootstrapSessionLogger('r1', harnessDir, state, false, { sessionsRoot });
+    const repoKey = computeRepoKey(harnessDir);
+    const eventsPath = path.join(sessionsRoot, repoKey, 'r1', 'events.jsonl');
+    const events = fs.readFileSync(eventsPath, 'utf-8').trim().split('\n').map(l => JSON.parse(l));
+    expect(events[0].event).toBe('session_start');
+    expect(events[0].task).toBe('test task');
+  });
+
+  it('resume: emits session_resumed and pushes resumedAt', async () => {
+    const harnessDir = tempHarnessDir();
+    const sessionsRoot = path.join(harnessDir, 'sessions');
+    const state = buildState();
+    await bootstrapSessionLogger('r2', harnessDir, state, false, { sessionsRoot });
+    await bootstrapSessionLogger('r2', harnessDir, state, true, { sessionsRoot });
+    const repoKey = computeRepoKey(harnessDir);
+    const events = fs.readFileSync(path.join(sessionsRoot, repoKey, 'r2', 'events.jsonl'), 'utf-8').trim().split('\n').map(l => JSON.parse(l));
+    expect(events.filter((e: any) => e.event === 'session_resumed').length).toBe(1);
+    const meta = JSON.parse(fs.readFileSync(path.join(sessionsRoot, repoKey, 'r2', 'meta.json'), 'utf-8'));
+    expect(meta.resumedAt.length).toBe(1);
+  });
+
+  it('loggingEnabled=false: NoopLogger, no files created', async () => {
+    const harnessDir = tempHarnessDir();
+    const sessionsRoot = path.join(harnessDir, 'sessions');
+    const state = buildState({ loggingEnabled: false });
+    await bootstrapSessionLogger('r3', harnessDir, state, false, { sessionsRoot });
+    expect(fs.existsSync(sessionsRoot)).toBe(false);
+  });
+
+  it('non-resume + meta.json exists: emits session_resumed (idempotent re-entry per §5.1)', async () => {
+    const harnessDir = tempHarnessDir();
+    const sessionsRoot = path.join(harnessDir, 'sessions');
+    const state = buildState();
+    await bootstrapSessionLogger('r4', harnessDir, state, false, { sessionsRoot });
+    await bootstrapSessionLogger('r4', harnessDir, state, false, { sessionsRoot });
+    const repoKey = computeRepoKey(harnessDir);
+    const events = fs.readFileSync(path.join(sessionsRoot, repoKey, 'r4', 'events.jsonl'), 'utf-8').trim().split('\n').map(l => JSON.parse(l));
+    const starts = events.filter((e: any) => e.event === 'session_start');
+    const resumes = events.filter((e: any) => e.event === 'session_resumed');
+    expect(starts.length).toBe(1);
+    expect(resumes.length).toBe(1);
+    const meta = JSON.parse(fs.readFileSync(path.join(sessionsRoot, repoKey, 'r4', 'meta.json'), 'utf-8'));
+    expect(meta.resumedAt.length).toBe(1);
   });
 });

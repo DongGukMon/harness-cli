@@ -159,4 +159,20 @@ describe('startCommand', () => {
     const head = execSync('git rev-parse HEAD', { cwd: repo.path, encoding: 'utf-8' }).trim();
     expect(state.baseCommit).toBe(head);
   });
+
+  it('state.loggingEnabled=true when enableLogging option passed', async () => {
+    await startCommand('test task', { root: repo.path, enableLogging: true });
+    const harnessDir = join(repo.path, '.harness');
+    const runId = readFileSync(join(harnessDir, 'current-run'), 'utf-8').trim();
+    const state = JSON.parse(readFileSync(join(harnessDir, runId, 'state.json'), 'utf-8'));
+    expect(state.loggingEnabled).toBe(true);
+  });
+
+  it('state.loggingEnabled=false (default) when enableLogging not passed', async () => {
+    await startCommand('test task', { root: repo.path });
+    const harnessDir = join(repo.path, '.harness');
+    const runId = readFileSync(join(harnessDir, 'current-run'), 'utf-8').trim();
+    const state = JSON.parse(readFileSync(join(harnessDir, runId, 'state.json'), 'utf-8'));
+    expect(state.loggingEnabled).toBe(false);
+  });
 });
