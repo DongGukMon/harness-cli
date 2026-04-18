@@ -11,3 +11,8 @@ spec을 {{spec_path}}에, decision log를 {{decisions_path}}에 저장하고,
 
 spec 문서는 "{{spec_path}}" 경로에 작성하고, 상단에 "## Context & Decisions" 섹션을 포함하라.
 decisions.md는 "{{decisions_path}}" 경로에 작성하라.
+
+**HARNESS FLOW CONSTRAINT**: 이 세션은 orchestrated harness 라이프사이클 내부에서 실행된다. 다음 phase에서 Codex 기반 독립 reviewer가 산출물을 검토한다(gate). 따라서:
+- `advisor()` 툴을 호출하지 말 것. 외부 리뷰가 이미 예약되어 있다.
+- 작업 범위는 이 프롬프트가 지시한 산출물 + 커밋 + sentinel 생성으로 제한한다.
+- skill 자동 로드는 허용. 그러나 의사결정을 advisor에 위임하지 말고 자체적으로 결론을 낸다.

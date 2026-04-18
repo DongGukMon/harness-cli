@@ -114,6 +114,18 @@ describe('Phase 5 interactive prompt', () => {
   });
 });
 
+describe('Phase 1/3/5 HARNESS FLOW CONSTRAINT stanza', () => {
+  it.each([1, 3, 5] as const)('Phase %i prompt forbids advisor() and explains the gate reviewer', (phase) => {
+    const state = makeState({
+      phaseAttemptId: { '1': 'aid', '3': 'aid', '5': 'aid' },
+    });
+    const prompt = assembleInteractivePrompt(phase, state, '/tmp/harness');
+    expect(prompt).toContain('HARNESS FLOW CONSTRAINT');
+    expect(prompt).toContain('advisor()');
+    expect(prompt).toContain('독립 reviewer');
+  });
+});
+
 // ─── Gate Prompt Tests ────────────────────────────────────────────────────
 
 describe('Gate 2 prompt', () => {
