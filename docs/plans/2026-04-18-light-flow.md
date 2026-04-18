@@ -73,11 +73,13 @@ Task 5 (CLI surface --light, resume reject, CLI parser smoke test)
     that step after Task 10's build (or build once at the end of Task 5 itself).
   ↓
 Task 6 (runner flow-aware skip + REJECT + carryover lifecycle + preserve-skipped on jump/skip)
-  ← depends on Task 1 + Task 2 + Task 5 (resume/inner consumption paths).
+  ← depends on Task 1 + Task 2 + Task 5 (resume/inner consumption paths). **Touches `src/commands/inner.ts`
+    (consumePendingAction).**
   ↓
 Task 7 (UI + inner.ts propagation)
-  ← depends on Task 1 ('skipped' status) AND Task 2 (`getRequiredPhaseKeys`). Can run in parallel with
-    Task 6 (disjoint files: src/ui.ts + src/commands/inner.ts vs src/phases/runner.ts + src/commands/jump.ts).
+  ← depends on Task 1 ('skipped' status) AND Task 2 (`getRequiredPhaseKeys`). **Serialized after Task 6** —
+    both tasks edit `src/commands/inner.ts`; Task 6 first (consumePendingAction preserves 'skipped'),
+    then Task 7 (getRequiredPhaseKeys propagation). No legitimate parallel lane between them.
   ↓
 Task 8 (E2E integration)                   ← depends on Tasks 1-7
   ↓
@@ -86,7 +88,7 @@ Task 9 (docs)                              ← no code deps; can run anywhere af
 Task 10 (final verification + build + PR)  ← must run last
 ```
 
-**Parallelizable windows:** After Task 2 lands, Task 5 and Task 7 can run concurrently (disjoint file sets from each other and from Tasks 3/4/6). Tasks 3 and 4 share `src/context/assembler.ts` and `tests/context/assembler.test.ts`, so they **must be serialized**; Task 6 and Task 7 share no files and can run concurrently. Task 8 is strictly serial at the end because it exercises the whole integration.
+**Parallelizable windows:** After Task 2 lands, Task 5 can run alongside Task 3. Tasks 3 and 4 share `src/context/assembler.ts` and `tests/context/assembler.test.ts` and **must be serialized**. Tasks 6 and 7 both edit `src/commands/inner.ts` (Task 6 patches `consumePendingAction`; Task 7 adds `getRequiredPhaseKeys` propagation) and also **must be serialized** (Task 6 first). Task 8 is strictly serial at the end because it exercises the whole integration.
 
 **Per-task acceptance:** every task's "Expected: … PASS" assertion at the end of each Step block is the acceptance gate. Final acceptance is the Eval Checklist at the bottom of this document.
 
@@ -1754,7 +1756,7 @@ grep -n 'previousInteractivePhase' src/phases/runner.ts
 
 Expected: empty output. If anything matches, migrate that call too before deleting. `handleGateError` (lines 651-701) does **not** reference the helper — its Quit branch uses `state.currentPhase` instead — so no change there.
 
-- [ ] **Step 5: Set carryoverFeedback + reset P5/P6 on light Gate-7 REJECT**
+- [ ] **Step 5: Set carryoverFeedback + reset P5/P6 + invalidate Gate-7 Codex session on light Gate-7 REJECT**
 
 In `handleGateReject`, at the reopen branch (after `saveGateFeedback` is called — roughly line 509) add immediately before `const pendingAction: PendingAction = …`:
 
@@ -1770,6 +1772,11 @@ if (state.flow === 'light' && phase === 7) {
   state.phases['6'] = 'pending';
   state.phaseReopenFlags['5'] = true;
   state.phaseReopenSource['5'] = 7;
+  // Invalidate the Gate-7 Codex session + replay sidecars so the next Gate-7
+  // run starts fresh instead of resuming the rejected session. Spec §"Retry
+  // 한도" + §"REJECT 체인": "phaseReopenFlags/phaseCodexSessions 무효화 범위를 확장".
+  state.phaseCodexSessions['7'] = null;
+  deleteGateSidecars(runDir, 7);
 }
 ```
 
@@ -1786,7 +1793,46 @@ if (state.flow === 'light' && phase === 7) {
   state.phases['6'] = 'pending';
   state.phaseReopenFlags['5'] = true;
   state.phaseReopenSource['5'] = 7;
+  state.phaseCodexSessions['7'] = null;
+  deleteGateSidecars(runDir, 7);
 }
+```
+
+(`deleteGateSidecars` is the existing helper at the top of `src/phases/runner.ts` — no new import needed.)
+
+**Persistence ordering (Spec R8):** the existing `writeState(runDir, state)` at the bottom of `handleGateReject` (line ~545) already flushes the mutated state — including `carryoverFeedback` — to disk atomically before the function returns. No additional `writeState` is required here; keep the inserts above that call so the single atomic write captures carryoverFeedback + pendingAction + phase resets + session invalidation together. If the order ever changes such that `handleGateReject` mutates state without a following writeState, re-audit this step.
+
+**Regression test** — add to the light-flow describe in `tests/phases/runner.test.ts`:
+
+```ts
+it('Gate-7 REJECT on light also clears phaseCodexSessions[7] + replay sidecars', async () => {
+  const runDir = makeTmpDir();
+  const state = makeLightState({
+    currentPhase: 7,
+    phases: { '1': 'completed', '2': 'skipped', '3': 'skipped', '4': 'skipped',
+              '5': 'completed', '6': 'completed', '7': 'pending' },
+  });
+  // Seed a saved session and a sidecar file so we can assert both are cleared.
+  state.phaseCodexSessions['7'] = {
+    sessionId: 'stale-7', runner: 'codex', model: 'gpt-5.4', effort: 'high',
+    lastOutcome: 'reject',
+  };
+  fs.writeFileSync(path.join(runDir, 'gate-7-raw.txt'), 'stale');
+  fs.writeFileSync(path.join(runDir, 'gate-7-result.json'), '{}');
+
+  vi.mocked(runGatePhase).mockResolvedValueOnce({
+    type: 'verdict', verdict: 'REJECT', comments: 'rework', rawOutput: '',
+    runner: 'codex', durationMs: 1, tokensTotal: 0, promptBytes: 0,
+    codexSessionId: 'x', recoveredFromSidecar: false,
+    resumedFrom: null, resumeFallback: false,
+  } as any);
+
+  await handleGatePhase(7, state, HDIR, runDir, CWD, createNoOpInputManager(), new NoopLogger(), { value: false });
+
+  expect(state.phaseCodexSessions['7']).toBeNull();
+  expect(fs.existsSync(path.join(runDir, 'gate-7-raw.txt'))).toBe(false);
+  expect(fs.existsSync(path.join(runDir, 'gate-7-result.json'))).toBe(false);
+});
 ```
 
 - [ ] **Step 6: Clear carryoverFeedback on Phase 5 completion**
@@ -2555,7 +2601,8 @@ Anything that came up during plan-gate review but is not a P1 blocker lands here
     { "name": "light Gate 7 reviewer contract flow-aware (fresh prompt only)", "command": "pnpm vitest run tests/context/assembler.test.ts -t '결합 design spec|4-phase light harness'" },
     { "name": "light Gate 7 resume omits <plan>", "command": "pnpm vitest run tests/context/assembler-resume.test.ts -t 'flow-aware'" },
     { "name": "docs mention --light", "command": "rg --fixed-strings -- '--light' docs/HOW-IT-WORKS.md CLAUDE.md" },
-    { "name": "jump/skip preserve 'skipped' invariant", "command": "pnpm vitest run tests/signal.test.ts tests/commands/jump.test.ts -t 'skipped'" }
+    { "name": "jump/skip preserve 'skipped' invariant", "command": "pnpm vitest run tests/signal.test.ts tests/commands/jump.test.ts -t 'skipped'" },
+    { "name": "light Gate-7 REJECT clears phaseCodexSessions[7] + sidecars", "command": "pnpm vitest run tests/phases/runner.test.ts -t 'Gate-7 REJECT on light also clears phaseCodexSessions'" }
   ]
 }
 ```
