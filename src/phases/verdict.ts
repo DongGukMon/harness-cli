@@ -38,11 +38,25 @@ export function parseVerdict(
   return { verdict, comments };
 }
 
-export function extractCodexMetadata(stdout: string): { tokensTotal?: number; codexSessionId?: string } {
+/**
+ * Extract `tokens used` and `session id:` metadata from a Codex `exec` run.
+ *
+ * Codex writes these lines to STDERR (alongside its banner and `hook:` lines), not
+ * stdout — stdout contains only the model's final answer text. Earlier versions of
+ * this helper scanned stdout only, which silently failed for real subprocess runs
+ * (the regexes never matched) while unit tests passed because fixtures stuffed
+ * metadata into the stdout argument. Scan both streams so the helper is robust to
+ * either wiring.
+ */
+export function extractCodexMetadata(
+  stdout: string,
+  stderr: string = ''
+): { tokensTotal?: number; codexSessionId?: string } {
   const out: { tokensTotal?: number; codexSessionId?: string } = {};
-  const m = stdout.match(/^tokens used\s*\n([\d,]+)/m);
+  const combined = stderr.length > 0 ? `${stdout}\n${stderr}` : stdout;
+  const m = combined.match(/^tokens used\s*\n([\d,]+)/m);
   if (m) out.tokensTotal = parseInt(m[1].replace(/,/g, ''), 10);
-  const s = stdout.match(/session id:\s*([0-9a-f-]+)/i);
+  const s = combined.match(/session id:\s*([0-9a-f-]+)/i);
   if (s) out.codexSessionId = s[1];
   return out;
 }
