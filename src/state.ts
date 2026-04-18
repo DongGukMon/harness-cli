@@ -1,6 +1,6 @@
 import fs from 'fs';
 import path from 'path';
-import type { HarnessState } from './types.js';
+import type { HarnessState, PhaseStatus } from './types.js';
 import { PHASE_DEFAULTS, REQUIRED_PHASE_KEYS, MODEL_PRESETS, getPresetById } from './config.js';
 
 const STATE_FILE = 'state.json';
@@ -106,6 +106,12 @@ export function migrateState(raw: any): HarnessState {
       raw.phaseCodexSessions[key] = null;
     }
   }
+  if (raw.flow !== 'full' && raw.flow !== 'light') {
+    raw.flow = 'full';
+  }
+  if (!('carryoverFeedback' in raw) || raw.carryoverFeedback === undefined) {
+    raw.carryoverFeedback = null;
+  }
   return raw as HarnessState;
 }
 
@@ -176,14 +182,40 @@ export function createInitialState(
   baseCommit: string,
   autoMode: boolean,
   loggingEnabled: boolean = false,
+  flow: 'full' | 'light' = 'full',
 ): HarnessState {
   const phasePresets: Record<string, string> = {};
   for (const phase of REQUIRED_PHASE_KEYS) {
     phasePresets[phase] = PHASE_DEFAULTS[Number(phase)] ?? 'sonnet-high';
   }
 
+  const phases: Record<string, PhaseStatus> =
+    flow === 'light'
+      ? { '1': 'pending', '2': 'skipped', '3': 'skipped', '4': 'skipped',
+          '5': 'pending', '6': 'pending', '7': 'pending' }
+      : { '1': 'pending', '2': 'pending', '3': 'pending', '4': 'pending',
+          '5': 'pending', '6': 'pending', '7': 'pending' };
+
+  const artifacts = flow === 'light'
+    ? {
+        spec: `docs/specs/${runId}-design.md`,
+        plan: '',
+        decisionLog: `.harness/${runId}/decisions.md`,
+        checklist: `.harness/${runId}/checklist.json`,
+        evalReport: `docs/process/evals/${runId}-eval.md`,
+      }
+    : {
+        spec: `docs/specs/${runId}-design.md`,
+        plan: `docs/plans/${runId}.md`,
+        decisionLog: `.harness/${runId}/decisions.md`,
+        checklist: `.harness/${runId}/checklist.json`,
+        evalReport: `docs/process/evals/${runId}-eval.md`,
+      };
+
   return {
     runId,
+    flow,
+    carryoverFeedback: null,
     currentPhase: 1,
     status: 'in_progress',
     autoMode,
@@ -192,22 +224,8 @@ export function createInitialState(
     implRetryBase: baseCommit,
     codexPath: null,
     externalCommitsDetected: false,
-    artifacts: {
-      spec: `docs/specs/${runId}-design.md`,
-      plan: `docs/plans/${runId}.md`,
-      decisionLog: `.harness/${runId}/decisions.md`,
-      checklist: `.harness/${runId}/checklist.json`,
-      evalReport: `docs/process/evals/${runId}-eval.md`,
-    },
-    phases: {
-      '1': 'pending',
-      '2': 'pending',
-      '3': 'pending',
-      '4': 'pending',
-      '5': 'pending',
-      '6': 'pending',
-      '7': 'pending',
-    },
+    artifacts,
+    phases,
     gateRetries: {
       '2': 0,
       '4': 0,

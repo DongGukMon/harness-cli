@@ -262,3 +262,59 @@ describe('migrateState', () => {
     expect(migrated.phaseReopenFlags['3']).toBe(false);
   });
 });
+
+describe('flow + carryoverFeedback (light-flow spec)', () => {
+  it('createInitialState defaults flow to "full" and carryoverFeedback to null', () => {
+    const state = createInitialState('r1', 't', 'base', false);
+    expect(state.flow).toBe('full');
+    expect(state.carryoverFeedback).toBeNull();
+    expect(state.phases['2']).toBe('pending');
+    expect(state.phases['3']).toBe('pending');
+    expect(state.phases['4']).toBe('pending');
+  });
+
+  it('createInitialState with flow="light" marks phases 2/3/4 as "skipped"', () => {
+    const state = createInitialState('r1', 't', 'base', false, false, 'light');
+    expect(state.flow).toBe('light');
+    expect(state.phases['1']).toBe('pending');
+    expect(state.phases['2']).toBe('skipped');
+    expect(state.phases['3']).toBe('skipped');
+    expect(state.phases['4']).toBe('skipped');
+    expect(state.phases['5']).toBe('pending');
+    expect(state.phases['6']).toBe('pending');
+    expect(state.phases['7']).toBe('pending');
+    expect(state.artifacts.plan).toBe('');
+  });
+
+  it('migrateState backfills missing flow as "full" and carryoverFeedback as null', () => {
+    const base = createInitialState('r1', 't', 'base', false);
+    const raw: any = JSON.parse(JSON.stringify(base));
+    delete raw.flow;
+    delete raw.carryoverFeedback;
+    const migrated = migrateState(raw);
+    expect(migrated.flow).toBe('full');
+    expect(migrated.carryoverFeedback).toBeNull();
+  });
+
+  it('migrateState preserves an existing light flow value', () => {
+    const base = createInitialState('r1', 't', 'base', false, false, 'light');
+    const raw = JSON.parse(JSON.stringify(base));
+    const migrated = migrateState(raw);
+    expect(migrated.flow).toBe('light');
+    expect(migrated.carryoverFeedback).toBeNull();
+  });
+
+  it('carryoverFeedback survives writeState → readState round-trip', () => {
+    const dir = makeTmpDir();
+    tmpDirs.push(dir);
+    const state = createInitialState('r1', 't', 'base', false, false, 'light');
+    state.carryoverFeedback = {
+      sourceGate: 7,
+      paths: ['.harness/r1/gate-7-feedback.md'],
+      deliverToPhase: 5,
+    };
+    writeState(dir, state);
+    const restored = readState(dir);
+    expect(restored?.carryoverFeedback).toEqual(state.carryoverFeedback);
+  });
+});

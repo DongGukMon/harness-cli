@@ -14,7 +14,8 @@ function makeSession(model: string, effort: string): GateSessionInfo {
 
 function makeState(): HarnessState {
   return {
-    runId: 'r1', currentPhase: 2, status: 'in_progress', autoMode: false,
+    runId: 'r1', flow: 'full', carryoverFeedback: null,
+    currentPhase: 2, status: 'in_progress', autoMode: false,
     task: 't', baseCommit: '', implRetryBase: '', codexPath: null,
     externalCommitsDetected: false,
     artifacts: { spec: 's', plan: 'p', decisionLog: 'd', checklist: 'c', evalReport: 'e' },
