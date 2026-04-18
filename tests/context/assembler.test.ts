@@ -168,6 +168,58 @@ describe('Gate 2 prompt', () => {
   });
 });
 
+describe('Gate 2/4/7 lifecycle stanza', () => {
+  function writeSpecPlanEval(cwd: string, state: HarnessState, { plan = false, evalReport = false } = {}): void {
+    const specAbsPath = path.join(cwd, state.artifacts.spec);
+    fs.mkdirSync(path.dirname(specAbsPath), { recursive: true });
+    fs.writeFileSync(specAbsPath, '# Spec');
+    if (plan) {
+      const planAbsPath = path.join(cwd, state.artifacts.plan);
+      fs.mkdirSync(path.dirname(planAbsPath), { recursive: true });
+      fs.writeFileSync(planAbsPath, '# Plan');
+    }
+    if (evalReport) {
+      const evalAbsPath = path.join(cwd, state.artifacts.evalReport);
+      fs.mkdirSync(path.dirname(evalAbsPath), { recursive: true });
+      fs.writeFileSync(evalAbsPath, '# Eval');
+    }
+  }
+
+  it('Gate 2 prompt includes phase-2 lifecycle stanza (plan/impl/eval not yet produced)', () => {
+    const cwd = makeTmpDir();
+    const state = makeState();
+    writeSpecPlanEval(cwd, state);
+    const result = assembleGatePrompt(2, state, '/tmp/harness', cwd);
+    if (typeof result !== 'string') throw new Error('expected string');
+    expect(result).toContain('<harness_lifecycle>');
+    expect(result).toContain('Gate 2');
+    expect(result).toContain('have not yet been produced');
+  });
+
+  it('Gate 4 prompt includes phase-4 lifecycle stanza (impl not yet produced)', () => {
+    const cwd = makeTmpDir();
+    const state = makeState();
+    writeSpecPlanEval(cwd, state, { plan: true });
+    const result = assembleGatePrompt(4, state, '/tmp/harness', cwd);
+    if (typeof result !== 'string') throw new Error('expected string');
+    expect(result).toContain('<harness_lifecycle>');
+    expect(result).toContain('Gate 4');
+    expect(result).toContain('implementation (Phase 5) has not yet been produced');
+  });
+
+  it('Gate 7 prompt includes terminal lifecycle stanza without "not yet produced" wording', () => {
+    const cwd = makeTmpDir();
+    const state = makeState();
+    writeSpecPlanEval(cwd, state, { plan: true, evalReport: true });
+    const result = assembleGatePrompt(7, state, '/tmp/harness', cwd);
+    if (typeof result !== 'string') throw new Error('expected string');
+    expect(result).toContain('<harness_lifecycle>');
+    expect(result).toContain('Gate 7');
+    expect(result).toContain('terminal review');
+    expect(result).not.toContain('has not yet been produced');
+  });
+});
+
 describe('Gate size limits', () => {
   it('returns error object when file exceeds 200KB limit', () => {
     const cwd = makeTmpDir();

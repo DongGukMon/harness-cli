@@ -108,6 +108,38 @@ function runGit(cmd: string, cwd: string): string {
   }
 }
 
+// ─── Lifecycle context ──────────────────────────────────────────────────────
+//
+// Each gate sees a phase-specific stanza so the reviewer understands which
+// later-phase artifacts do not yet exist. Keeps BUG-A from recurring: gates
+// used to flag "plan file missing" at Gate 2 even though plan = Phase 3.
+
+function buildLifecycleContext(phase: 2 | 4 | 7): string {
+  if (phase === 2) {
+    return (
+      '<harness_lifecycle>\n' +
+      'This is Gate 2 of a 7-phase harness lifecycle. You are reviewing ONLY the <spec> artifact. ' +
+      'The implementation plan (Phase 3), the implementation itself (Phase 5), and the eval report (Phase 7) ' +
+      'have not yet been produced; their absence must NOT appear as a finding.\n' +
+      '</harness_lifecycle>\n\n'
+    );
+  }
+  if (phase === 4) {
+    return (
+      '<harness_lifecycle>\n' +
+      'This is Gate 4 of a 7-phase harness lifecycle. You are reviewing the <spec> and <plan>. ' +
+      'The implementation (Phase 5) has not yet been produced; its absence must NOT appear as a finding.\n' +
+      '</harness_lifecycle>\n\n'
+    );
+  }
+  return (
+    '<harness_lifecycle>\n' +
+    'This is Gate 7 of a 7-phase harness lifecycle. Spec, plan, implementation diff, and eval report are all provided. ' +
+    'This is the terminal review — if APPROVE, the run is complete.\n' +
+    '</harness_lifecycle>\n\n'
+  );
+}
+
 // ─── Gate 2: Spec review ─────────────────────────────────────────────────────
 
 function buildGatePromptPhase2(state: HarnessState, cwd: string): string | { error: string } {
@@ -116,7 +148,8 @@ function buildGatePromptPhase2(state: HarnessState, cwd: string): string | { err
 
   return (
     REVIEWER_CONTRACT +
-    `\n<spec>\n${specResult.content}\n</spec>\n`
+    buildLifecycleContext(2) +
+    `<spec>\n${specResult.content}\n</spec>\n`
   );
 }
 
@@ -131,7 +164,8 @@ function buildGatePromptPhase4(state: HarnessState, cwd: string): string | { err
 
   return (
     REVIEWER_CONTRACT +
-    `\n<spec>\n${specResult.content}\n</spec>\n\n` +
+    buildLifecycleContext(4) +
+    `<spec>\n${specResult.content}\n</spec>\n\n` +
     `<plan>\n${planResult.content}\n</plan>\n`
   );
 }
@@ -215,7 +249,8 @@ function buildGatePromptPhase7(state: HarnessState, cwd: string): string | { err
 
   return (
     REVIEWER_CONTRACT +
-    `\n<spec>\n${specResult.content}\n</spec>\n\n` +
+    buildLifecycleContext(7) +
+    `<spec>\n${specResult.content}\n</spec>\n\n` +
     `<plan>\n${planResult.content}\n</plan>\n\n` +
     `<eval_report>\n${evalResult.content}\n</eval_report>\n\n` +
     diffSection +
