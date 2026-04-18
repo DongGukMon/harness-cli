@@ -342,9 +342,10 @@ EOF
 
 **Files:**
 - Modify: `src/config.ts` (after line 63)
-- Modify: `src/phases/interactive.ts` (replace `PHASE_ARTIFACT_FILES[phase]` usages at lines 43 and 102; add light + phase 1 extra checks)
+- **Create:** `src/phases/checklist.ts` — **extracts `isValidChecklistSchema` into a sync helper** so `src/resume.ts::completeInteractivePhaseFromFreshSentinel` (which is synchronous and returns `boolean`) can call it via a static import without an async refactor.
+- Modify: `src/phases/interactive.ts` (replace `PHASE_ARTIFACT_FILES[phase]` usages at lines 43 and 102; re-export `isValidChecklistSchema` from the new module so existing callers continue to work; add light + phase 1 extra checks)
 - Modify: `src/phases/runner.ts` (replace `PHASE_ARTIFACT_FILES[phase]` at line 128)
-- Modify: `src/resume.ts` (replace the hard-coded artifact keys at lines 480-481; add light + phase 1 extra checks)
+- Modify: `src/resume.ts` (replace the hard-coded artifact keys at lines 480-481; statically import `isValidChecklistSchema` from `./phases/checklist.js`; add light + phase 1 extra checks)
 - Modify: `tests/phases/interactive.test.ts` (extra validation coverage)
 - Modify: `tests/resume.test.ts` (symmetric extra validation coverage)
 
@@ -536,9 +537,19 @@ Append to `tests/resume.test.ts` (symmetric three cases, but exercising `complet
 
 ```ts
 import { completeInteractivePhaseFromFreshSentinel } from '../src/resume.js';
+import { vi } from 'vitest';
+
+// Mock normalize + git helpers so the function runs against a plain tmp dir
+// without a real git repo. This lets us assert the positive branch concretely.
+vi.mock('../src/artifact.js', () => ({
+  normalizeArtifactCommit: vi.fn(),
+}));
+vi.mock('../src/git.js', () => ({
+  getHead: vi.fn(() => 'head-sha'),
+}));
 
 describe('completeInteractivePhaseFromFreshSentinel — light + phase 1 extras (ADR-13)', () => {
-  it('accepts a combined doc + valid checklist', () => {
+  it('accepts a combined doc + valid checklist and updates specCommit', () => {
     const tmp = makeTmpDir();
     const state = makeState({ flow: 'light', phaseOpenedAt: { '1': 0 } });
     state.artifacts.spec = path.join(tmp, 'spec.md');
@@ -549,14 +560,9 @@ describe('completeInteractivePhaseFromFreshSentinel — light + phase 1 extras (
     fs.writeFileSync(state.artifacts.decisionLog, '# D\n');
     fs.writeFileSync(state.artifacts.checklist,
       JSON.stringify({ checks: [{ name: 'n', command: 'true' }] }));
-    // normalizeArtifactCommit is invoked for non-gitignored files — spec is in tmp
-    // which is not a git repo, so we expect the function to return false gracefully OR
-    // we mock normalizeArtifactCommit. For simplicity, assert the regex + checklist
-    // check pass by verifying the function does NOT return false on bad-content path:
-    // specifically, mutate the spec to drop the header and assert it flips to false.
-    expect(completeInteractivePhaseFromFreshSentinel(1, state, tmp)).toBe(false || true); // passes either way
-    fs.writeFileSync(state.artifacts.spec, '# T\n');  // header gone
-    expect(completeInteractivePhaseFromFreshSentinel(1, state, tmp)).toBe(false);
+
+    expect(completeInteractivePhaseFromFreshSentinel(1, state, tmp)).toBe(true);
+    expect(state.specCommit).toBe('head-sha');
   });
 
   it('rejects missing "## Implementation Plan" header', () => {
@@ -619,17 +625,51 @@ if (state.flow === 'light' && phase === 1) {
 
 (Replaces nothing — pure addition. The pre-existing Phase 3 checklist-schema block stays for full flow.)
 
-In `src/resume.ts::completeInteractivePhaseFromFreshSentinel`, after the per-key mtime loop (line 491) and before `// Run normalize_artifact_commit` (line 493), add:
+Before touching `resume.ts`, **extract `isValidChecklistSchema` into a shared sync module** so `completeInteractivePhaseFromFreshSentinel` (synchronous, returns `boolean`) can call it via a static import. Create `src/phases/checklist.ts`:
+
+```ts
+import fs from 'fs';
+
+/** Validate checklist.json matches spec schema: `{ checks: [{ name, command }] }`. */
+export function isValidChecklistSchema(absPath: string): boolean {
+  try {
+    const raw = fs.readFileSync(absPath, 'utf-8');
+    const parsed = JSON.parse(raw);
+    if (!parsed || !Array.isArray(parsed.checks) || parsed.checks.length === 0) return false;
+    for (const check of parsed.checks) {
+      if (typeof check?.name !== 'string' || typeof check?.command !== 'string') return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+```
+
+In `src/phases/interactive.ts`, delete the inline `isValidChecklistSchema` definition (lines 154-166) and replace with a re-export so existing callers keep working:
+
+```ts
+export { isValidChecklistSchema } from './checklist.js';
+```
+
+Also update the internal usage inside `validatePhaseArtifacts` to import from the new module (static import at the top of the file):
+
+```ts
+import { isValidChecklistSchema } from './checklist.js';
+```
+
+Now in `src/resume.ts::completeInteractivePhaseFromFreshSentinel`, add the static import at the top of the file alongside existing imports:
+
+```ts
+import { isValidChecklistSchema } from './phases/checklist.js';
+```
+
+After the per-key mtime loop (line 491) and before `// Run normalize_artifact_commit` (line 493), add the sync check (no `await`, function remains `boolean`):
 
 ```ts
 if (state.flow === 'light' && phase === 1) {
-  const { isValidChecklistSchema } = await import('./phases/interactive.js');
-  // ^ dynamic import to avoid a circular reference; interactive.ts already
-  // imports resume helpers indirectly via getHead. Swap to a top-level import
-  // if a cycle-break refactor happens later.
-  const checklistAbs = state.artifacts.checklist.startsWith('.harness/') ||
-    state.artifacts.checklist.startsWith('/')
-    ? (state.artifacts.checklist.startsWith('/') ? state.artifacts.checklist : join(cwd, state.artifacts.checklist))
+  const checklistAbs = state.artifacts.checklist.startsWith('/')
+    ? state.artifacts.checklist
     : join(cwd, state.artifacts.checklist);
   if (!isValidChecklistSchema(checklistAbs)) return false;
 
@@ -647,7 +687,7 @@ if (state.flow === 'light' && phase === 1) {
 
 (`completeInteractivePhaseFromFreshSentinel` is currently `function completeInteractive…` at `src/resume.ts:472`. If it is not exported yet, prefix it with `export function …` so the new tests can import it.)
 
-If the dynamic import feels heavy, an equally acceptable alternative is to move `isValidChecklistSchema` into `src/config.ts` or a new `src/phases/checklist.ts` and have both `interactive.ts` and `resume.ts` import it from there. The plan uses the dynamic import to keep the diff small; the refactor alternative is mentioned for the reviewer's context.
+Note: the earlier draft used `await import('./phases/interactive.js')` — that does not compile inside a synchronous `boolean`-returning function. The `src/phases/checklist.ts` extraction is the resolved approach; no async refactor needed.
 
 - [ ] **Step 7: Run both test families to verify every new assertion passes**
 
@@ -809,7 +849,7 @@ Eval Checklist는 "{{checklist_path}}" 경로에 아래 JSON 스키마로 저장
 
 (Verbatim — no TBDs, no placeholders other than `{{…}}` variables.)
 
-- [ ] **Step 4: Update `assembleInteractivePrompt` to pick the light template**
+- [ ] **Step 4: Update `assembleInteractivePrompt` to pick the light template + filter unreadable carryover paths (Spec R8)**
 
 In `src/context/assembler.ts` at line ~311 (start of `assembleInteractivePrompt`):
 
@@ -819,7 +859,7 @@ const templateFile = phase === 1 && state.flow === 'light' ? 'phase-1-light.md' 
 
 Replace the current `const templateFile = …` line with the above.
 
-Then, inside the same function, extend the `feedbackPaths` construction (around line 320) to merge `state.carryoverFeedback`:
+Then, inside the same function, extend the `feedbackPaths` construction (around line 320) to merge `state.carryoverFeedback` **and filter paths that no longer exist on disk** (Spec Risks §R8 — if the carryover file vanished between persist and consume, warn and proceed without that entry rather than injecting a bad path):
 
 ```ts
 const carryoverPaths =
@@ -827,14 +867,55 @@ const carryoverPaths =
     ? state.carryoverFeedback.paths
     : [];
 const pendingPaths = state.pendingAction?.feedbackPaths ?? [];
-const feedbackPaths = [...pendingPaths, ...carryoverPaths];
+const rawPaths = [...pendingPaths, ...carryoverPaths];
+const feedbackPaths: string[] = [];
+for (const p of rawPaths) {
+  const abs = path.isAbsolute(p) ? p : path.join(harnessDir, '..', p);
+  if (fs.existsSync(abs)) {
+    feedbackPaths.push(p);
+  } else {
+    process.stderr.write(
+      `⚠️  carryover feedback path not found on disk, skipping: ${p}\n`,
+    );
+  }
+}
 const feedbackPath = feedbackPaths[0];
 const feedbackPathsList = feedbackPaths
   .map((p) => `- 이전 피드백 (반드시 반영): ${p}`)
   .join('\n');
 ```
 
-(Drop the original `const feedbackPaths = state.pendingAction?.feedbackPaths ?? [];` line — replaced above.)
+(Drop the original `const feedbackPaths = state.pendingAction?.feedbackPaths ?? [];` line — replaced above. `path` and `fs` are already imported at the top of the file.)
+
+**New test** (add to the `flow-aware Phase 1` describe block in `tests/context/assembler.test.ts`):
+
+```ts
+it('light + phase 5 drops carryover paths that no longer exist on disk (R8)', () => {
+  const tmp = makeTmpDir();
+  const existing = path.join(tmp, 'exists.md');
+  fs.writeFileSync(existing, 'x');
+  const state = makeState({
+    flow: 'light',
+    phaseAttemptId: { '5': 'aid-5' },
+    pendingAction: null,
+    carryoverFeedback: {
+      sourceGate: 7,
+      paths: [existing, path.join(tmp, 'missing.md')],
+      deliverToPhase: 5,
+    },
+  });
+  const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+  try {
+    const prompt = assembleInteractivePrompt(5, state, tmp);
+    expect(prompt).toContain('exists.md');
+    expect(prompt).not.toContain('missing.md');
+    const warnings = stderrSpy.mock.calls.map((c) => c[0]).join('');
+    expect(warnings).toMatch(/carryover feedback path not found.*missing\.md/);
+  } finally {
+    stderrSpy.mockRestore();
+  }
+});
+```
 
 - [ ] **Step 5: Make sure `copy-assets` packages the new prompt file**
 
@@ -1279,7 +1360,39 @@ pnpm vitest run tests/commands 2>&1 | tail -20
 
 Expected: all green.
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 8: Add a CLI parser smoke test (defence against `bin/harness.ts` drift)**
+
+The Task 5 unit tests call `startCommand`/`resumeCommand` directly via `vi.mock` stubs — they would still pass even if the `.option('--light')` line in `bin/harness.ts` were missing. Add a parser-level smoke test that runs the **built** CLI and verifies `--light` is a known option on `start`, `run`, and `resume`. Append to `tests/integration/lifecycle.test.ts` (which already uses the `dist/bin/harness.js` spawnSync pattern):
+
+```ts
+describe('CLI parser — --light flag registration (Task 5 smoke test)', () => {
+  it('start --help lists --light', () => {
+    const res = runCli(['start', '--help']);
+    expect(res.status).toBe(0);
+    expect(res.stdout).toMatch(/--light/);
+  });
+  it('run --help lists --light', () => {
+    const res = runCli(['run', '--help']);
+    expect(res.status).toBe(0);
+    expect(res.stdout).toMatch(/--light/);
+  });
+  it('resume --help lists --light (option is captured so runtime can reject it)', () => {
+    const res = runCli(['resume', '--help']);
+    expect(res.status).toBe(0);
+    expect(res.stdout).toMatch(/--light/);
+  });
+});
+```
+
+Run:
+
+```bash
+pnpm build && pnpm vitest run tests/integration/lifecycle.test.ts -t '--light flag registration' 2>&1 | tail -20
+```
+
+Expected: 3 PASS. (Requires `pnpm build` first — the suite reads `dist/bin/harness.js`.)
+
+- [ ] **Step 9: Commit**
 
 ```bash
 git add bin/harness.ts src/commands/start.ts src/commands/resume.ts tests/commands/run.test.ts tests/commands/resume-cmd.test.ts
@@ -1741,6 +1854,26 @@ vi.mock('../../src/runners/codex.js', () => ({
   runCodexInteractive: vi.fn(),
 }));
 
+// Mock the verify phase so we don't invoke harness-verify.sh against a real repo.
+// Happy path: runVerifyPhase resolves with {type:'pass'}; Gate-7 reject path
+// does not reach verify, so this mock is only exercised by the happy-path test.
+vi.mock('../../src/phases/verify.js', () => ({
+  runVerifyPhase: vi.fn(async () => ({ type: 'pass' } as const)),
+  readVerifyResult: vi.fn(() => null),
+  isEvalReportValid: vi.fn(() => true),
+}));
+
+// Mock artifact/git helpers so the fake runner dirs don't need a real git repo.
+vi.mock('../../src/artifact.js', () => ({
+  normalizeArtifactCommit: vi.fn(),
+}));
+vi.mock('../../src/git.js', () => ({
+  getHead: vi.fn(() => 'mock-head'),
+  getGitRoot: vi.fn(() => '/'),
+  isAncestor: vi.fn(() => true),
+  detectExternalCommits: vi.fn(() => []),
+}));
+
 import { runPhaseLoop } from '../../src/phases/runner.js';
 import { createInitialState, writeState, readState } from '../../src/state.js';
 import { NoopLogger } from '../../src/logger.js';
@@ -1803,9 +1936,10 @@ describe('light-flow end-to-end (P1 → P5 → P6 → P7)', () => {
       sourcePreset: { model: 'gpt-5.4', effort: 'high' },
     } as any);
 
-    // Verify: call the runner but have it resolve as "pass" by providing a passing eval report
-    // (Phase 6 uses harness-verify.sh; we mock it by stubbing runVerifyPhase directly)
-    // For brevity: mock runVerifyPhase via vi.mock at the top if the E2E surface becomes awkward.
+    // Verify is mocked at module level (see top-of-file vi.mock for
+    // '../../src/phases/verify.js') — it resolves with {type:'pass'} and
+    // runner.ts commits a synthetic eval report via the mocked
+    // normalizeArtifactCommit.
 
     const logger = new NoopLogger();
     await runPhaseLoop(state, harnessDir, runDir, cwd, createNoOpInputManager(), logger, { value: false });
@@ -1855,7 +1989,7 @@ describe('light-flow end-to-end (P1 → P5 → P6 → P7)', () => {
 });
 ```
 
-(Adjust mock surfaces — in particular `runVerifyPhase` — to make the happy-path test actually reach Gate 7 if the above is not sufficient. It is acceptable to also `vi.mock('../../src/phases/verify.js', () => ({ runVerifyPhase: vi.fn().mockResolvedValue({ type: 'pass' }) }))` at the top. Keep the test hermetic: no network, no child processes.)
+All mock surfaces are now pinned at the top of the test file (`vi.mock(...)` blocks for runners/verify/artifact/git). The test is hermetic: no network, no child processes, no git repo required.
 
 - [ ] **Step 2: Run the new integration test**
 
@@ -2047,7 +2181,7 @@ Then `gh pr create` with title `feat: light flow (harness start --light)` and a 
 
 Anything that came up during plan-gate review but is not a P1 blocker lands here. This section is populated as the plan gate runs; keep entries short and link to the reviewer comment.
 
-- (none yet — populated by `codex-gate-review --gate plan`.)
+- **[Gate-plan round 1, P2]** Codex flagged the earlier `tests/resume.test.ts` assertion `expect(completeInteractivePhaseFromFreshSentinel(1, state, tmp)).toBe(false || true)` as an always-pass test. That specific assertion was replaced in this revision with a concrete positive check (`toBe(true)` + `state.specCommit === 'head-sha'` via `vi.mock` of `normalizeArtifactCommit`/`getHead`); the P2 is resolved in-plan. Tracking here so future implementers do not reintroduce the pattern.
 
 ---
 
@@ -2064,7 +2198,8 @@ Anything that came up during plan-gate review but is not a P1 blocker lands here
     { "name": "runner flow branches", "command": "pnpm vitest run tests/phases/runner.test.ts -t 'light flow'" },
     { "name": "state schema migration", "command": "pnpm vitest run tests/state.test.ts -t 'light-flow spec'" },
     { "name": "config helpers", "command": "pnpm vitest run tests/state.test.ts -t 'getPhaseArtifactFiles|getReopenTarget'" },
-    { "name": "phase-1-light.md packaged to dist", "command": "test -f dist/src/context/prompts/phase-1-light.md" }
+    { "name": "phase-1-light.md packaged to dist", "command": "test -f dist/src/context/prompts/phase-1-light.md" },
+    { "name": "CLI parser --light smoke test", "command": "pnpm vitest run tests/integration/lifecycle.test.ts -t '--light flag registration'" }
   ]
 }
 ```
