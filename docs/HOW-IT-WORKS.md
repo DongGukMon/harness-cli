@@ -53,7 +53,7 @@ P1 design(=brainstorm+plan) → [P2/P3/P4 skipped] → P5 impl → P6 verify →
 - **skipped phases**: `phases['2'|'3'|'4']` initialize to the new `'skipped'` `PhaseStatus`. `runPhaseLoop` short-circuits past them; `renderControlPanel` shows them with an em-dash glyph and `(skipped)` label.
 - **Phase 1 output**: single combined doc at `docs/specs/<runId>-design.md` containing a mandatory `## Implementation Plan` section. `checklist.json` stays a separate file so `scripts/harness-verify.sh` still parses it.
 - **Phase 7 REJECT**: routed back to Phase 1 (not Phase 5 — the combined doc is re-authored). `state.carryoverFeedback` survives the Phase 1 completion that clears `pendingAction` and is consumed by Phase 5 on re-entry.
-- **Defaults**: P1 = `opus-max`, P5 = `sonnet-high`, P7 = `codex-high` (same presets as full flow, minus P2/P3/P4).
+- **Defaults**: P1 = `opus-high`, P5 = `sonnet-high`, P7 = `codex-high` (same presets as full flow, minus P2/P3/P4).
 - **Activation**: `harness start --light "task"` (or `harness run --light …`). `--light` composes with `--auto`.
 - **When full flow is still right**: migration/security/contract work, or any task where an independent pre-impl review adds real value.
 
@@ -241,7 +241,7 @@ Focus review on changes within the harness ranges above.
 
 Each interactive phase (1, 3, 5) and each gate phase (2, 4, 7) has a configurable model preset. Phase 6 (automated shell verification) has no AI model. At the start of every `harness run` or `harness resume`, the CLI presents a model-selection UI (via `promptModelConfig()` in `src/ui.ts`) that lets the user assign a preset to each remaining phase before any phase work begins.
 
-Available presets are defined in `MODEL_PRESETS` in `src/config.ts`: `opus-max` (Claude Opus 4.6 / max effort), `opus-high`, `sonnet-high`, `codex-high` (Codex gpt-5.4 / high effort), and `codex-medium`. Default per-phase assignments come from `PHASE_DEFAULTS` in the same file (e.g., phase 1 defaults to `opus-max`, phases 3 and 5 to `sonnet-high`, gates 2/4/7 to `codex-high`). The model shown in each phase table above is the default preset; users can override per-phase at run start. Selections are persisted in `state.phasePresets` and survive resume; `migrateState()` in `src/state.ts` backfills defaults for older state files that predate the preset system.
+Available presets are defined in `MODEL_PRESETS` in `src/config.ts`: `opus-max` (Claude Opus 4.7 / xHigh effort — kept as an opt-in for deliberately heavy specs), `opus-high` (Claude Opus 4.7 / high — the default for Phase 1 as of 2026-04-18), `sonnet-high`, `codex-high` (Codex gpt-5.4 / high effort), and `codex-medium`. Default per-phase assignments come from `PHASE_DEFAULTS` in the same file (phase 1 defaults to `opus-high`, phases 3 and 5 to `sonnet-high`, gates 2/4/7 to `codex-high`). The model shown in each phase table above is the default preset; users can override per-phase at run start — select `opus-max` when the task genuinely warrants xHigh reasoning. Selections are persisted in `state.phasePresets` and survive resume; `migrateState()` in `src/state.ts` backfills defaults for older state files that predate the preset system.
 
 ---
 
