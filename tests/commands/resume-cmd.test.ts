@@ -200,6 +200,49 @@ describe('resumeCommand', () => {
     expect(vi.mocked(tmux.createSession)).not.toHaveBeenCalled();
   });
 
+  it('Case 2 stale pane (reused-mode): clears tmuxControlPane/Window/Windows in state.json then reaches Case 3', async () => {
+    const { harnessDir, runId, runDir } = setupRun(repo, {
+      tmuxSession: 'harness-test',
+      tmuxControlPane: '%stale',
+      tmuxControlWindow: '@stale',
+      tmuxWindows: ['@stale'],
+      tmuxMode: 'reused',
+    });
+    setCurrentRun(harnessDir, runId);
+
+    const tmux = await import('../../src/tmux.js');
+    const lock = await import('../../src/lock.js');
+    const proc = await import('../../src/process.js');
+
+    vi.mocked(tmux.createSession).mockClear();
+    vi.mocked(tmux.createWindow).mockClear();
+    vi.mocked(lock.releaseLock).mockClear();
+
+    // First call: reused session alive, inner dead, control pane stale
+    // Second (recursive) call: sessionExists returns false → Case 3
+    vi.mocked(tmux.sessionExists)
+      .mockReturnValueOnce(true)   // first call: tmuxAlive → Case 2 stale path
+      .mockReturnValue(false);     // recursive call: no session → Case 3
+    vi.mocked(tmux.paneExists).mockReturnValue(false);
+    vi.mocked(lock.readLock).mockReturnValue({ cliPid: 999, handoff: false, childPid: null, childPhase: null, runId, startedAt: null, childStartedAt: null });
+    vi.mocked(proc.isPidAlive).mockReturnValue(false);
+    vi.mocked(tmux.isInsideTmux).mockReturnValue(false); // Case 3 dedicated path
+
+    await resumeCommand(undefined, { root: repo.path });
+
+    // After the stale-branch: state.json must have cleared references
+    const savedState = JSON.parse(readFileSync(join(runDir, 'state.json'), 'utf-8'));
+    expect(savedState.tmuxControlPane).toBe('');
+    expect(savedState.tmuxControlWindow).toBe('');
+    expect(savedState.tmuxWindows).toEqual([]);
+
+    // releaseLock must have been called before the recursive call
+    expect(vi.mocked(lock.releaseLock)).toHaveBeenCalled();
+
+    // Case 3 (dedicated) should have been reached via the recursive call
+    expect(vi.mocked(tmux.createSession)).toHaveBeenCalled();
+  });
+
   describe('resumeCommand — loggingEnabled inheritance', () => {
     it('resume preserves state.loggingEnabled=true from original start', async () => {
       const { harnessDir, runId, runDir } = setupRun(repo, { loggingEnabled: true });

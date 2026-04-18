@@ -136,6 +136,7 @@ export function validatePhaseArtifacts(
         : path.join(cwd, state.artifacts.spec);
       try {
         const body = fs.readFileSync(specPath, 'utf-8');
+        if (!/^##\s+Open\s+Questions\s*$/m.test(body)) return false;
         if (!/^##\s+Implementation\s+Plan\s*$/m.test(body)) return false;
       } catch {
         return false;

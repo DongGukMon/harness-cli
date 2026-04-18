@@ -46,7 +46,23 @@ function makeState(overrides: Partial<HarnessState> = {}): HarnessState {
 }
 
 describe('completeInteractivePhaseFromFreshSentinel — light + phase 1 extras (ADR-13)', () => {
-  it('accepts a combined doc + valid checklist and updates specCommit', () => {
+  it('accepts a combined doc with "## Open Questions" + "## Implementation Plan" + valid checklist and updates specCommit', () => {
+    const tmp = makeTmpDir();
+    const state = makeState();
+    state.artifacts.spec = path.join(tmp, 'spec.md');
+    state.artifacts.decisionLog = path.join(tmp, 'decisions.md');
+    state.artifacts.checklist = path.join(tmp, 'checklist.json');
+    fs.writeFileSync(state.artifacts.spec,
+      '# T\n## Open Questions\n없음\n\n## Implementation Plan\n- t\n');
+    fs.writeFileSync(state.artifacts.decisionLog, '# D\n');
+    fs.writeFileSync(state.artifacts.checklist,
+      JSON.stringify({ checks: [{ name: 'n', command: 'true' }] }));
+
+    expect(completeInteractivePhaseFromFreshSentinel(1, state, tmp)).toBe(true);
+    expect(state.specCommit).toBe('head-sha');
+  });
+
+  it('rejects missing "## Open Questions" header', () => {
     const tmp = makeTmpDir();
     const state = makeState();
     state.artifacts.spec = path.join(tmp, 'spec.md');
@@ -57,9 +73,7 @@ describe('completeInteractivePhaseFromFreshSentinel — light + phase 1 extras (
     fs.writeFileSync(state.artifacts.decisionLog, '# D\n');
     fs.writeFileSync(state.artifacts.checklist,
       JSON.stringify({ checks: [{ name: 'n', command: 'true' }] }));
-
-    expect(completeInteractivePhaseFromFreshSentinel(1, state, tmp)).toBe(true);
-    expect(state.specCommit).toBe('head-sha');
+    expect(completeInteractivePhaseFromFreshSentinel(1, state, tmp)).toBe(false);
   });
 
   it('rejects missing "## Implementation Plan" header', () => {
@@ -68,7 +82,8 @@ describe('completeInteractivePhaseFromFreshSentinel — light + phase 1 extras (
     state.artifacts.spec = path.join(tmp, 'spec.md');
     state.artifacts.decisionLog = path.join(tmp, 'decisions.md');
     state.artifacts.checklist = path.join(tmp, 'checklist.json');
-    fs.writeFileSync(state.artifacts.spec, '# T\n## Context & Decisions\n');
+    fs.writeFileSync(state.artifacts.spec,
+      '# T\n## Open Questions\n없음\n');
     fs.writeFileSync(state.artifacts.decisionLog, '# D\n');
     fs.writeFileSync(state.artifacts.checklist,
       JSON.stringify({ checks: [{ name: 'n', command: 'true' }] }));
@@ -81,7 +96,8 @@ describe('completeInteractivePhaseFromFreshSentinel — light + phase 1 extras (
     state.artifacts.spec = path.join(tmp, 'spec.md');
     state.artifacts.decisionLog = path.join(tmp, 'decisions.md');
     state.artifacts.checklist = path.join(tmp, 'checklist.json');
-    fs.writeFileSync(state.artifacts.spec, '# T\n## Implementation Plan\n- t\n');
+    fs.writeFileSync(state.artifacts.spec,
+      '# T\n## Open Questions\n없음\n\n## Implementation Plan\n- t\n');
     fs.writeFileSync(state.artifacts.decisionLog, '# D\n');
     fs.writeFileSync(state.artifacts.checklist, '{"checks":[]}');
     expect(completeInteractivePhaseFromFreshSentinel(1, state, tmp)).toBe(false);

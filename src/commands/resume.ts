@@ -131,6 +131,12 @@ export async function resumeCommand(runId?: string, options: ResumeOptions = {})
       } else if (state.tmuxControlWindow) {
         killWindow(state.tmuxSession, state.tmuxControlWindow);
       }
+      // Persist cleared control-pane references before recursion so the next
+      // call doesn't re-enter this stale branch (reused-mode infinite-loop fix)
+      state.tmuxControlPane = '';
+      state.tmuxControlWindow = '';
+      state.tmuxWindows = [];
+      writeState(runDir, state);
       releaseLock(harnessDir, targetRunId);
       // Re-enter resume which will hit Case 3
       return resumeCommand(runId, options);
