@@ -34,6 +34,31 @@ harness run "task"
 
 ---
 
+## Light Flow (`harness start --light`)
+
+For medium tasks (≈1–4h, ≤~500 LoC, ≤3 modules) the default full flow's three
+interactive sessions and three Codex gates are overkill. `--light` selects a
+4-phase pipeline that folds the plan artifact into the Phase 1 design doc and
+removes the two pre-impl gates:
+
+```
+P1 design(=brainstorm+plan) → [P2/P3/P4 skipped] → P5 impl → P6 verify → P7 eval-gate
+                                                                                  │
+                                       P7 REJECT → P1 reopen (+ carryoverFeedback) ┘
+                                                        └─> P5 reopen (carryover 소비) ─> P6 ─> P7
+                                       P6 FAIL → P5 reopen (직접)
+```
+
+- **state.flow**: `'full' | 'light'`, frozen at run creation. `harness resume --light` is rejected.
+- **skipped phases**: `phases['2'|'3'|'4']` initialize to the new `'skipped'` `PhaseStatus`. `runPhaseLoop` short-circuits past them; `renderControlPanel` shows them with an em-dash glyph and `(skipped)` label.
+- **Phase 1 output**: single combined doc at `docs/specs/<runId>-design.md` containing a mandatory `## Implementation Plan` section. `checklist.json` stays a separate file so `scripts/harness-verify.sh` still parses it.
+- **Phase 7 REJECT**: routed back to Phase 1 (not Phase 5 — the combined doc is re-authored). `state.carryoverFeedback` survives the Phase 1 completion that clears `pendingAction` and is consumed by Phase 5 on re-entry.
+- **Defaults**: P1 = `opus-max`, P5 = `sonnet-high`, P7 = `codex-high` (same presets as full flow, minus P2/P3/P4).
+- **Activation**: `harness start --light "task"` (or `harness run --light …`). `--light` composes with `--auto`.
+- **When full flow is still right**: migration/security/contract work, or any task where an independent pre-impl review adds real value.
+
+---
+
 ## Phase-by-phase breakdown
 
 ### Phase 1 — Brainstorming

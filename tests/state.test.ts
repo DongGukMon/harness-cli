@@ -4,7 +4,7 @@ import os from 'os';
 import path from 'path';
 import { writeState, readState, createInitialState, migrateState } from '../src/state.js';
 import type { HarnessState } from '../src/types.js';
-import { PHASE_DEFAULTS } from '../src/config.js';
+import { PHASE_DEFAULTS, getPhaseArtifactFiles, getReopenTarget, getRequiredPhaseKeys } from '../src/config.js';
 
 function makeTmpDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'state-test-'));
@@ -260,5 +260,104 @@ describe('migrateState', () => {
     const migrated = migrateState(raw);
     expect(migrated.phaseReopenFlags['1']).toBe(true);
     expect(migrated.phaseReopenFlags['3']).toBe(false);
+  });
+});
+
+describe('flow + carryoverFeedback (light-flow spec)', () => {
+  it('createInitialState defaults flow to "full" and carryoverFeedback to null', () => {
+    const state = createInitialState('r1', 't', 'base', false);
+    expect(state.flow).toBe('full');
+    expect(state.carryoverFeedback).toBeNull();
+    expect(state.phases['2']).toBe('pending');
+    expect(state.phases['3']).toBe('pending');
+    expect(state.phases['4']).toBe('pending');
+  });
+
+  it('createInitialState with flow="light" marks phases 2/3/4 as "skipped"', () => {
+    const state = createInitialState('r1', 't', 'base', false, false, 'light');
+    expect(state.flow).toBe('light');
+    expect(state.phases['1']).toBe('pending');
+    expect(state.phases['2']).toBe('skipped');
+    expect(state.phases['3']).toBe('skipped');
+    expect(state.phases['4']).toBe('skipped');
+    expect(state.phases['5']).toBe('pending');
+    expect(state.phases['6']).toBe('pending');
+    expect(state.phases['7']).toBe('pending');
+    expect(state.artifacts.plan).toBe('');
+  });
+
+  it('migrateState backfills missing flow as "full" and carryoverFeedback as null', () => {
+    const base = createInitialState('r1', 't', 'base', false);
+    const raw: any = JSON.parse(JSON.stringify(base));
+    delete raw.flow;
+    delete raw.carryoverFeedback;
+    const migrated = migrateState(raw);
+    expect(migrated.flow).toBe('full');
+    expect(migrated.carryoverFeedback).toBeNull();
+  });
+
+  it('migrateState preserves an existing light flow value', () => {
+    const base = createInitialState('r1', 't', 'base', false, false, 'light');
+    const raw = JSON.parse(JSON.stringify(base));
+    const migrated = migrateState(raw);
+    expect(migrated.flow).toBe('light');
+    expect(migrated.carryoverFeedback).toBeNull();
+  });
+
+  it('carryoverFeedback survives writeState → readState round-trip', () => {
+    const dir = makeTmpDir();
+    tmpDirs.push(dir);
+    const state = createInitialState('r1', 't', 'base', false, false, 'light');
+    state.carryoverFeedback = {
+      sourceGate: 7,
+      paths: ['.harness/r1/gate-7-feedback.md'],
+      deliverToPhase: 5,
+    };
+    writeState(dir, state);
+    const restored = readState(dir);
+    expect(restored?.carryoverFeedback).toEqual(state.carryoverFeedback);
+  });
+});
+
+describe('getPhaseArtifactFiles (ADR-13)', () => {
+  it('full + phase 1 → spec + decisionLog', () => {
+    expect(getPhaseArtifactFiles('full', 1)).toEqual(['spec', 'decisionLog']);
+  });
+  it('full + phase 3 → plan + checklist', () => {
+    expect(getPhaseArtifactFiles('full', 3)).toEqual(['plan', 'checklist']);
+  });
+  it('light + phase 1 → spec + decisionLog + checklist', () => {
+    expect(getPhaseArtifactFiles('light', 1)).toEqual(['spec', 'decisionLog', 'checklist']);
+  });
+  it('light + phase 3 → empty (phase is skipped)', () => {
+    expect(getPhaseArtifactFiles('light', 3)).toEqual([]);
+  });
+  it('any flow + phase 5 → empty (no on-disk artifact set)', () => {
+    expect(getPhaseArtifactFiles('full', 5)).toEqual([]);
+    expect(getPhaseArtifactFiles('light', 5)).toEqual([]);
+  });
+});
+
+describe('getRequiredPhaseKeys (ADR-5 / inner.ts propagation)', () => {
+  it('full flow returns 1/2/3/4/5/7', () => {
+    expect([...getRequiredPhaseKeys('full')]).toEqual(['1', '2', '3', '4', '5', '7']);
+  });
+  it('light flow returns 1/5/7 only', () => {
+    expect([...getRequiredPhaseKeys('light')]).toEqual(['1', '5', '7']);
+  });
+});
+
+describe('getReopenTarget (ADR-4)', () => {
+  it('full + gate 2 → phase 1', () => {
+    expect(getReopenTarget('full', 2)).toBe(1);
+  });
+  it('full + gate 4 → phase 3', () => {
+    expect(getReopenTarget('full', 4)).toBe(3);
+  });
+  it('full + gate 7 → phase 5 (unchanged from current behaviour)', () => {
+    expect(getReopenTarget('full', 7)).toBe(5);
+  });
+  it('light + gate 7 → phase 1 (design combined doc is re-authored)', () => {
+    expect(getReopenTarget('light', 7)).toBe(1);
   });
 });

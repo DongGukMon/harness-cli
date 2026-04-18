@@ -12,7 +12,8 @@ function tempHarnessDir(): string {
 
 function buildState(overrides: Partial<HarnessState> = {}): HarnessState {
   const base: HarnessState = {
-    runId: 'r', currentPhase: 1, status: 'in_progress', autoMode: false,
+    runId: 'r', flow: 'full', carryoverFeedback: null,
+    currentPhase: 1, status: 'in_progress', autoMode: false,
     task: 'test', baseCommit: '', implRetryBase: '', codexPath: null,
     externalCommitsDetected: false,
     artifacts: { spec: 's', plan: 'p', decisionLog: 'd', checklist: 'c', evalReport: 'e' },

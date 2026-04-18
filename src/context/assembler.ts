@@ -2,7 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { execSync } from 'child_process';
 import { fileURLToPath } from 'url';
-import type { HarnessState } from '../types.js';
+import type { HarnessState, FlowMode } from '../types.js';
 import {
   MAX_FILE_SIZE_KB,
   MAX_PROMPT_SIZE_KB,
@@ -58,7 +58,7 @@ const FIVE_AXIS_PLAN_GATE = `
 4. Readability — 맥락 없이 태스크 하나만 집어도 수행 가능?
 `;
 
-const FIVE_AXIS_EVAL_GATE = `
+const FIVE_AXIS_EVAL_GATE_FULL = `
 ## Five-Axis Evaluation (Phase 7 — eval gate)
 평가 대상은 spec + plan + eval report + diff. 5축 전부:
 1. Correctness — 구현이 spec+plan과 일치? 경계조건·테스트 커버리지?
@@ -69,10 +69,25 @@ const FIVE_AXIS_EVAL_GATE = `
 Severity: P0/P1=Critical(블록), P2=Important, P3=Suggestion.
 `;
 
-const REVIEWER_CONTRACT_BY_GATE: Record<2 | 4 | 7, string> = {
+const FIVE_AXIS_EVAL_GATE_LIGHT = `
+## Five-Axis Evaluation (Phase 7 — eval gate, light flow)
+평가 대상은 **결합 design spec** (spec + Implementation Plan 섹션이 한 문서에 있음) + eval report + diff. 5축 전부:
+1. Correctness — 구현이 결합 spec의 Implementation Plan 섹션과 일치? 경계조건·테스트 커버리지?
+2. Readability — 이름/흐름/로컬 복잡도 적절?
+3. Architecture — 기존 패턴 부합, 경계 선명, 조기 추상화 없음?
+4. Security — 경계 입력 검증, 비밀 노출, 인증 경로?
+5. Performance — N+1, 무한 루프, 핫패스 회귀?
+Severity: P0/P1=Critical(블록), P2=Important, P3=Suggestion.
+Note: 이 플로우에는 별도의 plan 아티팩트가 없다. plan 부재를 finding으로 올리지 말 것.
+`;
+
+function reviewerContractForGate7(flow: FlowMode): string {
+  return REVIEWER_CONTRACT_BASE + (flow === 'light' ? FIVE_AXIS_EVAL_GATE_LIGHT : FIVE_AXIS_EVAL_GATE_FULL);
+}
+
+const REVIEWER_CONTRACT_BY_GATE: Record<2 | 4, string> = {
   2: REVIEWER_CONTRACT_BASE + FIVE_AXIS_SPEC_GATE,
   4: REVIEWER_CONTRACT_BASE + FIVE_AXIS_PLAN_GATE,
-  7: REVIEWER_CONTRACT_BASE + FIVE_AXIS_EVAL_GATE,
 };
 
 function readTemplateFile(filename: string): string {
@@ -164,7 +179,7 @@ function runGit(cmd: string, cwd: string): string {
 // later-phase artifacts do not yet exist. Keeps BUG-A from recurring: gates
 // used to flag "plan file missing" at Gate 2 even though plan = Phase 3.
 
-function buildLifecycleContext(phase: 2 | 4 | 7): string {
+function buildLifecycleContext(phase: 2 | 4 | 7, flow: FlowMode = 'full'): string {
   if (phase === 2) {
     return (
       '<harness_lifecycle>\n' +
@@ -179,6 +194,16 @@ function buildLifecycleContext(phase: 2 | 4 | 7): string {
       '<harness_lifecycle>\n' +
       'This is Gate 4 of a 7-phase harness lifecycle. You are reviewing the <spec> and <plan>. ' +
       'The implementation (Phase 5) has not yet been produced; its absence must NOT appear as a finding.\n' +
+      '</harness_lifecycle>\n\n'
+    );
+  }
+  // phase === 7
+  if (flow === 'light') {
+    return (
+      '<harness_lifecycle>\n' +
+      'This is Gate 7 of a 4-phase light harness lifecycle (P1 design → P5 impl → P6 verify → P7 eval). ' +
+      'The combined design spec contains the Implementation Plan section; there is no separate plan artifact. ' +
+      'This is the terminal review — if APPROVE, the run is complete.\n' +
       '</harness_lifecycle>\n\n'
     );
   }
@@ -289,17 +314,30 @@ function buildGatePromptPhase7(state: HarnessState, cwd: string): string | { err
   const specResult = readArtifactContent(state.artifacts.spec, cwd);
   if ('error' in specResult) return specResult;
 
-  const planResult = readArtifactContent(state.artifacts.plan, cwd);
-  if ('error' in planResult) return planResult;
-
   const evalResult = readArtifactContent(state.artifacts.evalReport, cwd);
   if ('error' in evalResult) return evalResult;
 
   const { diffSection, externalSummary, metadata } = buildPhase7DiffAndMetadata(state, cwd);
 
+  if (state.flow === 'light') {
+    return (
+      reviewerContractForGate7('light') +
+      buildLifecycleContext(7, 'light') +
+      `<spec>\n${specResult.content}\n</spec>\n\n` +
+      `<eval_report>\n${evalResult.content}\n</eval_report>\n\n` +
+      diffSection +
+      externalSummary +
+      '\n' +
+      metadata
+    );
+  }
+
+  const planResult = readArtifactContent(state.artifacts.plan, cwd);
+  if ('error' in planResult) return planResult;
+
   return (
-    REVIEWER_CONTRACT_BY_GATE[7] +
-    buildLifecycleContext(7) +
+    reviewerContractForGate7('full') +
+    buildLifecycleContext(7, 'full') +
     `<spec>\n${specResult.content}\n</spec>\n\n` +
     `<plan>\n${planResult.content}\n</plan>\n\n` +
     `<eval_report>\n${evalResult.content}\n</eval_report>\n\n` +
@@ -327,9 +365,27 @@ export function assembleInteractivePrompt(
   // Phase 1 uses task.md file path (not raw task string) per spec
   const taskMdPath = path.join('.harness', state.runId, 'task.md');
 
-  // feedback_path: first feedback from pendingAction, if any
-  // feedback_paths: all feedbacks (Phase 5 may have both gate-7 + verify)
-  const feedbackPaths = state.pendingAction?.feedbackPaths ?? [];
+  // Merge pendingAction.feedbackPaths with carryoverFeedback.paths when the
+  // carryover targets this phase. Carryover paths are dropped with a warning
+  // when missing on disk (spec R8 — the P7→P1→P5 bridge may lose the file);
+  // pendingAction paths are trusted (written by the harness this same turn).
+  const pendingPaths = state.pendingAction?.feedbackPaths ?? [];
+  const carryoverRawPaths =
+    state.carryoverFeedback && state.carryoverFeedback.deliverToPhase === phase
+      ? state.carryoverFeedback.paths
+      : [];
+  const carryoverPaths: string[] = [];
+  for (const p of carryoverRawPaths) {
+    const abs = path.isAbsolute(p) ? p : path.join(harnessDir, '..', p);
+    if (fs.existsSync(abs)) {
+      carryoverPaths.push(p);
+    } else {
+      process.stderr.write(
+        `⚠️  carryover feedback path not found on disk, skipping: ${p}\n`,
+      );
+    }
+  }
+  const feedbackPaths = [...pendingPaths, ...carryoverPaths];
   const feedbackPath = feedbackPaths[0];
   const feedbackPathsList = feedbackPaths
     .map((p) => `- 이전 피드백 (반드시 반영): ${p}`)
@@ -352,6 +408,12 @@ export function assembleInteractivePrompt(
     harnessDir,
     playbookDir,
   };
+
+  // Light flow: phase 1 and 5 use self-contained light templates (no wrapper skill).
+  if (state.flow === 'light' && (phase === 1 || phase === 5)) {
+    const templateFile = phase === 1 ? 'phase-1-light.md' : 'phase-5-light.md';
+    return renderTemplate(readTemplateFile(templateFile), vars);
+  }
 
   // Two-pass render: wrapper body vars resolve first, then thin phase template
   // injects the rendered wrapper at {{wrapper_skill}} and resolves its own vars.
@@ -403,7 +465,9 @@ function buildResumeSections(
   if ('error' in specResult) return specResult;
   let body = `<spec>\n${specResult.content}\n</spec>\n`;
 
-  if (phase === 4 || phase === 7) {
+  const lightEvalGate = phase === 7 && state.flow === 'light';
+
+  if ((phase === 4 || phase === 7) && !lightEvalGate) {
     const planResult = readArtifactContent(state.artifacts.plan, cwd);
     if ('error' in planResult) return planResult;
     body += `\n<plan>\n${planResult.content}\n</plan>\n`;

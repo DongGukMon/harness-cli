@@ -4,12 +4,13 @@ import { randomUUID } from 'crypto';
 import { execSync } from 'child_process';
 import chokidar from 'chokidar';
 import type { HarnessState, InteractivePhase, Artifacts } from '../types.js';
-import { PHASE_ARTIFACT_FILES, getPresetById } from '../config.js';
+import { getPhaseArtifactFiles, getPresetById } from '../config.js';
 import { writeState } from '../state.js';
 import { getHead } from '../git.js';
 import { isPidAlive } from '../process.js';
 import { assembleInteractivePrompt } from '../context/assembler.js';
 import { runClaudeInteractive } from '../runners/claude.js';
+import { isValidChecklistSchema } from './checklist.js';
 
 export interface InteractiveResult {
   status: 'completed' | 'failed';
@@ -39,13 +40,12 @@ export function preparePhase(
 
   // Delete artifacts only on first run (not reopen)
   if (!isReopen) {
-    const artifactKeys = PHASE_ARTIFACT_FILES[phase] as (keyof Artifacts)[] | undefined;
-    if (artifactKeys) {
-      for (const key of artifactKeys) {
-        const relPath = state.artifacts[key];
-        const absPath = path.isAbsolute(relPath) ? relPath : path.join(cwd, relPath);
-        try { fs.unlinkSync(absPath); } catch { /* ignore */ }
-      }
+    const artifactKeys = getPhaseArtifactFiles(state.flow, phase);
+    for (const key of artifactKeys) {
+      const relPath = state.artifacts[key];
+      if (!relPath) continue;
+      const absPath = path.isAbsolute(relPath) ? relPath : path.join(cwd, relPath);
+      try { fs.unlinkSync(absPath); } catch { /* ignore */ }
     }
   }
 
@@ -98,8 +98,8 @@ export function validatePhaseArtifacts(
 ): boolean {
   if (phase === 1 || phase === 3) {
     const openedAt = state.phaseOpenedAt[String(phase)];
-    const artifactKeys = PHASE_ARTIFACT_FILES[phase] as (keyof Artifacts)[] | undefined;
-    if (!artifactKeys) return false;
+    const artifactKeys = getPhaseArtifactFiles(state.flow, phase);
+    if (artifactKeys.length === 0) return false;
 
     for (const key of artifactKeys) {
       const relPath = state.artifacts[key];
@@ -122,6 +122,24 @@ export function validatePhaseArtifacts(
         ? state.artifacts.checklist
         : path.join(cwd, state.artifacts.checklist);
       if (!isValidChecklistSchema(checklistPath)) return false;
+    }
+
+    // Light + phase 1: checklist schema + '## Implementation Plan' header
+    if (state.flow === 'light' && phase === 1) {
+      const checklistPath = path.isAbsolute(state.artifacts.checklist)
+        ? state.artifacts.checklist
+        : path.join(cwd, state.artifacts.checklist);
+      if (!isValidChecklistSchema(checklistPath)) return false;
+
+      const specPath = path.isAbsolute(state.artifacts.spec)
+        ? state.artifacts.spec
+        : path.join(cwd, state.artifacts.spec);
+      try {
+        const body = fs.readFileSync(specPath, 'utf-8');
+        if (!/^##\s+Implementation\s+Plan\s*$/m.test(body)) return false;
+      } catch {
+        return false;
+      }
     }
 
     return true;
@@ -149,20 +167,7 @@ export function validatePhaseArtifacts(
   return false;
 }
 
-/** Validate checklist.json matches spec schema: `{ checks: [{ name, command }] }`. */
-export function isValidChecklistSchema(absPath: string): boolean {
-  try {
-    const raw = fs.readFileSync(absPath, 'utf-8');
-    const parsed = JSON.parse(raw);
-    if (!parsed || !Array.isArray(parsed.checks) || parsed.checks.length === 0) return false;
-    for (const check of parsed.checks) {
-      if (typeof check?.name !== 'string' || typeof check?.command !== 'string') return false;
-    }
-    return true;
-  } catch {
-    return false;
-  }
-}
+export { isValidChecklistSchema } from './checklist.js';
 
 /**
  * Run an interactive phase. Dispatches to claude or codex runner based on preset.

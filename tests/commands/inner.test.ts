@@ -239,7 +239,8 @@ describe('bootstrapSessionLogger', () => {
 
   function buildState(overrides: Partial<HarnessState> = {}): HarnessState {
     const base: HarnessState = {
-      runId: 'r1', currentPhase: 1, status: 'in_progress', autoMode: false,
+      runId: 'r1', flow: 'full', carryoverFeedback: null,
+      currentPhase: 1, status: 'in_progress', autoMode: false,
       task: 'test task', baseCommit: '', implRetryBase: '', codexPath: null,
       externalCommitsDetected: false,
       artifacts: { spec: 's', plan: 'p', decisionLog: 'd', checklist: 'c', evalReport: 'e' },
@@ -318,7 +319,8 @@ describe('buildConfigCancelHandler — lazy bootstrap', () => {
 
   function buildState(overrides: Partial<HarnessState> = {}): HarnessState {
     const base: HarnessState = {
-      runId: 'cc1', currentPhase: 1, status: 'in_progress', autoMode: false,
+      runId: 'cc1', flow: 'full', carryoverFeedback: null,
+      currentPhase: 1, status: 'in_progress', autoMode: false,
       task: 'test task', baseCommit: 'abc', implRetryBase: 'abc', codexPath: null,
       externalCommitsDetected: false,
       artifacts: { spec: 's', plan: 'p', decisionLog: 'd', checklist: 'c', evalReport: 'e' },

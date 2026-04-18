@@ -22,7 +22,8 @@ program
   .option('--require-clean', 'block if working tree has any uncommitted changes')
   .option('--auto', 'autonomous mode (no user escalations)')
   .option('--enable-logging', 'enable session logging to ~/.harness/sessions')
-  .action(async (task: string | undefined, opts: { requireClean?: boolean; auto?: boolean; enableLogging?: boolean }) => {
+  .option('--light', 'use the 4-phase light flow (P1 → P5 → P6 → P7)')
+  .action(async (task: string | undefined, opts: { requireClean?: boolean; auto?: boolean; enableLogging?: boolean; light?: boolean }) => {
     const globalOpts = program.opts();
     await startCommand(task, { ...opts, root: globalOpts.root });
   });
@@ -33,7 +34,8 @@ program
   .option('--require-clean', 'block if working tree has any uncommitted changes')
   .option('--auto', 'autonomous mode (no user escalations)')
   .option('--enable-logging', 'enable session logging to ~/.harness/sessions')
-  .action(async (task: string | undefined, opts: { requireClean?: boolean; auto?: boolean; enableLogging?: boolean }) => {
+  .option('--light', 'use the 4-phase light flow (P1 → P5 → P6 → P7)')
+  .action(async (task: string | undefined, opts: { requireClean?: boolean; auto?: boolean; enableLogging?: boolean; light?: boolean }) => {
     const globalOpts = program.opts();
     await startCommand(task, { ...opts, root: globalOpts.root });
   });
@@ -41,7 +43,8 @@ program
 program
   .command('resume [runId]')
   .description('resume an existing run')
-  .action(async (runId: string | undefined, opts: Record<string, never>) => {
+  .option('--light', '(rejected — flow is frozen at run creation)')
+  .action(async (runId: string | undefined, opts: { light?: boolean }) => {
     const globalOpts = program.opts();
     await resumeCommand(runId, { ...opts, root: globalOpts.root });
   });

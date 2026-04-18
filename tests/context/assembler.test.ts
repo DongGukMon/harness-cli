@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -29,6 +29,41 @@ function makeState(overrides: Partial<HarnessState> = {}): HarnessState {
     false
   );
   return { ...base, ...overrides };
+}
+
+function writeEvalFixtures(dir: string): void {
+  fs.mkdirSync(path.join(dir, 'docs/specs'), { recursive: true });
+  fs.mkdirSync(path.join(dir, 'docs/plans'), { recursive: true });
+  fs.mkdirSync(path.join(dir, 'docs/process/evals'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'docs/specs/my-run-design.md'), '# spec');
+  fs.writeFileSync(path.join(dir, 'docs/plans/my-run.md'), '# plan');
+  fs.writeFileSync(path.join(dir, 'docs/process/evals/my-run-eval.md'), '# eval');
+}
+
+function makeLightEvalState(overrides: Partial<HarnessState> = {}): HarnessState {
+  const base = createInitialState('my-run', '/tasks/my-task.md', 'base-sha', false, false, 'light');
+  return {
+    ...base,
+    currentPhase: 7,
+    phases: { '1': 'completed', '2': 'skipped', '3': 'skipped', '4': 'skipped',
+              '5': 'completed', '6': 'completed', '7': 'pending' },
+    implCommit: 'impl-sha',
+    evalCommit: 'eval-sha',
+    ...overrides,
+  };
+}
+
+function makeFullEvalState(overrides: Partial<HarnessState> = {}): HarnessState {
+  const base = createInitialState('my-run', '/tasks/my-task.md', 'base-sha', false);
+  return {
+    ...base,
+    currentPhase: 7,
+    phases: { '1': 'completed', '2': 'completed', '3': 'completed', '4': 'completed',
+              '5': 'completed', '6': 'completed', '7': 'pending' },
+    implCommit: 'impl-sha',
+    evalCommit: 'eval-sha',
+    ...overrides,
+  };
 }
 
 // ─── Interactive Phase Tests ───────────────────────────────────────────────
@@ -248,5 +283,124 @@ describe('Gate size limits', () => {
 
     expect(typeof result).toBe('object');
     expect((result as { error: string }).error).toMatch(/Gate input too large/);
+  });
+});
+
+describe('assembleInteractivePrompt — flow-aware Phase 1 (light)', () => {
+  it('light + phase 1 renders phase-1-light.md with combined-doc wording', () => {
+    const state = makeState({ flow: 'light', phaseAttemptId: { '1': 'aid-light', '3': null, '5': null } });
+    const prompt = assembleInteractivePrompt(1, state, '/tmp/harness');
+    expect(prompt).toContain('## Implementation Plan');
+    expect(prompt).toContain('checklist.json');
+    expect(prompt).toContain('결합');
+    expect(prompt).toContain('aid-light');
+  });
+
+  it('full + phase 1 still renders the classic phase-1.md', () => {
+    const state = makeState({ flow: 'full', phaseAttemptId: { '1': 'aid-full', '3': null, '5': null } });
+    const prompt = assembleInteractivePrompt(1, state, '/tmp/harness');
+    expect(prompt).not.toContain('## Implementation Plan');
+    expect(prompt).toContain('## Context & Decisions');
+  });
+
+  it('light + phase 5 injects carryoverFeedback paths alongside pendingAction feedback', () => {
+    const tmp = makeTmpDir();
+    const pendingPath = path.join(tmp, 'verify-feedback.md');
+    const carryoverPath = path.join(tmp, 'gate-7-feedback.md');
+    fs.writeFileSync(pendingPath, 'verify feedback');
+    fs.writeFileSync(carryoverPath, 'gate feedback');
+    const state = makeState({
+      flow: 'light',
+      phaseAttemptId: { '1': null, '3': null, '5': 'aid-5' },
+      pendingAction: {
+        type: 'reopen_phase', targetPhase: 5, sourcePhase: 6,
+        feedbackPaths: [pendingPath],
+      },
+      carryoverFeedback: {
+        sourceGate: 7,
+        paths: [carryoverPath],
+        deliverToPhase: 5,
+      },
+    });
+    const prompt = assembleInteractivePrompt(5, state, '/tmp/harness');
+    expect(prompt).toContain('verify-feedback.md');
+    expect(prompt).toContain('gate-7-feedback.md');
+  });
+
+  it('light + phase 5 uses phase-5-light.md (no separate plan artifact)', () => {
+    const state = makeState({ flow: 'light', phaseAttemptId: { '1': null, '3': null, '5': 'aid-5' } });
+    const prompt = assembleInteractivePrompt(5, state, '/tmp/harness');
+    expect(prompt).toContain('Combined Design Spec (light)');
+    expect(prompt).not.toContain('- Plan:');
+  });
+
+  it('light + phase 5 drops carryover paths that no longer exist on disk (R8)', () => {
+    const tmp = makeTmpDir();
+    const existing = path.join(tmp, 'exists.md');
+    fs.writeFileSync(existing, 'x');
+    const state = makeState({
+      flow: 'light',
+      phaseAttemptId: { '1': null, '3': null, '5': 'aid-5' },
+      pendingAction: null,
+      carryoverFeedback: {
+        sourceGate: 7,
+        paths: [existing, path.join(tmp, 'missing.md')],
+        deliverToPhase: 5,
+      },
+    });
+    const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      const prompt = assembleInteractivePrompt(5, state, tmp);
+      expect(prompt).toContain('exists.md');
+      expect(prompt).not.toContain('missing.md');
+      const warnings = stderrSpy.mock.calls.map((c) => c[0]).join('');
+      expect(warnings).toMatch(/carryover feedback path not found.*missing\.md/);
+    } finally {
+      stderrSpy.mockRestore();
+    }
+  });
+});
+
+describe('buildGatePromptPhase7 — flow-aware (ADR-12)', () => {
+  it('light flow omits the <plan> slot entirely', () => {
+    const tmp = makeTmpDir();
+    writeEvalFixtures(tmp);
+    const state = makeLightEvalState();
+    const result = assembleGatePrompt(7, state, '/tmp/harness', tmp);
+    if (typeof result !== 'string') throw new Error('expected string');
+    expect(result).toContain('<spec>\n');
+    expect(result).toContain('<eval_report>\n');
+    expect(result).not.toContain('<plan>\n');
+  });
+
+  it('full flow still includes the <plan> slot', () => {
+    const tmp = makeTmpDir();
+    writeEvalFixtures(tmp);
+    const state = makeFullEvalState();
+    const result = assembleGatePrompt(7, state, '/tmp/harness', tmp);
+    if (typeof result !== 'string') throw new Error('expected string');
+    expect(result).toContain('<plan>\n');
+  });
+
+  it('light Gate 7 (fresh) contract text does not claim a separate plan artifact', () => {
+    const tmp = makeTmpDir();
+    writeEvalFixtures(tmp);
+    const state = makeLightEvalState();
+    const result = assembleGatePrompt(7, state, '/tmp/harness', tmp);
+    if (typeof result !== 'string') throw new Error('expected string');
+    expect(result).toContain('결합 design spec');
+    expect(result).toContain('별도의 plan 아티팩트가 없다');
+    expect(result).not.toContain('spec + plan + eval report + diff');
+    expect(result).toContain('4-phase light harness lifecycle');
+  });
+
+  it('full Gate 7 (fresh) contract text is unchanged', () => {
+    const tmp = makeTmpDir();
+    writeEvalFixtures(tmp);
+    const state = makeFullEvalState();
+    const result = assembleGatePrompt(7, state, '/tmp/harness', tmp);
+    if (typeof result !== 'string') throw new Error('expected string');
+    expect(result).toContain('spec + plan + eval report + diff');
+    expect(result).toContain('7-phase harness lifecycle');
   });
 });

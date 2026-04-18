@@ -7,6 +7,8 @@ function makeState(overrides: Partial<HarnessState> = {}): HarnessState {
   // so `path.join(cwd, filePath)` resolves into the fixtures directory.
   return {
     runId: 'r1',
+    flow: 'full',
+    carryoverFeedback: null,
     currentPhase: 2,
     status: 'in_progress',
     autoMode: false,
@@ -143,5 +145,26 @@ describe('assembleGateResumePrompt — §4.4 anomaly: reject + missing feedback'
       expect(res).not.toMatch(/Continue Review/);
       expect(res).toMatch(/feedback file missing despite lastOutcome=reject/);
     }
+  });
+});
+
+describe('buildResumeSections — Phase 7 flow-aware (ADR-12)', () => {
+  const cwd = 'tests/context/fixtures';
+
+  it('light + phase 7 resume omits <plan> but keeps <eval_report> + diff + metadata', () => {
+    const state = makeState({ flow: 'light', currentPhase: 7 });
+    const prompt = assembleGateResumePrompt(7, state, cwd, 'reject', 'prior feedback');
+    if (typeof prompt !== 'string') throw new Error('expected string');
+    expect(prompt).toContain('<spec>\n');
+    expect(prompt).toContain('<eval_report>\n');
+    expect(prompt).toContain('<metadata>\n');
+    expect(prompt).not.toContain('<plan>\n');
+  });
+
+  it('full + phase 7 resume still includes <plan>', () => {
+    const state = makeState({ currentPhase: 7 });
+    const prompt = assembleGateResumePrompt(7, state, cwd, 'reject', 'prior feedback');
+    if (typeof prompt !== 'string') throw new Error('expected string');
+    expect(prompt).toContain('<plan>\n');
   });
 });

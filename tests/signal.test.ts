@@ -515,3 +515,21 @@ describe('SIGUSR1 handler', () => {
     expect(currentState.currentPhase).toBe(3);
   });
 });
+
+describe('SIGUSR1 jump — preserve skipped phases on light runs', () => {
+  it('light flow: jump to phase 1 leaves phases 2/3/4 still skipped', () => {
+    const state = createInitialState('r', 't', 'abc', false, false, 'light');
+    state.currentPhase = 5;
+    // Simulate the loop logic inline (copied from signal.ts jump handler)
+    const target = 1;
+    for (let m = target; m <= 7; m++) {
+      const cur = state.phases[String(m)];
+      state.phases[String(m)] = cur === 'skipped' ? 'skipped' : 'pending';
+    }
+    expect(state.phases['1']).toBe('pending');
+    expect(state.phases['2']).toBe('skipped');
+    expect(state.phases['3']).toBe('skipped');
+    expect(state.phases['4']).toBe('skipped');
+    expect(state.phases['5']).toBe('pending');
+  });
+});

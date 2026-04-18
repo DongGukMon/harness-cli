@@ -1,7 +1,14 @@
 export type PhaseNumber = 1 | 2 | 3 | 4 | 5 | 6 | 7;
 export type InteractivePhase = 1 | 3 | 5;
 export type GatePhase = 2 | 4 | 7;
-export type PhaseStatus = 'pending' | 'in_progress' | 'completed' | 'failed' | 'error';
+export type PhaseStatus = 'pending' | 'in_progress' | 'completed' | 'failed' | 'error' | 'skipped';
+export type FlowMode = 'full' | 'light';
+
+export interface CarryoverFeedback {
+  sourceGate: 7;
+  paths: string[];
+  deliverToPhase: 5;
+}
 export type RunStatus = 'in_progress' | 'completed' | 'paused';
 export type PauseReason = 'gate-escalation' | 'verify-escalation' | 'gate-error' | 'verify-error' | 'config-cancel';
 export type PendingActionType = 'reopen_phase' | 'rerun_gate' | 'rerun_verify' | 'show_escalation' | 'show_verify_error' | 'skip_phase' | 'reopen_config';
@@ -31,6 +38,8 @@ export interface GateSessionInfo {
 
 export interface HarnessState {
   runId: string;
+  flow: FlowMode;
+  carryoverFeedback: CarryoverFeedback | null;
   currentPhase: number; // 1-7 or 8 (terminal sentinel)
   status: RunStatus;
   autoMode: boolean;

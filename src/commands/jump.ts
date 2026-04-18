@@ -35,6 +35,14 @@ export async function jumpCommand(phaseArg: string, options: JumpOptions = {}): 
     process.exit(1);
   }
 
+  // Reject jumping into a 'skipped' phase (light flow P2/P3/P4 are illegal targets).
+  if (state.phases[String(N)] === 'skipped') {
+    process.stderr.write(
+      `Error: phase ${N} is 'skipped' in this run (flow=${state.flow}); cannot jump to a skipped phase.\n`,
+    );
+    process.exit(1);
+  }
+
   // 3. Forward jump rejected (unless from completed)
   const isCompleted = state.status === 'completed' || state.currentPhase === 8;
   if (!isCompleted && N >= state.currentPhase) {

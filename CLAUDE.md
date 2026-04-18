@@ -109,3 +109,6 @@ Session meta: `~/.harness/sessions/<hash>/<runId>/{events.jsonl, meta.json, summ
 ## 풀 프로세스 호출
 
 개발 전체 사이클은 `/harness` 스킬로 실행. 내부 phase 순서·gate 규약은 전역 규칙 `harness-lifecycle` 섹션 참조.
+
+경량 4-phase 플로우는 `harness start --light "<task>"` 로 활성화한다. 상세한 동작은
+`docs/HOW-IT-WORKS.md`의 "Light Flow" 섹션과 `docs/specs/2026-04-18-light-flow-design.md`를 참조.

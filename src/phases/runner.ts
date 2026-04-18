@@ -8,8 +8,9 @@ import {
   GATE_TIMEOUT_MS,
   VERIFY_RETRY_LIMIT,
   TERMINAL_PHASE,
-  PHASE_ARTIFACT_FILES,
+  getPhaseArtifactFiles,
   getPresetById,
+  getReopenTarget,
 } from '../config.js';
 import { writeState } from '../state.js';
 import { getHead } from '../git.js';
@@ -72,14 +73,6 @@ function phaseLabel(phase: number): string {
   return labels[phase] ?? `Phase ${phase}`;
 }
 
-// ─── Gate reject → previous interactive phase mapping ─────────────────────────
-
-function previousInteractivePhase(gatePhase: GatePhase): InteractivePhase {
-  if (gatePhase === 2) return 1;
-  if (gatePhase === 4) return 3;
-  return 5; // gate 7 → phase 5
-}
-
 function nextPhase(phase: number): number {
   return phase + 1;
 }
@@ -125,12 +118,12 @@ function normalizeInteractiveArtifacts(
   state: HarnessState,
   cwd: string
 ): void {
-  type ArtifactKey = keyof typeof state.artifacts;
-  const artifactKeys = PHASE_ARTIFACT_FILES[phase] as ArtifactKey[] | undefined;
-  if (!artifactKeys) return;
+  const artifactKeys = getPhaseArtifactFiles(state.flow, phase);
+  if (artifactKeys.length === 0) return;
 
   for (const key of artifactKeys) {
     const relPath = state.artifacts[key];
+    if (!relPath) continue;
     // Skip gitignored artifacts (decisions.md, checklist.json are in .harness/)
     if (relPath.startsWith('.harness/')) continue;
 
@@ -185,6 +178,15 @@ export async function runPhaseLoop(
 ): Promise<void> {
   while (state.currentPhase < TERMINAL_PHASE) {
     const phase = state.currentPhase;
+
+    // ADR-1 rev-1: phases initialized to 'skipped' (light mode) advance
+    // without running their handlers.
+    if (state.phases[String(phase)] === 'skipped') {
+      state.currentPhase = phase + 1;
+      writeState(runDir, state);
+      continue;
+    }
+
     renderControlPanel(state);
 
     if (isInteractivePhase(phase)) {
@@ -304,6 +306,10 @@ export async function handleInteractivePhase(
 
       // Clear pendingAction now that phase succeeded
       state.pendingAction = null;
+      // Phase 5 consumes carryoverFeedback (ADR-14) — clear after consumption
+      if (phase === 5 && state.carryoverFeedback !== null) {
+        state.carryoverFeedback = null;
+      }
       state.phases[String(phase)] = 'completed';
 
       // Advance to next phase
@@ -506,7 +512,7 @@ export async function handleGateReject(
   }
 
   const retryCount = state.gateRetries[String(phase)];
-  const targetInteractive = previousInteractivePhase(phase);
+  const targetInteractive = getReopenTarget(state.flow, phase);
 
   printWarning(`Gate ${phase} REJECTED (retry ${retryCount}/${GATE_RETRY_LIMIT})`);
   if (comments) {
@@ -551,6 +557,24 @@ export async function handleGateReject(
       sourcePhase: phase as PhaseNumber,
       feedbackPaths,
     };
+
+    // Light Gate-7 REJECT: carryoverFeedback survives the P1 completion that
+    // clears pendingAction, so Phase 5 still sees the gate feedback.
+    // Also reset phases 5/6 + invalidate Gate-7 Codex session + replay sidecars
+    // so the next Gate-7 run starts fresh (ADR-4 + ADR-14).
+    if (state.flow === 'light' && phase === 7) {
+      state.carryoverFeedback = {
+        sourceGate: 7,
+        paths: [feedbackPath],
+        deliverToPhase: 5,
+      };
+      state.phases['5'] = 'pending';
+      state.phases['6'] = 'pending';
+      state.phaseReopenFlags['5'] = true;
+      state.phaseReopenSource['5'] = 7;
+      state.phaseCodexSessions['7'] = null;
+      deleteGateSidecars(runDir, 7);
+    }
 
     // Crash-safe: feedback already saved → write pendingAction+state atomically
     state.pendingAction = pendingAction;
@@ -599,8 +623,23 @@ export async function handleGateEscalation(
     state.gateRetries[String(phase)] = 0;
     if (phase === 7) state.verifyRetries = 0;
 
-    const targetInteractive = previousInteractivePhase(phase);
+    const targetInteractive = getReopenTarget(state.flow, phase);
     const feedbackPath = saveGateFeedback(runDir, phase, comments);
+
+    if (state.flow === 'light' && phase === 7) {
+      state.carryoverFeedback = {
+        sourceGate: 7,
+        paths: [feedbackPath],
+        deliverToPhase: 5,
+      };
+      state.phases['5'] = 'pending';
+      state.phases['6'] = 'pending';
+      state.phaseReopenFlags['5'] = true;
+      state.phaseReopenSource['5'] = 7;
+      state.phaseCodexSessions['7'] = null;
+      deleteGateSidecars(runDir, 7);
+    }
+
     state.pendingAction = {
       type: 'reopen_phase',
       targetPhase: targetInteractive,
@@ -617,7 +656,7 @@ export async function handleGateEscalation(
     await forcePassGate(phase, state, runDir, cwd, 'user', logger);
   } else {
     // Quit
-    const targetInteractive = previousInteractivePhase(phase);
+    const targetInteractive = getReopenTarget(state.flow, phase);
     const feedbackPath = saveGateFeedback(runDir, phase, comments);
     state.pendingAction = {
       type: 'show_escalation',

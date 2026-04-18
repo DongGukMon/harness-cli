@@ -146,7 +146,8 @@ export function registerSignalHandlers(ctx: SignalContext): void {
         state.pendingAction = null;
       } else if (action.action === 'jump' && typeof action.phase === 'number') {
         for (let m = action.phase; m <= 7; m++) {
-          state.phases[String(m)] = 'pending';
+          const cur = state.phases[String(m)];
+          state.phases[String(m)] = cur === 'skipped' ? 'skipped' : 'pending';
         }
         state.currentPhase = action.phase;
         state.pendingAction = null;
