@@ -103,7 +103,13 @@ export function codexHomeFor(runDir: string): string {
 
 export function ensureCodexIsolation(runDir: string): string {
   const codexHome = codexHomeFor(runDir);
-  fs.mkdirSync(codexHome, { recursive: true });
+  try {
+    fs.mkdirSync(codexHome, { recursive: true });
+  } catch (err) {
+    throw new CodexIsolationError(
+      `Failed to create isolated codex home at ${codexHome}: ${(err as Error).message}`
+    );
+  }
 
   const realHome = process.env.CODEX_HOME || path.join(os.homedir(), '.codex');
   const authSrc = path.join(realHome, 'auth.json');
@@ -116,13 +122,21 @@ export function ensureCodexIsolation(runDir: string): string {
 
   const authDst = path.join(codexHome, 'auth.json');
   try { fs.unlinkSync(authDst); } catch { /* missing ok */ }
-  fs.symlinkSync(authSrc, authDst);
+  try {
+    fs.symlinkSync(authSrc, authDst);
+  } catch (err) {
+    throw new CodexIsolationError(
+      `Failed to symlink codex auth into ${authDst}: ${(err as Error).message}`
+    );
+  }
 
   return codexHome;
 }
 ```
 
 **Idempotent**: every gate call re-runs `ensureCodexIsolation(runDir)`. `mkdirSync({recursive: true})` is a no-op on existing dirs; `unlink + symlink` refreshes the auth link (handles the edge case where the user re-logged in mid-run and `~/.codex/auth.json` was rewritten — symlinks resolve live, but an unlinked+remade symlink is guaranteed correct).
+
+**All filesystem failures wrap to `CodexIsolationError`**: `mkdir`, the `auth.json` existence check, and `symlink` each live inside their own try/catch (or explicit existence check) that rethrows a `CodexIsolationError` with the underlying message. Raw EACCES/ENOENT/etc. never escape this function.
 
 **Failure mode**: throws `CodexIsolationError` with an actionable message. Caller converts to gate-error (no retry — surfaces to user immediately).
 
@@ -186,8 +200,13 @@ Add `codexHome` (absolute path) to `SessionMeta` (`~/.harness/sessions/<hash>/<r
 Concrete integration points:
 
 - `src/types.ts` — extend `SessionMeta` with `codexHome?: string` (optional for back-compat when `--codex-no-isolate` is set).
-- `src/commands/inner.ts` — the bootstrap call site is `logger.writeMeta({ task: state.task })`. Extend to `logger.writeMeta({ task: state.task, codexHome: state.codexNoIsolate ? undefined : codexHomeFor(runDir) })`. Use `codexHomeFor` (pure function — no FS side effect) so meta reflects the planned path even before the first gate runs.
-- `src/logger.ts` — `writeMeta` already merges the partial into meta.json; no logic change beyond type.
+- `src/logger.ts` — **both** `FileSessionLogger.writeMeta` and `FileSessionLogger.updateMeta` build the `meta: SessionMeta` object from a fixed field list; neither spreads `partial`. A new `codexHome?` field would be silently dropped unless wired explicitly. Required changes:
+  - `writeMeta`: add `...(partial.codexHome !== undefined ? { codexHome: partial.codexHome } : {})` to the constructed meta literal.
+  - `updateMeta`: accept `codexHome` in the `update` param type; on the lazy-bootstrap branch (resume with missing meta.json), include it in the constructed meta; on the merge branch (meta.json exists), set `meta.codexHome = update.codexHome` when provided. Matches `task` handling semantics.
+- `src/commands/inner.ts` — **two** call sites must be updated:
+  1. `bootstrapSessionLogger` (L281): `logger.writeMeta({ task: state.task })` → `logger.writeMeta({ task: state.task, codexHome: state.codexNoIsolate ? undefined : codexHomeFor(runDir) })`.
+  2. `buildConfigCancelHandler` (L246): same change (this path fires after config cancel — same meta shape required).
+- Use `codexHomeFor` (pure function — no FS side effect) so meta reflects the planned path even before the first gate runs.
 
 This is pure observability — post-mortem debugging ("where did that session rollout file go?") without bloating `events.jsonl`.
 
@@ -291,9 +310,13 @@ Behavioral (prove the fix, not just surface changes):
 - test passes: "gate.ts propagates CodexIsolationError as gate_error (no retry)" in tests/phases/gate.test.ts
 - test passes: "interactive.ts propagates CodexIsolationError as phase error" in tests/phases/interactive.test.ts
 - test passes: "startCommand with --codex-no-isolate sets state.codexNoIsolate=true and emits stderr warning" in tests/commands/run.test.ts
+- test passes: "startCommand default new-run creates <runDir>/codex-home/auth.json symlink" in tests/commands/run.test.ts (or dedicated integration)
 - test passes: "migrateState adds codexNoIsolate=false to legacy state" in tests/state.test.ts
+- test passes: "resumeCommand preserves state.codexNoIsolate=true across resume" in tests/commands (or equivalent resume test file)
 - test passes: "SessionMeta contains codexHome path when isolation enabled" in tests/integration/logging.test.ts (or tests/logger.test.ts)
 - test passes: "SessionMeta does NOT contain codexHome when --codex-no-isolate" (same file)
+- test passes: "updateMeta lazy-bootstrap path (resume with missing meta.json) persists codexHome" in tests/logger.test.ts
+- test passes: "ensureCodexIsolation wraps mkdir/symlink EACCES failures as CodexIsolationError" in tests/runners/codex-isolation.test.ts
 ```
 
 Evidence (attached to PR body):
@@ -332,9 +355,18 @@ TDD rhythm: where a test is listed before its implementation, write the failing 
    - `bin/harness.ts`: add `--codex-no-isolate` option on `start` and `run` subcommands.
    - `src/commands/start.ts`: `StartOptions.codexNoIsolate?: boolean`, threaded into `createInitialState`. On `true`, emit stderr warning: `⚠️  CODEX_HOME isolation disabled. Codex subprocess may load personal conventions (BUG-C risk).`
    - Extend `tests/commands/run.test.ts` with two cases: flag sets `state.codexNoIsolate = true` AND emits the warning line; absence of flag leaves it `false`.
-9. **Logger/SessionMeta integration**:
-   - `src/commands/inner.ts`: change the bootstrap `logger.writeMeta({ task: state.task })` to include `codexHome: state.codexNoIsolate ? undefined : codexHomeFor(runDir)`.
-   - Extend `tests/integration/logging.test.ts` (or `tests/logger.test.ts`) with assertions per §8: meta.json includes `codexHome` when isolation enabled; absent under `--codex-no-isolate`.
+9. **Logger/SessionMeta integration** (per §4.7 — three file edits + two call-site updates):
+   - `src/types.ts`: add `codexHome?: string` to `SessionMeta`.
+   - `src/logger.ts` — `FileSessionLogger.writeMeta`: extend the constructed `meta: SessionMeta` literal with `...(partial.codexHome !== undefined ? { codexHome: partial.codexHome } : {})`. Mirror pattern used today for `bootstrapOnResume`.
+   - `src/logger.ts` — `FileSessionLogger.updateMeta`: extend the `update` param type to include `codexHome?: string`. In the lazy-bootstrap branch, include it in the freshly constructed meta. In the merge branch, set `meta.codexHome = update.codexHome` when provided.
+   - `src/commands/inner.ts` — **two** call-site updates (both pass `codexHome: state.codexNoIsolate ? undefined : codexHomeFor(runDir)`):
+     1. `bootstrapSessionLogger`, the `logger.writeMeta({ task: state.task })` call (around L281).
+     2. `buildConfigCancelHandler`, the `logger.writeMeta({ task: state.task })` call (around L246).
+   - Tests (extending `tests/integration/logging.test.ts` or `tests/logger.test.ts`):
+     - `meta.json` includes `codexHome` path after normal bootstrap.
+     - `meta.json` does NOT include `codexHome` when `--codex-no-isolate`.
+     - Lazy-bootstrap path: `updateMeta` on a run with missing `meta.json` persists `codexHome` (resume scenario).
+     - Config-cancel path: re-`writeMeta` preserves `codexHome` (regression guard for the second call site).
 10. **Typecheck + full vitest run + build**. Fix any breakage surfaced by the fixture sweep.
 11. **Manual smoke** (§7.4). Capture evidence per §8 Evidence block. Save to PR body.
 12. **PR**.
