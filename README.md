@@ -245,6 +245,8 @@ State is persisted in `.harness/<runId>/state.json` (atomically written). All ar
 
 ## Troubleshooting
 
+**First run in a new project looks hung** — On first use in a project directory, Claude Code prompts you to approve folder access (the "Do you trust the files in this folder?" dialog). The prompt appears in the Claude tmux window, not the control panel, so the control panel sits at *Phase 1 ▶* until you respond. Switch to the Claude window with `Ctrl-B 1` and pick the "trust / proceed" option in the dialog. Subsequent runs in the same directory skip this prompt.
+
 **`tmux is required. Install with: brew install tmux`** — The CLI requires tmux for its multi-window architecture. Install it and try again.
 
 **`harness requires a git repository`** — Run from inside a git repo with at least one commit.

@@ -9,7 +9,13 @@ const YELLOW = '\x1b[33m';
 const BLUE = '\x1b[34m';
 const RESET = '\x1b[0m';
 
-const SEPARATOR = '━'.repeat(64);
+export function separator(): string {
+  const cols = process.stdout.columns;
+  const width = typeof cols === 'number' && cols > 0
+    ? Math.max(16, Math.min(64, cols - 2))
+    : 62;
+  return '━'.repeat(width);
+}
 
 function phaseLabel(phase: number): string {
   const labels: Record<number, string> = {
@@ -26,9 +32,9 @@ function phaseLabel(phase: number): string {
 
 export function renderControlPanel(state: HarnessState): void {
   process.stdout.write('\x1b[2J\x1b[H'); // clear screen
-  console.error(SEPARATOR);
+  console.error(separator());
   console.error(`${GREEN}▶${RESET} Harness Control Panel`);
-  console.error(SEPARATOR);
+  console.error(separator());
   console.error(`  Run:   ${state.runId}`);
   console.error(`  Phase: ${state.currentPhase}/7 — ${phaseLabel(state.currentPhase)}`);
   const preset = getPresetById(state.phasePresets?.[String(state.currentPhase)] ?? '');
@@ -45,7 +51,7 @@ export function renderControlPanel(state: HarnessState): void {
     console.error(`  [${icon}] Phase ${p}: ${phaseLabel(p)} (${status})${current}`);
   }
   console.error('');
-  console.error(SEPARATOR);
+  console.error(separator());
 }
 
 /**
@@ -81,9 +87,9 @@ export function printPhaseTransition(
   toLabel: string,
 ): void {
   console.error(`${GREEN}✓${RESET} Phase ${fromPhase} 완료 (${fromStatus})`);
-  console.error(SEPARATOR);
+  console.error(separator());
   console.error(`${GREEN}▶${RESET} Phase ${toPhase} 시작: ${toLabel}`);
-  console.error(SEPARATOR);
+  console.error(separator());
 }
 
 /**
@@ -135,9 +141,9 @@ export function printAdvisorReminder(phase: number, runner?: string): void {
 
 export function renderWelcome(runId: string): void {
   process.stdout.write('\x1b[2J\x1b[H');
-  console.error(SEPARATOR);
+  console.error(separator());
   console.error(`${GREEN}▶${RESET} Harness`);
-  console.error(SEPARATOR);
+  console.error(separator());
   console.error(`  Run: ${runId}`);
   console.error('');
   console.error('  What would you like to build?');
@@ -148,9 +154,9 @@ export function renderModelSelection(
   editablePhases?: Set<string>,
 ): void {
   process.stdout.write('\x1b[2J\x1b[H');
-  console.error(SEPARATOR);
+  console.error(separator());
   console.error(`${GREEN}▶${RESET} Model Configuration`);
-  console.error(SEPARATOR);
+  console.error(separator());
 
   const phaseLabels: Record<string, string> = {
     '1': 'Spec 작성', '2': 'Spec Gate', '3': 'Plan 작성',
@@ -167,7 +173,7 @@ export function renderModelSelection(
   console.error(`      Phase 6 (검증):        harness-verify.sh (fixed)`);
   console.error('');
   console.error(`  Change? Phase 번호 입력 or Enter to confirm:`);
-  console.error(SEPARATOR);
+  console.error(separator());
 }
 
 export async function promptModelConfig(
