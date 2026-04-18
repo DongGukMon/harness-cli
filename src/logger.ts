@@ -263,3 +263,13 @@ export class FileSessionLogger implements SessionLogger {
     }
   }
 }
+
+export function createSessionLogger(
+  runId: string,
+  harnessDir: string,
+  loggingEnabled: boolean,
+  options: FileSessionLoggerOptions = {},
+): SessionLogger {
+  if (!loggingEnabled) return new NoopLogger();
+  return new FileSessionLogger(runId, harnessDir, options);
+}

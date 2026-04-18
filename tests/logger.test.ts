@@ -303,3 +303,22 @@ describe('FileSessionLogger.finalizeSummary', () => {
     expect(summary.totals.gateErrors).toBe(1);
   });
 });
+
+describe('createSessionLogger factory', () => {
+  it('returns NoopLogger when loggingEnabled=false', () => {
+    const harnessDir = makeTempHarnessDir();
+    const sessionsRoot = path.join(harnessDir, 'sessions-root');
+    const logger = createSessionLogger('runX', harnessDir, false, { sessionsRoot });
+    expect(logger.constructor.name).toBe('NoopLogger');
+    logger.writeMeta({ task: 't' });
+    const repoKey = computeRepoKey(harnessDir);
+    expect(fs.existsSync(path.join(sessionsRoot, repoKey, 'runX', 'meta.json'))).toBe(false);
+  });
+
+  it('returns FileSessionLogger when loggingEnabled=true', () => {
+    const harnessDir = makeTempHarnessDir();
+    const sessionsRoot = path.join(harnessDir, 'sessions-root');
+    const logger = createSessionLogger('runY', harnessDir, true, { sessionsRoot });
+    expect(logger.constructor.name).toBe('FileSessionLogger');
+  });
+});
