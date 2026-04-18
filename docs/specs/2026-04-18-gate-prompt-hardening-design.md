@@ -48,7 +48,7 @@ Key decisions:
 | `src/context/prompts/phase-1.md` | Append a "harness flow constraints" stanza: no advisor() call. |
 | `src/context/prompts/phase-3.md` | Same stanza as phase-1. |
 | `src/context/prompts/phase-5.md` | Same stanza as phase-{1,3}, adapted. |
-| `src/phases/runner.ts` | `handleInteractivePhase` and `handleGatePhase` emit `preset` on `phase_start`. Verify phase 6 uses `harness-verify.sh` and has no preset — no change there. |
+| `src/phases/runner.ts` | `handleInteractivePhase` emits `preset` on `phase_start` (phases 1/3/5). `handleGatePhase` emits `preset` on `gate_verdict` and `gate_error` (phases 2/4/7). Verify phase 6 uses `harness-verify.sh` and has no preset — no change there. |
 | `src/types.ts` | Extend `LogEvent` union: optional `preset` field on `phase_start`. |
 | `tests/context/assembler.test.ts` | New cases: Gate 2/4 prompt contains lifecycle stanza; REVIEWER_CONTRACT contains scope stanza. |
 | `tests/context/` | Snapshot or substring assertions for each builder. |
@@ -113,12 +113,9 @@ Appended to each of `src/context/prompts/phase-{1,3,5}.md` (after the existing C
 
 ### 3.4 `phase_start` preset field (logging)
 
-Extend the `phase_start` variant of the `LogEvent` union in `src/types.ts:175` with an optional `preset` field:
+For **interactive phases (1/3/5)**, extend the `phase_start` variant of the `LogEvent` union in `src/types.ts:175` with an optional `preset` field:
 
 ```ts
-// before
-| (LogEventBase & { event: 'phase_start'; phase: number; attemptId?: string | null; reopenFromGate?: number | null; retryIndex?: number })
-
 // after
 | (LogEventBase & {
     event: 'phase_start';
@@ -129,6 +126,15 @@ Extend the `phase_start` variant of the `LogEvent` union in `src/types.ts:175` w
     preset?: { id: string; runner: 'claude' | 'codex'; model: string; effort: string };
   })
 ```
+
+For **gate phases (2/4/7)**, the runner only emits `gate_verdict` / `gate_error` (no `phase_start`). Extend both variants with the same `preset?` field. Gate phases already include `runner`, but the `model`/`effort` pair is currently absent from the event log.
+
+```ts
+// gate_verdict / gate_error: add
+preset?: { id: string; runner: 'claude' | 'codex'; model: string; effort: string };
+```
+
+Verify phase 6 has no preset and emits `phase_start` / `verify_result` / `phase_end` without this field — no change.
 
 `handleInteractivePhase` (src/phases/runner.ts:219) already resolves the preset via `getPresetById`; include it in `logger.logEvent({ event: 'phase_start', ... })`.
 
@@ -147,7 +153,8 @@ Unit tests (vitest, existing fixtures in `tests/context/`):
 - **Gate 7 prompt** contains scope rules AND a lifecycle stanza that does NOT say "has not yet been produced" (terminal review).
 - **REVIEWER_CONTRACT**'s approval rule (zero P0/P1) is still present verbatim — guards against accidental regression.
 - **Phase 1/3/5 interactive prompts** contain the `HARNESS FLOW CONSTRAINT` block and the `advisor()` prohibition.
-- **`phase_start` event** emits `preset: { id, runner, model, effort }` for phases 1/3/5 and 2/4/7. Test via existing logger integration tests or add a minimal new one.
+- **Interactive `phase_start` event** emits `preset: { id, runner, model, effort }` for phases 1/3/5 — extend existing `handleInteractivePhase` tests in `tests/phases/runner.test.ts:731`.
+- **Gate `gate_verdict` / `gate_error` events** emit `preset` for phases 2/4/7 — extend existing `handleGatePhase` tests (around line 862).
 
 No manual end-to-end retest required for this PR; dog-fooding will re-run the full lifecycle in a follow-up session to measure reject-loop reduction.
 
