@@ -77,6 +77,7 @@ import {
   handleGateError,
   forcePassGate,
   forcePassVerify,
+  handleVerifyPhase,
   handleVerifyFail,
   handleVerifyEscalation,
   handleVerifyError,
@@ -1230,6 +1231,162 @@ describe('escalation — handleVerifyError emission', () => {
       expect(escalations[0].reason).toBe('verify-error');
       expect(escalations[0].userChoice).toBe('Q');
       expect(escalations[0].phase).toBe(6);
+    } finally {
+      cleanup();
+    }
+  });
+});
+
+// ─── handleVerifyPhase — event emission ──────────────────────────────────────
+
+describe('handleVerifyPhase — event emission', () => {
+  it('pass path: phase_start → verify_result(passed=true) → phase_end(completed)', async () => {
+    const runDir = makeTmpDir();
+    const state = makeState({ currentPhase: 6, verifyRetries: 0 });
+    const { logger, eventsPath, cleanup } = makeTestLogger(state.runId);
+
+    vi.mocked(runVerifyPhase).mockResolvedValueOnce({ type: 'pass' });
+
+    try {
+      await handleVerifyPhase(state, HDIR, runDir, CWD, createNoOpInputManager(), logger);
+      const events = readEvents(eventsPath);
+      expect(events[0].event).toBe('phase_start');
+      expect(events[0].phase).toBe(6);
+      expect(events[0].retryIndex).toBe(0);
+      const verifyResult = events.find((e: any) => e.event === 'verify_result');
+      expect(verifyResult).toBeDefined();
+      expect(verifyResult.passed).toBe(true);
+      expect(verifyResult.retryIndex).toBe(0);
+      const phaseEnd = events.find((e: any) => e.event === 'phase_end');
+      expect(phaseEnd).toBeDefined();
+      expect(phaseEnd.status).toBe('completed');
+      expect(typeof phaseEnd.durationMs).toBe('number');
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('pass path: verify_result emitted BEFORE phase_end', async () => {
+    const runDir = makeTmpDir();
+    const state = makeState({ currentPhase: 6, verifyRetries: 2 });
+    const { logger, eventsPath, cleanup } = makeTestLogger(state.runId);
+
+    vi.mocked(runVerifyPhase).mockResolvedValueOnce({ type: 'pass' });
+
+    try {
+      await handleVerifyPhase(state, HDIR, runDir, CWD, createNoOpInputManager(), logger);
+      const events = readEvents(eventsPath);
+      const vrIdx = events.findIndex((e: any) => e.event === 'verify_result');
+      const peIdx = events.findIndex((e: any) => e.event === 'phase_end');
+      expect(vrIdx).toBeGreaterThanOrEqual(0);
+      expect(peIdx).toBeGreaterThan(vrIdx);
+      // retryIndex captured pre-mutation (was 2)
+      expect(events[vrIdx].retryIndex).toBe(2);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('fail path: phase_start → verify_result(passed=false) → phase_end(failed)', async () => {
+    const runDir = makeTmpDir();
+    const state = makeState({ currentPhase: 6, verifyRetries: 0 });
+    const feedbackPath = path.join(makeTmpDir(), 'verify-feedback.md');
+    fs.writeFileSync(feedbackPath, '# Feedback\n\n## Summary\n\nFailed.\n');
+    const { logger, eventsPath, cleanup } = makeTestLogger(state.runId);
+
+    vi.mocked(runVerifyPhase).mockResolvedValueOnce({ type: 'fail', feedbackPath });
+
+    try {
+      await handleVerifyPhase(state, HDIR, runDir, CWD, createNoOpInputManager(), logger);
+      const events = readEvents(eventsPath);
+      expect(events[0].event).toBe('phase_start');
+      const verifyResult = events.find((e: any) => e.event === 'verify_result');
+      expect(verifyResult).toBeDefined();
+      expect(verifyResult.passed).toBe(false);
+      const phaseEnd = events.find((e: any) => e.event === 'phase_end');
+      expect(phaseEnd).toBeDefined();
+      expect(phaseEnd.status).toBe('failed');
+      // verify_result before phase_end
+      const vrIdx = events.indexOf(verifyResult);
+      const peIdx = events.indexOf(phaseEnd);
+      expect(vrIdx).toBeLessThan(peIdx);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('throw path: phase_end(failed, verify_throw), no verify_result, routes to handleVerifyError (no rethrow)', async () => {
+    const runDir = makeTmpDir();
+    const state = makeState({ currentPhase: 6, verifyRetries: 0 });
+    const { logger, eventsPath, cleanup } = makeTestLogger(state.runId);
+
+    vi.mocked(runVerifyPhase).mockImplementationOnce(async () => { throw new Error('harness-verify.sh not found'); });
+    vi.mocked(promptChoice).mockResolvedValueOnce('Q');
+
+    try {
+      // must resolve (not throw)
+      await expect(handleVerifyPhase(state, HDIR, runDir, CWD, createNoOpInputManager(), logger)).resolves.toBeUndefined();
+      const events = readEvents(eventsPath);
+      expect(events[0].event).toBe('phase_start');
+      // no verify_result
+      expect(events.some((e: any) => e.event === 'verify_result')).toBe(false);
+      const phaseEnd = events.find((e: any) => e.event === 'phase_end');
+      expect(phaseEnd).toBeDefined();
+      expect(phaseEnd.status).toBe('failed');
+      expect(phaseEnd.details?.reason).toBe('verify_throw');
+      // handleVerifyError was called → escalation event emitted
+      expect(events.some((e: any) => e.event === 'escalation' && e.reason === 'verify-error')).toBe(true);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('error (non-throw) path: phase_end(failed), no verify_result, routes to handleVerifyError', async () => {
+    const runDir = makeTmpDir();
+    const state = makeState({ currentPhase: 6, verifyRetries: 0 });
+    const { logger, eventsPath, cleanup } = makeTestLogger(state.runId);
+
+    vi.mocked(runVerifyPhase).mockResolvedValueOnce({ type: 'error', errorPath: undefined });
+    vi.mocked(promptChoice).mockResolvedValueOnce('Q');
+
+    try {
+      await handleVerifyPhase(state, HDIR, runDir, CWD, createNoOpInputManager(), logger);
+      const events = readEvents(eventsPath);
+      expect(events[0].event).toBe('phase_start');
+      // no verify_result
+      expect(events.some((e: any) => e.event === 'verify_result')).toBe(false);
+      const phaseEnd = events.find((e: any) => e.event === 'phase_end');
+      expect(phaseEnd).toBeDefined();
+      expect(phaseEnd.status).toBe('failed');
+      // handleVerifyError was called → escalation event emitted
+      expect(events.some((e: any) => e.event === 'escalation' && e.reason === 'verify-error')).toBe(true);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('redirect (SIGUSR1) path: phase_end(failed, redirected), no verify_result, no handleVerifyError', async () => {
+    const runDir = makeTmpDir();
+    const state = makeState({ currentPhase: 6, verifyRetries: 0 });
+    const { logger, eventsPath, cleanup } = makeTestLogger(state.runId);
+
+    // Simulate SIGUSR1 redirect: runVerifyPhase returns error but currentPhase changes to 7
+    vi.mocked(runVerifyPhase).mockImplementationOnce(async (st: HarnessState) => {
+      st.currentPhase = 7;
+      return { type: 'error', errorPath: undefined } as any;
+    });
+
+    try {
+      await handleVerifyPhase(state, HDIR, runDir, CWD, createNoOpInputManager(), logger);
+      const events = readEvents(eventsPath);
+      expect(events[0].event).toBe('phase_start');
+      expect(events.some((e: any) => e.event === 'verify_result')).toBe(false);
+      const phaseEnd = events.find((e: any) => e.event === 'phase_end');
+      expect(phaseEnd).toBeDefined();
+      expect(phaseEnd.status).toBe('failed');
+      expect(phaseEnd.details?.reason).toBe('redirected');
+      // promptChoice (handleVerifyError) must NOT be called
+      expect(vi.mocked(promptChoice)).not.toHaveBeenCalled();
     } finally {
       cleanup();
     }

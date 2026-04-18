@@ -675,10 +675,36 @@ export async function handleVerifyPhase(
   inputManager: InputManager,
   logger: SessionLogger,
 ): Promise<void> {
+  const retryIndex = state.verifyRetries; // pre-mutation capture
+  const phaseStartTs = Date.now();
+
+  logger.logEvent({ event: 'phase_start', phase: 6, retryIndex });
+
   // Note: runVerifyPhase internally sets phase to 'in_progress' and calls writeState
-  const outcome = await runVerifyPhase(state, harnessDir, runDir, cwd);
+  let outcome: Awaited<ReturnType<typeof runVerifyPhase>>;
+  try {
+    outcome = await runVerifyPhase(state, harnessDir, runDir, cwd);
+  } catch (err) {
+    // throw path: emit phase_end + route to handleVerifyError (no rethrow)
+    logger.logEvent({
+      event: 'phase_end',
+      phase: 6,
+      status: 'failed',
+      durationMs: Date.now() - phaseStartTs,
+      details: { reason: 'verify_throw' },
+    });
+    state.phases['6'] = 'error';
+    writeState(runDir, state);
+    await handleVerifyError(undefined, state, harnessDir, runDir, cwd, inputManager, logger);
+    return; // no rethrow
+  }
+
+  const durationMs = Date.now() - phaseStartTs;
 
   if (outcome.type === 'pass') {
+    // Emit verify_result before commit attempt (runVerifyPhase did pass)
+    logger.logEvent({ event: 'verify_result', passed: true, retryIndex, durationMs });
+
     // Commit the eval report artifact (spec requires committed eval report before Phase 7)
     const evalReportPath = path.join(cwd, state.artifacts.evalReport);
     try {
@@ -694,6 +720,13 @@ export async function handleVerifyPhase(
       state.pendingAction = null; // error state itself is recovery trigger
       savePausedAtHead(state, cwd);
       writeState(runDir, state);
+      logger.logEvent({
+        event: 'phase_end',
+        phase: 6,
+        status: 'failed',
+        durationMs: Date.now() - phaseStartTs,
+        details: { reason: 'eval_commit_failed' },
+      });
       return;
     }
 
@@ -717,16 +750,28 @@ export async function handleVerifyPhase(
       fs.unlinkSync(path.join(runDir, 'verify-feedback.md'));
     } catch { /* best-effort: may not exist */ }
 
+    logger.logEvent({ event: 'phase_end', phase: 6, status: 'completed', durationMs });
     renderControlPanel(state);
   } else if (outcome.type === 'fail') {
+    logger.logEvent({ event: 'verify_result', passed: false, retryIndex, durationMs });
+    logger.logEvent({ event: 'phase_end', phase: 6, status: 'failed', durationMs });
     await handleVerifyFail(outcome.feedbackPath, state, runDir, cwd, inputManager, logger);
   } else {
     // error — but check if SIGUSR1 redirected first
     if (state.currentPhase !== 6) {
       printInfo(`Phase 6 interrupted by control signal → phase ${state.currentPhase}`);
+      logger.logEvent({
+        event: 'phase_end',
+        phase: 6,
+        status: 'failed',
+        durationMs,
+        details: { reason: 'redirected' },
+      });
       renderControlPanel(state);
       return;
     }
+    // error (non-throw): NO verify_result per spec — only phase_end
+    logger.logEvent({ event: 'phase_end', phase: 6, status: 'failed', durationMs });
     await handleVerifyError(outcome.errorPath, state, harnessDir, runDir, cwd, inputManager, logger);
   }
 }
