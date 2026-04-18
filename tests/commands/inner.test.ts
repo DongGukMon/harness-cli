@@ -2,8 +2,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { bootstrapSessionLogger } from '../../src/commands/inner.js';
-import { computeRepoKey } from '../../src/logger.js';
+import { bootstrapSessionLogger, buildConfigCancelHandler } from '../../src/commands/inner.js';
+import { computeRepoKey, FileSessionLogger } from '../../src/logger.js';
 import type { HarnessState } from '../../src/types.js';
 
 // Mock dependencies before imports
@@ -238,5 +238,133 @@ describe('bootstrapSessionLogger', () => {
     expect(resumes.length).toBe(1);
     const meta = JSON.parse(fs.readFileSync(path.join(sessionsRoot, repoKey, 'r4', 'meta.json'), 'utf-8'));
     expect(meta.resumedAt.length).toBe(1);
+  });
+});
+
+describe('buildConfigCancelHandler — lazy bootstrap', () => {
+  function tempHarnessDir(): string {
+    return fs.mkdtempSync(path.join(os.tmpdir(), 'cc-test-'));
+  }
+
+  function buildState(overrides: Partial<HarnessState> = {}): HarnessState {
+    const base: HarnessState = {
+      runId: 'cc1', currentPhase: 1, status: 'in_progress', autoMode: false,
+      task: 'test task', baseCommit: 'abc', implRetryBase: 'abc', codexPath: null,
+      externalCommitsDetected: false,
+      artifacts: { spec: 's', plan: 'p', decisionLog: 'd', checklist: 'c', evalReport: 'e' },
+      phases: { '1': 'pending', '2': 'pending', '3': 'pending', '4': 'pending', '5': 'pending', '6': 'pending', '7': 'pending' },
+      gateRetries: { '2': 0, '4': 0, '7': 0 },
+      verifyRetries: 0,
+      pauseReason: null, specCommit: null, planCommit: null, implCommit: null,
+      evalCommit: null, verifiedAtHead: null, pausedAtHead: null, pendingAction: null,
+      phaseOpenedAt: { '1': null, '3': null, '5': null },
+      phaseAttemptId: { '1': null, '3': null, '5': null },
+      phasePresets: {}, phaseReopenFlags: { '1': false, '3': false, '5': false },
+      phaseReopenSource: { '1': null, '3': null, '5': null },
+      lastWorkspacePid: null, lastWorkspacePidStartTime: null,
+      tmuxSession: '', tmuxMode: 'dedicated', tmuxWindows: [],
+      tmuxControlWindow: '', tmuxWorkspacePane: '', tmuxControlPane: '',
+      loggingEnabled: true,
+    };
+    return { ...base, ...overrides };
+  }
+
+  let exitCode: number | null = null;
+  const origExit = process.exit;
+
+  beforeEach(() => {
+    exitCode = null;
+    (process as any).exit = ((code: number) => {
+      exitCode = code;
+      throw new Error('__EXIT_TRAP__');
+    }) as any;
+  });
+
+  afterEach(() => {
+    (process as any).exit = origExit;
+  });
+
+  it('fresh start: emits session_start before session_end(paused)', () => {
+    const harnessDir = tempHarnessDir();
+    const sessionsRoot = path.join(harnessDir, 'sessions');
+    const runDir = path.join(harnessDir, 'runs', 'cc1');
+    fs.mkdirSync(runDir, { recursive: true });
+
+    const logger = new FileSessionLogger('cc1', harnessDir, { sessionsRoot });
+    const state = buildState({ runId: 'cc1' });
+    const inputManager = { stop: vi.fn() } as any;
+
+    expect(logger.hasEmittedSessionOpen()).toBe(false);
+
+    const handler = buildConfigCancelHandler({
+      state, runDir, harnessDir, runId: 'cc1', isResume: false, logger, inputManager,
+    });
+
+    try { handler(); } catch (e) { /* __EXIT_TRAP__ swallowed */ }
+
+    expect(exitCode).toBe(0);
+
+    const repoKey = computeRepoKey(harnessDir);
+    const eventsPath = path.join(sessionsRoot, repoKey, 'cc1', 'events.jsonl');
+    const events = fs.readFileSync(eventsPath, 'utf-8').trim().split('\n').map(l => JSON.parse(l));
+    expect(events[0].event).toBe('session_start');
+    expect(events[0].task).toBe('test task');
+    expect(events[events.length - 1].event).toBe('session_end');
+    expect(events[events.length - 1].status).toBe('paused');
+
+    const summary = JSON.parse(fs.readFileSync(path.join(sessionsRoot, repoKey, 'cc1', 'summary.json'), 'utf-8'));
+    expect(summary.status).toBe('paused');
+
+    // state should be mutated to paused with config-cancel
+    expect(state.status).toBe('paused');
+    expect(state.pauseReason).toBe('config-cancel');
+    expect(state.pendingAction?.type).toBe('reopen_config');
+
+    fs.rmSync(harnessDir, { recursive: true, force: true });
+  });
+
+  it('resume case: emits session_resumed + pushes resumedAt before session_end(paused)', () => {
+    const harnessDir = tempHarnessDir();
+    const sessionsRoot = path.join(harnessDir, 'sessions');
+    const runDir = path.join(harnessDir, 'runs', 'cc2');
+    fs.mkdirSync(runDir, { recursive: true });
+
+    // Pre-bootstrap meta.json so logger.hasBootstrapped() = true (simulates resume scenario)
+    const logger = new FileSessionLogger('cc2', harnessDir, { sessionsRoot });
+    logger.writeMeta({ task: 'resumed task' });
+
+    // New logger instance to simulate fresh process (sessionOpenEmitted = false)
+    const logger2 = new FileSessionLogger('cc2', harnessDir, { sessionsRoot });
+    expect(logger2.hasBootstrapped()).toBe(true);
+    expect(logger2.hasEmittedSessionOpen()).toBe(false);
+
+    const state = buildState({ runId: 'cc2', task: 'resumed task' });
+    const inputManager = { stop: vi.fn() } as any;
+
+    const handler = buildConfigCancelHandler({
+      state, runDir, harnessDir, runId: 'cc2', isResume: true, logger: logger2, inputManager,
+    });
+
+    try { handler(); } catch (e) { /* __EXIT_TRAP__ swallowed */ }
+
+    expect(exitCode).toBe(0);
+
+    const repoKey = computeRepoKey(harnessDir);
+    const eventsPath = path.join(sessionsRoot, repoKey, 'cc2', 'events.jsonl');
+    const rawLines = fs.readFileSync(eventsPath, 'utf-8').trim().split('\n');
+    // First line is session_start from initial writeMeta, second pass adds session_resumed
+    const events = rawLines.map(l => JSON.parse(l));
+    const resumed = events.find((e: any) => e.event === 'session_resumed');
+    expect(resumed).toBeDefined();
+    expect(resumed.stateStatus).toBe('paused');
+
+    const lastEvent = events[events.length - 1];
+    expect(lastEvent.event).toBe('session_end');
+    expect(lastEvent.status).toBe('paused');
+
+    const meta = JSON.parse(fs.readFileSync(path.join(sessionsRoot, repoKey, 'cc2', 'meta.json'), 'utf-8'));
+    expect(meta.resumedAt.length).toBeGreaterThan(0);
+
+    fs.rmSync(harnessDir, { recursive: true, force: true });
   });
 });

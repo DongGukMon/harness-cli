@@ -302,6 +302,46 @@ describe('FileSessionLogger.finalizeSummary', () => {
     const summary = JSON.parse(fs.readFileSync(path.join(sessionsRoot, repoKey, 'runK', 'summary.json'), 'utf-8'));
     expect(summary.totals.gateErrors).toBe(1);
   });
+
+  it('renameSync failure warns once but does NOT disable logger (retry on next phase per §6.1)', () => {
+    const harnessDir = makeTempHarnessDir();
+    const sessionsRoot = path.join(harnessDir, 'sessions-root');
+    const logger = new FileSessionLogger('runRetry', harnessDir, { sessionsRoot });
+    logger.writeMeta({ task: 't' });
+    logger.logEvent({ event: 'phase_start', phase: 1, attemptId: 'a1' });
+    logger.logEvent({ event: 'phase_end', phase: 1, attemptId: 'a1', status: 'completed', durationMs: 100 });
+    logger.logEvent({ event: 'session_end', status: 'completed', totalWallMs: 500 });
+
+    const origRename = fs.renameSync;
+    let renameCallCount = 0;
+    (fs as any).renameSync = (src: string, dst: string) => {
+      renameCallCount++;
+      if (renameCallCount === 1) throw new Error('disk full');
+      return origRename.call(fs, src, dst);
+    };
+    const stderrCalls: string[] = [];
+    const origWrite = process.stderr.write.bind(process.stderr);
+    (process.stderr as any).write = (s: string) => { stderrCalls.push(s); return true; };
+
+    try {
+      // First finalizeSummary call fails (renameSync throws)
+      expect(() => logger.finalizeSummary({ status: 'completed', autoMode: false } as HarnessState)).not.toThrow();
+      expect(stderrCalls.filter(s => s.includes('finalizeSummary failed')).length).toBe(1);
+
+      // Subsequent logEvent should still work (logger NOT disabled by finalizeSummary failure)
+      expect(() => logger.logEvent({ event: 'session_end', status: 'completed', totalWallMs: 500 })).not.toThrow();
+
+      // Second finalizeSummary should succeed (retry — renameSync now works)
+      logger.finalizeSummary({ status: 'completed', autoMode: false } as HarnessState);
+
+      const repoKey = computeRepoKey(harnessDir);
+      const summary = JSON.parse(fs.readFileSync(path.join(sessionsRoot, repoKey, 'runRetry', 'summary.json'), 'utf-8'));
+      expect(summary.status).toBe('completed');
+    } finally {
+      (fs as any).renameSync = origRename;
+      (process.stderr as any).write = origWrite;
+    }
+  });
 });
 
 describe('createSessionLogger factory', () => {

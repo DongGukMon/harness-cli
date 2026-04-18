@@ -828,6 +828,33 @@ describe('handleInteractivePhase — event emission', () => {
       cleanup();
     }
   });
+
+  it('redirect on completed: runInteractivePhase returns success but currentPhase was mutated → phase_end failed with redirected reason', async () => {
+    const runDir = makeTmpDir();
+    const state = makeState({ currentPhase: 1 });
+    const { logger, eventsPath, cleanup } = makeTestLogger(state.runId);
+
+    vi.mocked(runInteractivePhase).mockImplementationOnce(async (phase, st, _h, _r, _c, attemptId) => {
+      // Simulate SIGUSR1 redirect occurring during a run that would otherwise succeed:
+      // control signal mutates currentPhase AND runInteractivePhase returns 'completed'
+      st.currentPhase = 8;
+      st.phases[String(phase)] = 'completed';
+      return { status: 'completed', attemptId } as any;
+    });
+
+    try {
+      await handleInteractivePhase(1, state, HDIR, runDir, CWD, logger);
+      const events = readEvents(eventsPath);
+      const phaseEndEvents = events.filter((e: any) => e.event === 'phase_end');
+      // Only one phase_end should be emitted (redirect branch fires, completed branch skipped)
+      expect(phaseEndEvents.length).toBe(1);
+      const phaseEnd = phaseEndEvents[0];
+      expect(phaseEnd.status).toBe('failed');
+      expect(phaseEnd.details?.reason).toBe('redirected');
+    } finally {
+      cleanup();
+    }
+  });
 });
 
 // ─── handleGatePhase — event emission ─────────────────────────────────────────

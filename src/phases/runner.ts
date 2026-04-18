@@ -227,6 +227,23 @@ export async function handleInteractivePhase(
   try {
     const result = await runInteractivePhase(phase, state, harnessDir, runDir, cwd, attemptId);
 
+    // Check for control-signal redirect BEFORE branching on result.status.
+    // SIGUSR1 skip/jump can mutate state.currentPhase mid-run regardless of
+    // whether runInteractivePhase itself returns completed or failed.
+    if (state.currentPhase !== phase) {
+      printInfo(`Phase ${phase} interrupted by control signal → phase ${state.currentPhase}`);
+      renderControlPanel(state);
+      logger.logEvent({
+        event: 'phase_end',
+        phase,
+        attemptId,
+        status: 'failed',
+        durationMs: Date.now() - phaseStartTs,
+        details: { reason: 'redirected' },
+      });
+      return;
+    }
+
     if (result.status === 'completed') {
       // Normalize artifact commits for Phase 1/3. Failure → error (not completed).
       if (phase === 1 || phase === 3) {
@@ -286,22 +303,7 @@ export async function handleInteractivePhase(
         });
       }
     } else {
-      // Check if SIGUSR1 already redirected to a different phase
-      if (state.currentPhase !== phase) {
-        // Signal handler changed currentPhase — don't overwrite, just continue loop
-        printInfo(`Phase ${phase} interrupted by control signal → phase ${state.currentPhase}`);
-        renderControlPanel(state);
-        logger.logEvent({
-          event: 'phase_end',
-          phase,
-          attemptId,
-          status: 'failed',
-          durationMs: Date.now() - phaseStartTs,
-          details: { reason: 'redirected' },
-        });
-        return; // Return to runPhaseLoop which will pick up the new currentPhase
-      }
-      // Normal failure
+      // Normal failure (redirect case already handled above)
       state.phases[String(phase)] = 'failed';
       savePausedAtHead(state, cwd);
       printError(`Phase ${phase} failed`);

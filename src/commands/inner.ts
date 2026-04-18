@@ -145,35 +145,7 @@ export async function innerCommand(runId: string, options: InnerOptions = {}): P
 
   // Step 5.6: Create InputManager
   const inputManager = new InputManager();
-  inputManager.onConfigCancel = () => {
-    state.status = 'paused';
-    state.pauseReason = 'config-cancel';
-    state.pendingAction = {
-      type: 'reopen_config',
-      targetPhase: state.currentPhase as any,
-      sourcePhase: null,
-      feedbackPaths: [],
-    };
-    writeState(runDir, state);
-
-    // Lazy bootstrap session open event if not yet emitted
-    if (!logger.hasEmittedSessionOpen()) {
-      if (isResume) {
-        logger.updateMeta({ pushResumedAt: Date.now(), task: state.task });
-        logger.logEvent({ event: 'session_resumed', fromPhase: state.currentPhase, stateStatus: 'paused' });
-      } else {
-        logger.writeMeta({ task: state.task });
-        logger.logEvent({ event: 'session_start', task: state.task, autoMode: state.autoMode, baseCommit: state.baseCommit, harnessVersion: '0.1.0' });
-      }
-    }
-    logger.logEvent({ event: 'session_end', status: 'paused', totalWallMs: Date.now() - logger.getStartedAt() });
-    logger.finalizeSummary(state);
-    logger.close();
-
-    releaseLock(harnessDir, runId);
-    inputManager.stop();
-    process.exit(0);
-  };
+  inputManager.onConfigCancel = buildConfigCancelHandler({ state, runDir, harnessDir, runId, isResume, logger, inputManager });
   inputManager.start('configuring');
 
   // Step 5.7: Compute remaining phases (including pendingAction reopen target)
@@ -238,6 +210,49 @@ export async function innerCommand(runId: string, options: InnerOptions = {}): P
       selectWindow(state.tmuxSession, state.tmuxOriginalWindow);
     }
   }
+}
+
+export interface ConfigCancelHandlerArgs {
+  state: HarnessState;
+  runDir: string;
+  harnessDir: string;
+  runId: string;
+  isResume: boolean;
+  logger: SessionLogger;
+  inputManager: InputManager;
+}
+
+export function buildConfigCancelHandler(args: ConfigCancelHandlerArgs): () => void {
+  const { state, runDir, harnessDir, runId, isResume, logger, inputManager } = args;
+  return () => {
+    state.status = 'paused';
+    state.pauseReason = 'config-cancel';
+    state.pendingAction = {
+      type: 'reopen_config',
+      targetPhase: state.currentPhase as any,
+      sourcePhase: null,
+      feedbackPaths: [],
+    };
+    writeState(runDir, state);
+
+    // Lazy bootstrap session open event if not yet emitted
+    if (!logger.hasEmittedSessionOpen()) {
+      if (isResume) {
+        logger.updateMeta({ pushResumedAt: Date.now(), task: state.task });
+        logger.logEvent({ event: 'session_resumed', fromPhase: state.currentPhase, stateStatus: 'paused' });
+      } else {
+        logger.writeMeta({ task: state.task });
+        logger.logEvent({ event: 'session_start', task: state.task, autoMode: state.autoMode, baseCommit: state.baseCommit, harnessVersion: '0.1.0' });
+      }
+    }
+    logger.logEvent({ event: 'session_end', status: 'paused', totalWallMs: Date.now() - logger.getStartedAt() });
+    logger.finalizeSummary(state);
+    logger.close();
+
+    releaseLock(harnessDir, runId);
+    inputManager.stop();
+    process.exit(0);
+  };
 }
 
 export async function bootstrapSessionLogger(

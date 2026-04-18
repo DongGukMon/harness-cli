@@ -241,8 +241,9 @@ export class FileSessionLogger implements SessionLogger {
       fs.writeFileSync(tmpPath, JSON.stringify(summary, null, 2));
       fs.renameSync(tmpPath, this.summaryPath);
     } catch (err) {
+      // Spec §6.1: summary.json write failure → warn and retry on next phase.
+      // Do NOT set this.disabled = true; event logging should remain active.
       this.warnOnce(`session logger: finalizeSummary failed — ${(err as Error).message}`);
-      this.disabled = true;
     }
   }
 
