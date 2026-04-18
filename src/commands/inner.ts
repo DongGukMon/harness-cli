@@ -4,7 +4,7 @@ import { createInterface } from 'readline';
 import { getGitRoot } from '../git.js';
 import { updateLockPid, readLock, releaseLock } from '../lock.js';
 import { findHarnessRoot, clearCurrentRun } from '../root.js';
-import { readState, writeState } from '../state.js';
+import { readState, writeState, invalidatePhaseSessionsOnPresetChange, invalidatePhaseSessionsOnJump } from '../state.js';
 import { runPhaseLoop } from '../phases/runner.js';
 import { registerSignalHandlers } from '../signal.js';
 import { killSession, killWindow, selectWindow, splitPane, paneExists, selectPane } from '../tmux.js';
@@ -161,8 +161,10 @@ export async function innerCommand(runId: string, options: InnerOptions = {}): P
   if (reopenTarget !== null) remainingSet.add(String(reopenTarget));
   const remainingPhases = [...remainingSet];
 
-  // Step 5.8: Prompt for model selection
+  // Step 5.8: Prompt for model selection. Snapshot prev presets to detect changes for §4.8 invalidation.
+  const prevPresets = { ...state.phasePresets };
   state.phasePresets = await promptModelConfig(state.phasePresets, inputManager, remainingPhases);
+  invalidatePhaseSessionsOnPresetChange(state, prevPresets, runDir);
 
   // Clear reopen_config pendingAction (written by onConfigCancel) — model selection succeeded
   if (state.pendingAction?.type === 'reopen_config') {
@@ -302,6 +304,8 @@ function consumePendingAction(runDir: string, state: HarnessState): void {
       state.currentPhase = action.phase;
       state.pendingAction = null;
       state.pauseReason = null;
+      // §4.9: invalidate gate sessions at/after target phase + delete replay sidecars
+      invalidatePhaseSessionsOnJump(state, action.phase, runDir);
     }
 
     writeState(runDir, state);
