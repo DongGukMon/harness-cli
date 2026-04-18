@@ -760,11 +760,12 @@ EOF
 
 ---
 
-## Task 3: Light Phase 1 init prompt + interactive assembler wiring
+## Task 3: Light Phase 1 + Phase 5 init prompts + interactive assembler wiring
 
 **Files:**
-- Create: `src/context/prompts/phase-1-light.md`
-- Modify: `src/context/assembler.ts::assembleInteractivePrompt` (around line 306-340)
+- **Create:** `src/context/prompts/phase-1-light.md`
+- **Create:** `src/context/prompts/phase-5-light.md` — drops the `- Plan: {{plan_path}}` line; points at the combined design doc only.
+- Modify: `src/context/assembler.ts::assembleInteractivePrompt` (around line 306-340; template selector handles phase 1 + phase 5 in light)
 - Modify: `tests/context/assembler.test.ts`
 
 - [ ] **Step 1: Write failing tests**
@@ -875,15 +876,52 @@ Eval Checklist는 "{{checklist_path}}" 경로에 아래 JSON 스키마로 저장
 
 (Verbatim — no TBDs, no placeholders other than `{{…}}` variables.)
 
+**Additionally create `src/context/prompts/phase-5-light.md`** — Phase 5 in light flow has no separate plan doc (spec §"Phase 5 — Implementation": "**plan doc이 빠지고 결합 doc으로 대체됨**"). Drop the `- Plan:` line and point at the combined design doc only:
+
+````markdown
+다음 파일을 읽고 컨텍스트를 파악한 뒤 구현을 진행하라:
+- Combined Design Spec (light): {{spec_path}}
+- Decision Log: {{decisions_path}}
+- Checklist: {{checklist_path}}
+{{#if feedback_paths}}
+{{feedback_paths}}
+{{/if}}
+
+결합 문서의 `## Implementation Plan` 섹션을 구현 roadmap으로 사용한다. 별도 plan 파일은 존재하지 않는다.
+
+각 태스크 완료 시 반드시 변경사항을 git commit하라. commit 없이 세션을 종료하면 eval gate에서 변경분을 볼 수 없어 run이 실패한다.
+
+구현 완료 후 `.harness/{{runId}}/phase-5.done` 파일을 생성하되 내용으로 '{{phaseAttemptId}}' 한 줄만 기록하라.
+
+**CRITICAL: sentinel 파일(phase-5.done)은 모든 작업(파일 작성, git commit 포함)이 완료된 후 가장 마지막에 생성하라. sentinel 생성 이후 하네스는 다음 단계(리뷰/피드백)로 넘어가므로 추가 작업을 하지 말 것.**
+
+**HARNESS FLOW CONSTRAINT**: 이 세션은 orchestrated harness 라이프사이클(light flow) 내부에서 실행된다. 다음 phase에서 Codex 기반 독립 reviewer가 산출물을 검토한다(Gate 7). 따라서:
+- `advisor()` 툴을 호출하지 말 것. 외부 리뷰가 이미 예약되어 있다.
+- 작업 범위는 이 프롬프트가 지시한 산출물(git commits + sentinel)로 제한한다.
+- skill 자동 로드는 허용. 그러나 의사결정을 advisor에 위임하지 말고 자체적으로 결론을 낸다.
+````
+
 - [ ] **Step 4: Update `assembleInteractivePrompt` to pick the light template + filter unreadable carryover paths (Spec R8)**
 
 In `src/context/assembler.ts` at line ~311 (start of `assembleInteractivePrompt`):
 
 ```ts
-const templateFile = phase === 1 && state.flow === 'light' ? 'phase-1-light.md' : `phase-${phase}.md`;
+const templateFile =
+  state.flow === 'light' && phase === 1 ? 'phase-1-light.md'
+  : state.flow === 'light' && phase === 5 ? 'phase-5-light.md'
+  : `phase-${phase}.md`;
 ```
 
-Replace the current `const templateFile = …` line with the above.
+Replace the current `const templateFile = …` line with the above. Add a matching test in `tests/context/assembler.test.ts`:
+
+```ts
+it('light + phase 5 uses phase-5-light.md (no separate plan artifact)', () => {
+  const state = makeState({ flow: 'light', phaseAttemptId: { '5': 'aid-5' } });
+  const prompt = assembleInteractivePrompt(5, state, '/tmp/harness');
+  expect(prompt).toContain('Combined Design Spec (light)');
+  expect(prompt).not.toContain('- Plan:');
+});
+```
 
 Then, inside the same function, extend the `feedbackPaths` construction (around line 320) to merge `state.carryoverFeedback` **and filter paths that no longer exist on disk** (Spec Risks §R8 — if the carryover file vanished between persist and consume, warn and proceed without that entry rather than injecting a bad path):
 
@@ -1054,9 +1092,78 @@ pnpm vitest run tests/context/assembler.test.ts tests/context/assembler-resume.t
 
 Expected: 4 FAIL. In particular the light assertions will fail with `expected "<plan>" not to be in result` because current code always injects the plan.
 
-- [ ] **Step 3: Branch `buildGatePromptPhase7` on flow**
+- [ ] **Step 3: Branch `buildGatePromptPhase7` on flow + make reviewer contract + lifecycle text flow-aware**
 
-In `src/context/assembler.ts`, replace the body of `buildGatePromptPhase7` (lines 274-297) with:
+Two text-level inconsistencies exist today that must be fixed alongside the artifact-slot change:
+
+1. `FIVE_AXIS_EVAL_GATE` (assembler.ts line ~61) says `평가 대상은 spec + plan + eval report + diff`. For light flow there is no separate plan artifact.
+2. `buildLifecycleContext(7)` says `Spec, plan, implementation diff, and eval report are all provided.`
+
+Both would contradict the light `<spec>`/`<eval_report>`/diff prompt and could trigger false "missing plan" findings from the reviewer. Parameterise both on flow:
+
+```ts
+const FIVE_AXIS_EVAL_GATE_FULL = `
+## Five-Axis Evaluation (Phase 7 — eval gate)
+평가 대상은 spec + plan + eval report + diff. 5축 전부:
+1. Correctness — 구현이 spec+plan과 일치? 경계조건·테스트 커버리지?
+2. Readability — 이름/흐름/로컬 복잡도 적절?
+3. Architecture — 기존 패턴 부합, 경계 선명, 조기 추상화 없음?
+4. Security — 경계 입력 검증, 비밀 노출, 인증 경로?
+5. Performance — N+1, 무한 루프, 핫패스 회귀?
+Severity: P0/P1=Critical(블록), P2=Important, P3=Suggestion.
+`;
+
+const FIVE_AXIS_EVAL_GATE_LIGHT = `
+## Five-Axis Evaluation (Phase 7 — eval gate, light flow)
+평가 대상은 **결합 design spec** (spec + Implementation Plan 섹션이 한 문서에 있음) + eval report + diff. 5축 전부:
+1. Correctness — 구현이 결합 spec의 Implementation Plan 섹션과 일치? 경계조건·테스트 커버리지?
+2. Readability — 이름/흐름/로컬 복잡도 적절?
+3. Architecture — 기존 패턴 부합, 경계 선명, 조기 추상화 없음?
+4. Security — 경계 입력 검증, 비밀 노출, 인증 경로?
+5. Performance — N+1, 무한 루프, 핫패스 회귀?
+Severity: P0/P1=Critical(블록), P2=Important, P3=Suggestion.
+Note: 이 플로우에는 별도의 plan 아티팩트가 없다. plan 부재를 finding으로 올리지 말 것.
+`;
+
+function reviewerContractForGate7(flow: FlowMode): string {
+  return REVIEWER_CONTRACT_BASE + (flow === 'light' ? FIVE_AXIS_EVAL_GATE_LIGHT : FIVE_AXIS_EVAL_GATE_FULL);
+}
+```
+
+(Delete the old `FIVE_AXIS_EVAL_GATE` constant and the Gate 7 entry in `REVIEWER_CONTRACT_BY_GATE`; call `reviewerContractForGate7(state.flow)` instead. Gate 2 + Gate 4 remain flow-agnostic — light never reaches them.)
+
+Similarly change `buildLifecycleContext`:
+
+```ts
+function buildLifecycleContext(phase: 2 | 4 | 7, flow: FlowMode = 'full'): string {
+  if (phase === 2) {
+    return '<harness_lifecycle>\nThis is Gate 2 of a 7-phase harness lifecycle. …\n</harness_lifecycle>\n\n';
+  }
+  if (phase === 4) {
+    return '<harness_lifecycle>\nThis is Gate 4 of a 7-phase harness lifecycle. …\n</harness_lifecycle>\n\n';
+  }
+  // phase === 7
+  if (flow === 'light') {
+    return (
+      '<harness_lifecycle>\n' +
+      'This is Gate 7 of a 4-phase light harness lifecycle (P1 design → P5 impl → P6 verify → P7 eval). ' +
+      'The combined design spec contains the Implementation Plan section; there is no separate plan artifact. ' +
+      'This is the terminal review — if APPROVE, the run is complete.\n' +
+      '</harness_lifecycle>\n\n'
+    );
+  }
+  return (
+    '<harness_lifecycle>\n' +
+    'This is Gate 7 of a 7-phase harness lifecycle. Spec, plan, implementation diff, and eval report are all provided. ' +
+    'This is the terminal review — if APPROVE, the run is complete.\n' +
+    '</harness_lifecycle>\n\n'
+  );
+}
+```
+
+Gate 2/4 callers in `buildGatePromptPhase2/4` pass no second argument (defaults to `'full'`); Gate 7 callers below pass `state.flow`.
+
+Now replace the body of `buildGatePromptPhase7` (lines 274-297) with:
 
 ```ts
 function buildGatePromptPhase7(state: HarnessState, cwd: string): string | { error: string } {
@@ -1070,8 +1177,8 @@ function buildGatePromptPhase7(state: HarnessState, cwd: string): string | { err
 
   if (state.flow === 'light') {
     return (
-      REVIEWER_CONTRACT_BY_GATE[7] +
-      buildLifecycleContext(7) +
+      reviewerContractForGate7('light') +
+      buildLifecycleContext(7, 'light') +
       `<spec>\n${specResult.content}\n</spec>\n\n` +
       `<eval_report>\n${evalResult.content}\n</eval_report>\n\n` +
       diffSection +
@@ -1085,8 +1192,8 @@ function buildGatePromptPhase7(state: HarnessState, cwd: string): string | { err
   if ('error' in planResult) return planResult;
 
   return (
-    REVIEWER_CONTRACT_BY_GATE[7] +
-    buildLifecycleContext(7) +
+    reviewerContractForGate7('full') +
+    buildLifecycleContext(7, 'full') +
     `<spec>\n${specResult.content}\n</spec>\n\n` +
     `<plan>\n${planResult.content}\n</plan>\n\n` +
     `<eval_report>\n${evalResult.content}\n</eval_report>\n\n` +
@@ -1097,6 +1204,30 @@ function buildGatePromptPhase7(state: HarnessState, cwd: string): string | { err
   );
 }
 ```
+
+Add two focused tests to the `buildGatePromptPhase7 — flow-aware` describe block:
+
+```ts
+it('light Gate 7 contract text does not claim a separate plan artifact', () => {
+  const state = makeLightEvalState();
+  const result = assembleGatePrompt(7, state, '/tmp/harness', makeTmpDir());
+  if (typeof result !== 'string') throw new Error('expected string');
+  expect(result).toContain('결합 design spec');
+  expect(result).toContain('별도의 plan 아티팩트가 없다');
+  expect(result).not.toContain('spec + plan + eval report + diff');
+  expect(result).toContain('4-phase light harness lifecycle');
+});
+
+it('full Gate 7 contract text is unchanged', () => {
+  const state = makeFullEvalState();
+  const result = assembleGatePrompt(7, state, '/tmp/harness', makeTmpDir());
+  if (typeof result !== 'string') throw new Error('expected string');
+  expect(result).toContain('spec + plan + eval report + diff');
+  expect(result).toContain('7-phase harness lifecycle');
+});
+```
+
+A parallel test in `tests/context/assembler-resume.test.ts` (resume path) should assert the same contract text: light resume prompts quote `결합 design spec` while full resume prompts retain `spec + plan + eval report + diff`. Reuse the existing `buildResumeSections` — it already assembles from the same `reviewerContractForGate7` output because `assembleGateResumePrompt` concatenates `buildResumeSections`'s output into its own preamble; confirm the contract lands via the same helper, and if it does not today, pass `state.flow` into the resume path identically.
 
 - [ ] **Step 4: Branch `buildResumeSections` on flow**
 
@@ -1434,13 +1565,18 @@ EOF
 
 ---
 
-## Task 6: Phase runner flow-aware (skip, reopen target, carryoverFeedback)
+## Task 6: Phase runner flow-aware (skip, reopen target, carryoverFeedback, jump/skip preserve-skipped)
 
 > **Spec-to-code note:** the spec's §File-level Change List assigns the `getReopenTarget(flow, gate=7)` call to `src/phases/gate.ts`. Per the current code, `gate.ts::runGatePhase` only produces a `GatePhaseResult`; REJECT routing lives in `src/phases/runner.ts::handleGateReject` and `::handleGateEscalation`. This plan routes the helper call through `runner.ts` — functionally identical behaviour, file assignment corrected.
 
 **Files:**
 - Modify: `src/phases/runner.ts::runPhaseLoop` (lines 176-214), `handleInteractivePhase` (advance-to-next block at line 300-312), `handleGateReject` (line 493-545), `handleGateEscalation` (lines 586 and 604). Delete `previousInteractivePhase` (lines 76-80) after its three callers migrate.
+- **Modify:** `src/commands/inner.ts::consumePendingAction` (lines 299-310) — preserve `'skipped'` when resetting downstream phases after `jump`.
+- **Modify:** `src/signal.ts` SIGUSR1 jump handler (lines 147-156) — same preservation.
+- **Modify:** `src/commands/jump.ts` — reject jumping to a phase whose current status is `'skipped'` (light runs treat P2/P3/P4 as illegal jump targets; user gets a clear error).
 - Modify: `tests/phases/runner.test.ts`
+- Modify: `tests/commands/jump.test.ts` (or create if absent)
+- Modify: `tests/signal.test.ts`
 
 - [ ] **Step 1: Write failing tests**
 
@@ -1675,12 +1811,115 @@ pnpm vitest run tests/phases/runner.test.ts tests/phases/gate.test.ts tests/phas
 
 Expected: all green. The existing full-flow Gate 7 REJECT tests continue to expect `state.currentPhase === 5` — `getReopenTarget('full', 7)` returns `5`, so they pass unchanged.
 
-- [ ] **Step 9: Commit**
+- [ ] **Step 9: Preserve `'skipped'` across jump/skip phase resets (ADR-1/ADR-5 invariant)**
+
+The current code resets downstream phases to `'pending'` on jump in three places:
+1. `src/commands/inner.ts::consumePendingAction` around line 299-310 (file-based jump consumed on inner-start)
+2. `src/signal.ts` SIGUSR1 handler around line 147-156 (live jump)
+3. `src/commands/jump.ts` itself writes the `pending-action.json` — but the reset happens in (1)/(2)
+
+For a light run that calls `harness jump 2` (or similar), the naive reset would flip `phases['2']='pending'`, `phases['3']='pending'`, `phases['4']='pending'` — resurrecting phases that must remain `'skipped'`. Fix (write failing test first, then impl).
+
+**Failing tests** — add to `tests/signal.test.ts`:
+
+```ts
+describe('SIGUSR1 jump — preserve skipped phases on light runs', () => {
+  it('light flow: jump to phase 1 leaves phases 2/3/4 still skipped', () => {
+    const state = makeLightState({ currentPhase: 5 });
+    // Simulate the SIGUSR1 jump logic inline (or invoke the real handler via registerSignalHandlers with a mocked ctx).
+    const target = 1;
+    const newStatuses: Record<string, string> = {};
+    for (let m = target; m <= 7; m++) {
+      const cur = state.phases[String(m)];
+      newStatuses[String(m)] = cur === 'skipped' ? 'skipped' : 'pending';
+    }
+    expect(newStatuses['1']).toBe('pending');
+    expect(newStatuses['2']).toBe('skipped');
+    expect(newStatuses['3']).toBe('skipped');
+    expect(newStatuses['4']).toBe('skipped');
+    expect(newStatuses['5']).toBe('pending');
+  });
+});
+```
+
+(This structural test pins the desired loop behaviour; integration with the real SIGUSR1 handler in `registerSignalHandlers` can follow the existing `tests/signal.test.ts` patterns — dispatch a synthetic `process.emit('SIGUSR1')` after seeding a `pending-action.json`.)
+
+**Failing test for `jump.ts` illegal target** — add to `tests/commands/jump.test.ts`:
+
+```ts
+it('rejects jumping to a phase whose current status is "skipped"', async () => {
+  const repo = createTestRepo();
+  const harnessDir = join(repo.path, '.harness');
+  const runId = 'r-light';
+  const runDir = join(harnessDir, runId);
+  mkdirSync(runDir, { recursive: true });
+  const state = createInitialState(runId, 'task', 'base', false, false, 'light');
+  state.currentPhase = 5;
+  writeState(runDir, state);
+  setCurrentRun(harnessDir, runId);
+
+  const exitSpy = vi.spyOn(process, 'exit').mockImplementation(((code?: number) => {
+    throw new Error(`__exit__:${code}`);
+  }) as any);
+  const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+  try {
+    await expect(jumpCommand('2', { root: repo.path })).rejects.toThrow(/__exit__:1/);
+    const msgs = stderrSpy.mock.calls.map((c) => c[0]).join('');
+    expect(msgs).toMatch(/phase 2 is 'skipped'|cannot jump to a skipped phase/i);
+  } finally {
+    exitSpy.mockRestore();
+    stderrSpy.mockRestore();
+    repo.cleanup();
+  }
+});
+```
+
+Run:
 
 ```bash
-git add src/phases/runner.ts tests/phases/runner.test.ts
+pnpm vitest run tests/signal.test.ts tests/commands/jump.test.ts -t 'skipped' 2>&1 | tail -20
+```
+
+Expected: 2 FAIL.
+
+**Implementation** — patch all three sites:
+
+1. `src/commands/inner.ts::consumePendingAction` (replace the existing `for (let m = action.phase; m <= 7; m++) state.phases[String(m)] = 'pending';`):
+
+```ts
+for (let m = action.phase; m <= 7; m++) {
+  const cur = state.phases[String(m)];
+  state.phases[String(m)] = cur === 'skipped' ? 'skipped' : 'pending';
+}
+```
+
+2. `src/signal.ts` SIGUSR1 handler — identical substitution at line ~148-150.
+
+3. `src/commands/jump.ts` — add a `'skipped'` guard right after reading state (before line 40's forward-jump check):
+
+```ts
+if (state.phases[String(N)] === 'skipped') {
+  process.stderr.write(
+    `Error: phase ${N} is 'skipped' in this run (flow=${state.flow}); cannot jump to a skipped phase.\n`,
+  );
+  process.exit(1);
+}
+```
+
+Re-run:
+
+```bash
+pnpm vitest run tests/signal.test.ts tests/commands/jump.test.ts -t 'skipped' 2>&1 | tail -20
+```
+
+Expected: 2 PASS.
+
+- [ ] **Step 10: Commit**
+
+```bash
+git add src/phases/runner.ts src/commands/inner.ts src/commands/jump.ts src/signal.ts tests/phases/runner.test.ts tests/signal.test.ts tests/commands/jump.test.ts
 git commit -m "$(cat <<'EOF'
-feat(runner): flow-aware skip + Gate-7 REJECT routing + carryoverFeedback
+feat(runner): flow-aware skip + Gate-7 REJECT routing + carryoverFeedback + preserve-skipped on jump/skip
 
 - runPhaseLoop short-circuits 'skipped' phases so light advances P1→P5
   without touching 2/3/4 handlers.
@@ -1692,6 +1931,11 @@ feat(runner): flow-aware skip + Gate-7 REJECT routing + carryoverFeedback
   (ADR-4 + ADR-14).
 - handleInteractivePhase clears state.carryoverFeedback on Phase 5
   success so it is only consumed once.
+- consumePendingAction (inner.ts) and SIGUSR1 jump handler (signal.ts)
+  preserve 'skipped' when resetting downstream phases — prevents
+  resurrecting light-only skipped phases after a jump.
+- jump.ts rejects jump targets whose current status is 'skipped' with
+  a clear error (light runs cannot jump into P2/P3/P4).
 
 Full flow behaviour unchanged: getReopenTarget('full', 7) === 5, which
 matches the previous previousInteractivePhase() result.
@@ -2284,7 +2528,11 @@ Anything that came up during plan-gate review but is not a P1 blocker lands here
     { "name": "state schema migration", "command": "pnpm vitest run tests/state.test.ts -t 'light-flow spec'" },
     { "name": "config helpers", "command": "pnpm vitest run tests/state.test.ts -t 'getPhaseArtifactFiles|getReopenTarget'" },
     { "name": "phase-1-light.md packaged to dist", "command": "test -f dist/src/context/prompts/phase-1-light.md" },
-    { "name": "CLI parser --light smoke test", "command": "pnpm vitest run tests/integration/lifecycle.test.ts -t '--light flag registration'" }
+    { "name": "phase-5-light.md packaged to dist", "command": "test -f dist/src/context/prompts/phase-5-light.md" },
+    { "name": "CLI parser --light smoke test", "command": "pnpm vitest run tests/integration/lifecycle.test.ts -t '--light flag registration'" },
+    { "name": "light Phase 5 prompt contract", "command": "pnpm vitest run tests/context/assembler.test.ts -t 'light \\+ phase 5 uses phase-5-light'" },
+    { "name": "light Gate 7 reviewer contract flow-aware (fresh + resume)", "command": "pnpm vitest run tests/context/assembler.test.ts tests/context/assembler-resume.test.ts -t '결합 design spec|4-phase light harness'" },
+    { "name": "jump/skip preserve 'skipped' invariant", "command": "pnpm vitest run tests/signal.test.ts tests/commands/jump.test.ts -t 'skipped'" }
   ]
 }
 ```
