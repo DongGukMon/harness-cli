@@ -155,6 +155,16 @@ export type PreflightItem = 'git' | 'head' | 'node' | 'claude' | 'claudeAtFile' 
 
 export type PhaseType = 'interactive' | 'gate' | 'verify' | 'terminal' | 'ui_only';
 
+// --- Claude interactive token usage (phase_end.claudeTokens) ---
+
+export interface ClaudeTokens {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheCreate: number;
+  total: number;
+}
+
 // --- Session Logging Events ---
 
 // Distributive Omit: applies Omit to each member of a union separately,
@@ -214,7 +224,7 @@ export type LogEvent =
   | (LogEventBase & { event: 'escalation'; phase: number; reason: 'gate-retry-limit' | 'gate-error' | 'verify-limit' | 'verify-error'; userChoice?: 'C' | 'S' | 'Q' | 'R' })
   | (LogEventBase & { event: 'force_pass'; phase: number; by: 'auto' | 'user' })
   | (LogEventBase & { event: 'verify_result'; passed: boolean; retryIndex: number; durationMs: number; failedChecks?: string[] })
-  | (LogEventBase & { event: 'phase_end'; phase: number; attemptId?: string | null; status: 'completed' | 'failed'; durationMs: number; details?: { reason: string } })
+  | (LogEventBase & { event: 'phase_end'; phase: number; attemptId?: string | null; status: 'completed' | 'failed'; durationMs: number; details?: { reason: string }; claudeTokens?: ClaudeTokens | null })
   | (LogEventBase & { event: 'state_anomaly'; kind: string; details: Record<string, unknown> })
   | (LogEventBase & { event: 'session_end'; status: 'completed' | 'paused' | 'interrupted'; totalWallMs: number });
 

@@ -17,6 +17,7 @@ import { normalizeArtifactCommit } from '../artifact.js';
 import { runInteractivePhase } from './interactive.js';
 import { runGatePhase } from './gate.js';
 import { runVerifyPhase } from './verify.js';
+import { readClaudeSessionUsage } from '../runners/claude-usage.js';
 import {
   promptChoice,
   printPhaseTransition,
@@ -233,6 +234,13 @@ export async function handleInteractivePhase(
   const reopenFromGate = isReopen ? (state.phaseReopenSource[String(phase)] ?? undefined) : undefined;
   const preset = getPhasePresetMeta(state, phase);
 
+  // Token capture helper: runner=claude → read ~/.claude/projects/<cwd>/<attemptId>.jsonl;
+  // runner=codex → return undefined so the field is omitted from phase_end entirely (§2.5).
+  const collectClaudeTokens = () =>
+    preset?.runner === 'claude'
+      ? readClaudeSessionUsage({ sessionId: attemptId, cwd, phaseStartTs })
+      : undefined;
+
   logger.logEvent({ event: 'phase_start', phase, attemptId, reopenFromGate, preset });
 
   // Clear the logging-only reopen source (keep phaseReopenFlags for runInteractivePhase)
@@ -271,12 +279,14 @@ export async function handleInteractivePhase(
           state.phases[String(phase)] = 'error';
           savePausedAtHead(state, cwd);
           writeState(runDir, state);
+          const tokens = collectClaudeTokens();
           logger.logEvent({
             event: 'phase_end',
             phase,
             attemptId,
             status: 'failed',
             durationMs: Date.now() - phaseStartTs,
+            ...(tokens !== undefined ? { claudeTokens: tokens } : {}),
           });
           return;
         }
@@ -303,12 +313,14 @@ export async function handleInteractivePhase(
       renderControlPanel(state);
       writeState(runDir, state);
 
+      const completedTokens = collectClaudeTokens();
       logger.logEvent({
         event: 'phase_end',
         phase,
         attemptId,
         status: 'completed',
         durationMs: Date.now() - phaseStartTs,
+        ...(completedTokens !== undefined ? { claudeTokens: completedTokens } : {}),
       });
 
       // Anomaly: phase 5 completed but reopen flag still set
@@ -325,21 +337,25 @@ export async function handleInteractivePhase(
       savePausedAtHead(state, cwd);
       printError(`Phase ${phase} failed`);
       writeState(runDir, state);
+      const failedTokens = collectClaudeTokens();
       logger.logEvent({
         event: 'phase_end',
         phase,
         attemptId,
         status: 'failed',
         durationMs: Date.now() - phaseStartTs,
+        ...(failedTokens !== undefined ? { claudeTokens: failedTokens } : {}),
       });
     }
   } catch (err) {
+    const thrownTokens = collectClaudeTokens();
     logger.logEvent({
       event: 'phase_end',
       phase,
       attemptId,
       status: 'failed',
       durationMs: Date.now() - phaseStartTs,
+      ...(thrownTokens !== undefined ? { claudeTokens: thrownTokens } : {}),
     });
     throw err;
   }
