@@ -150,8 +150,108 @@ export class FileSessionLogger implements SessionLogger {
     }
   }
 
-  finalizeSummary(_state: HarnessState): void {
-    // Implemented in Task 8
+  finalizeSummary(state: HarnessState): void {
+    if (this.disabled) return;
+    try {
+      const events = this.readEvents();
+      if (events.length === 0) return;
+
+      const startedAt = this.getStartedAt();
+      // Find LAST session_end (resumed runs append multiple; latest is authoritative)
+      const sessionEndEvent = [...events].reverse().find(e => e.event === 'session_end') as any;
+      const status = sessionEndEvent ? sessionEndEvent.status : 'interrupted';
+      const endedAt = sessionEndEvent ? sessionEndEvent.ts : events[events.length - 1].ts;
+      const totalWallMs = sessionEndEvent ? sessionEndEvent.totalWallMs : (endedAt - startedAt);
+
+      // Build phase_start map by (phase, attemptId) for phase_end pairing
+      const phaseStartMap = new Map<string, any>();
+      for (const e of events) {
+        if (e.event === 'phase_start' && e.attemptId) {
+          phaseStartMap.set(`${e.phase}:${e.attemptId}`, e);
+        }
+      }
+
+      const phases: Record<string, any> = {};
+      const seenVerdictKeys = new Set<string>();
+      const seenErrorPhases = new Set<number>();
+      let gateTokens = 0, gateRejects = 0, gateErrors = 0, escalations = 0, verifyFailures = 0, forcePasses = 0;
+
+      // First pass: collect authoritative event keys
+      for (const e of events) {
+        if ((e.event === 'gate_verdict' || e.event === 'gate_error') && !e.recoveredFromSidecar) {
+          if (e.event === 'gate_verdict') seenVerdictKeys.add(`${e.phase}:${e.retryIndex}`);
+          if (e.event === 'gate_error') seenErrorPhases.add(e.phase);
+        }
+      }
+
+      for (const e of events) {
+        const pstr = String((e as any).phase ?? '');
+        if (pstr && !phases[pstr]) phases[pstr] = { attempts: [], totalDurationMs: 0 };
+
+        if (e.event === 'phase_end') {
+          const startEvent = e.attemptId ? phaseStartMap.get(`${e.phase}:${e.attemptId}`) : null;
+          phases[pstr].attempts.push({
+            attemptId: e.attemptId ?? null,
+            startedAt: startEvent ? startEvent.ts : (e.ts - (e.durationMs ?? 0)),
+            durationMs: e.durationMs,
+            status: e.status,
+            reopenFromGate: startEvent?.reopenFromGate ?? null,
+          });
+          phases[pstr].totalDurationMs += (e.durationMs ?? 0);
+        } else if (e.event === 'gate_verdict') {
+          const key = `${e.phase}:${e.retryIndex}`;
+          if (e.recoveredFromSidecar && seenVerdictKeys.has(key)) continue;
+          phases[pstr].attempts.push({
+            retryIndex: e.retryIndex,
+            startedAt: e.ts - (e.durationMs ?? 0),
+            durationMs: e.durationMs,
+            runner: e.runner,
+            verdict: e.verdict,
+            tokensTotal: e.tokensTotal,
+          });
+          phases[pstr].totalDurationMs += (e.durationMs ?? 0);
+          if (e.tokensTotal) gateTokens += e.tokensTotal;
+          if (e.verdict === 'REJECT') gateRejects++;
+        } else if (e.event === 'gate_error') {
+          if (e.recoveredFromSidecar && seenErrorPhases.has(e.phase)) continue;
+          gateErrors++;
+        } else if (e.event === 'escalation') {
+          escalations++;
+        } else if (e.event === 'force_pass') {
+          forcePasses++;
+        } else if (e.event === 'verify_result' && !e.passed) {
+          verifyFailures++;
+        }
+      }
+
+      const summary = {
+        v: 1,
+        runId: this.runId,
+        repoKey: computeRepoKey(this.harnessDir),
+        startedAt,
+        endedAt,
+        totalWallMs,
+        status,
+        autoMode: state.autoMode,
+        phases,
+        totals: { gateTokens, gateRejects, gateErrors, escalations, verifyFailures, forcePasses },
+      };
+
+      const tmpPath = this.summaryPath + '.tmp';
+      fs.writeFileSync(tmpPath, JSON.stringify(summary, null, 2));
+      fs.renameSync(tmpPath, this.summaryPath);
+    } catch (err) {
+      this.warnOnce(`session logger: finalizeSummary failed — ${(err as Error).message}`);
+      this.disabled = true;
+    }
+  }
+
+  private readEvents(): any[] {
+    if (!fs.existsSync(this.eventsPath)) return [];
+    const raw = fs.readFileSync(this.eventsPath, 'utf-8');
+    return raw.trim().split('\n').filter(Boolean).map(l => {
+      try { return JSON.parse(l); } catch { return null; }
+    }).filter(Boolean);
   }
 
   close(): void { /* currently no-op */ }

@@ -199,3 +199,107 @@ describe('FileSessionLogger.logEvent', () => {
     expect(lines.length).toBe(2);
   });
 });
+
+describe('FileSessionLogger.finalizeSummary', () => {
+  it('writes summary.json atomically from events.jsonl', () => {
+    const harnessDir = makeTempHarnessDir();
+    const sessionsRoot = path.join(harnessDir, 'sessions-root');
+    const logger = new FileSessionLogger('runH', harnessDir, { sessionsRoot });
+    logger.writeMeta({ task: 't' });
+    logger.logEvent({ event: 'session_start', task: 't', autoMode: false, baseCommit: 'a', harnessVersion: 'v1' });
+    logger.logEvent({ event: 'phase_start', phase: 1, attemptId: 'a1' });
+    logger.logEvent({ event: 'phase_end', phase: 1, attemptId: 'a1', status: 'completed', durationMs: 300 });
+    logger.logEvent({ event: 'session_end', status: 'completed', totalWallMs: 1000 });
+
+    const state = { status: 'completed', autoMode: false } as HarnessState;
+    logger.finalizeSummary(state);
+
+    const repoKey = computeRepoKey(harnessDir);
+    const summaryPath = path.join(sessionsRoot, repoKey, 'runH', 'summary.json');
+    expect(fs.existsSync(summaryPath)).toBe(true);
+    const summary = JSON.parse(fs.readFileSync(summaryPath, 'utf-8'));
+    expect(summary.v).toBe(1);
+    expect(summary.runId).toBe('runH');
+    expect(summary.status).toBe('completed');
+    expect(summary.totalWallMs).toBe(1000);
+    expect(summary.phases['1'].attempts[0].durationMs).toBe(300);
+  });
+
+  it('pairs phase_start with phase_end to preserve reopenFromGate in summary attempts', () => {
+    const harnessDir = makeTempHarnessDir();
+    const sessionsRoot = path.join(harnessDir, 'sessions-root');
+    const logger = new FileSessionLogger('run-pair', harnessDir, { sessionsRoot });
+    logger.writeMeta({ task: 't' });
+    logger.logEvent({ event: 'phase_start', phase: 5, attemptId: 'a1' });
+    logger.logEvent({ event: 'phase_end', phase: 5, attemptId: 'a1', status: 'completed', durationMs: 100 });
+    logger.logEvent({ event: 'phase_start', phase: 5, attemptId: 'a2', reopenFromGate: 6 });
+    logger.logEvent({ event: 'phase_end', phase: 5, attemptId: 'a2', status: 'completed', durationMs: 200 });
+    logger.finalizeSummary({ status: 'completed', autoMode: false } as HarnessState);
+    const repoKey = computeRepoKey(harnessDir);
+    const summary = JSON.parse(fs.readFileSync(path.join(sessionsRoot, repoKey, 'run-pair', 'summary.json'), 'utf-8'));
+    const attempts = summary.phases['5'].attempts;
+    expect(attempts.length).toBe(2);
+    expect(attempts[0].reopenFromGate).toBeNull();
+    expect(attempts[1].reopenFromGate).toBe(6);
+  });
+
+  it('multiple session_end events: last one wins (paused→resumed→completed flow)', () => {
+    const harnessDir = makeTempHarnessDir();
+    const sessionsRoot = path.join(harnessDir, 'sessions-root');
+    const logger = new FileSessionLogger('run-multi-end', harnessDir, { sessionsRoot });
+    logger.writeMeta({ task: 't' });
+    logger.logEvent({ event: 'session_start', task: 't', autoMode: false, baseCommit: '', harnessVersion: 'v1' });
+    logger.logEvent({ event: 'phase_start', phase: 1 });
+    logger.logEvent({ event: 'session_end', status: 'paused', totalWallMs: 1000 });
+    logger.logEvent({ event: 'session_resumed', fromPhase: 1, stateStatus: 'paused' });
+    logger.logEvent({ event: 'phase_end', phase: 1, status: 'completed', durationMs: 500 });
+    logger.logEvent({ event: 'session_end', status: 'completed', totalWallMs: 5000 });
+
+    logger.finalizeSummary({ status: 'completed', autoMode: false } as HarnessState);
+    const repoKey = computeRepoKey(harnessDir);
+    const summary = JSON.parse(fs.readFileSync(path.join(sessionsRoot, repoKey, 'run-multi-end', 'summary.json'), 'utf-8'));
+    expect(summary.status).toBe('completed');
+    expect(summary.totalWallMs).toBe(5000);
+  });
+
+  it('status=interrupted if no session_end emitted', () => {
+    const harnessDir = makeTempHarnessDir();
+    const sessionsRoot = path.join(harnessDir, 'sessions-root');
+    const logger = new FileSessionLogger('runI', harnessDir, { sessionsRoot });
+    logger.writeMeta({ task: 't' });
+    logger.logEvent({ event: 'phase_start', phase: 1, attemptId: 'a1' });
+    const state = { status: 'in_progress', autoMode: false } as HarnessState;
+    logger.finalizeSummary(state);
+    const repoKey = computeRepoKey(harnessDir);
+    const summary = JSON.parse(fs.readFileSync(path.join(sessionsRoot, repoKey, 'runI', 'summary.json'), 'utf-8'));
+    expect(summary.status).toBe('interrupted');
+  });
+
+  it('drops gate_verdict with recoveredFromSidecar=true when authoritative exists on same (phase, retryIndex)', () => {
+    const harnessDir = makeTempHarnessDir();
+    const sessionsRoot = path.join(harnessDir, 'sessions-root');
+    const logger = new FileSessionLogger('runJ', harnessDir, { sessionsRoot });
+    logger.writeMeta({ task: 't' });
+    logger.logEvent({ event: 'gate_verdict', phase: 2, retryIndex: 0, runner: 'codex', verdict: 'APPROVE', durationMs: 30000, tokensTotal: 45000, recoveredFromSidecar: false });
+    logger.logEvent({ event: 'gate_verdict', phase: 2, retryIndex: 0, runner: 'codex', verdict: 'APPROVE', durationMs: 30000, tokensTotal: 45000, recoveredFromSidecar: true });
+    const state = { status: 'completed', autoMode: false } as HarnessState;
+    logger.finalizeSummary(state);
+    const repoKey = computeRepoKey(harnessDir);
+    const summary = JSON.parse(fs.readFileSync(path.join(sessionsRoot, repoKey, 'runJ', 'summary.json'), 'utf-8'));
+    expect(summary.phases['2'].attempts.length).toBe(1);
+  });
+
+  it('drops gate_error with recoveredFromSidecar=true when authoritative error exists for same phase', () => {
+    const harnessDir = makeTempHarnessDir();
+    const sessionsRoot = path.join(harnessDir, 'sessions-root');
+    const logger = new FileSessionLogger('runK', harnessDir, { sessionsRoot });
+    logger.writeMeta({ task: 't' });
+    logger.logEvent({ event: 'gate_error', phase: 2, retryIndex: 0, runner: 'codex', error: 'boom', durationMs: 5000, recoveredFromSidecar: false });
+    logger.logEvent({ event: 'gate_error', phase: 2, retryIndex: 0, runner: 'codex', error: 'boom', durationMs: 5000, recoveredFromSidecar: true });
+    const state = { status: 'completed', autoMode: false } as HarnessState;
+    logger.finalizeSummary(state);
+    const repoKey = computeRepoKey(harnessDir);
+    const summary = JSON.parse(fs.readFileSync(path.join(sessionsRoot, repoKey, 'runK', 'summary.json'), 'utf-8'));
+    expect(summary.totals.gateErrors).toBe(1);
+  });
+});
