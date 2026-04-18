@@ -558,6 +558,17 @@ describe('validatePhaseArtifacts — Phase 5', () => {
     const result = validatePhaseArtifacts(5, state, repoDir);
     expect(result).toBe(false);
   });
+
+  it('accepts zero-commit reopen when implCommit is already set', () => {
+    // A Phase 6 verify-failure reopen may require only gitignored artifact
+    // fixes (e.g., checklist.json). Claude writes the sentinel without new
+    // commits; validation must not fail.
+    const repoDir = createTestRepo();
+    const head = execSync('git rev-parse HEAD', { cwd: repoDir, encoding: 'utf-8' }).trim();
+    const state = makeState({ implRetryBase: head, implCommit: 'prior-impl-sha' });
+    const result = validatePhaseArtifacts(5, state, repoDir);
+    expect(result).toBe(true);
+  });
 });
 
 // ─── runInteractivePhase: advisor reminder ordering ──────────────────────────
@@ -612,6 +623,6 @@ describe('runInteractivePhase — advisor reminder fires before sendKeysToPane',
 
     expect(command).toContain('--dangerously-skip-permissions');
     expect(command).toContain('--effort');
-    expect(command).toContain('max');
+    expect(command).toContain('xHigh');
   });
 });
