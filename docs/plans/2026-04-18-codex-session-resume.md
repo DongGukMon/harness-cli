@@ -505,7 +505,43 @@ it('migrateState discards malformed GateSessionInfo entries', () => {
   expect(migrated.phaseCodexSessions['2']).toBeNull(); // empty sessionId → null
   expect(migrated.phaseCodexSessions['7']).toBeNull(); // invalid lastOutcome → null
 });
+
+// §5 상호작용 요구사항: graceful 종료 경로에서 저장된 세션 lineage가 디스크 round-trip을
+// 통과해 `harness resume`에서 동일 값으로 복원되어야 한다.
+it('phaseCodexSessions survives writeState → readState round-trip (§5)', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'state-persist-'));
+  const state = createInitialState('run-xyz', { /* ...필수 필드 채우기... */ } as any);
+  state.phaseCodexSessions['2'] = {
+    sessionId: 'sess-gate2-uuid',
+    runner: 'codex',
+    model: 'gpt-5-codex',
+    effort: 'high',
+    lastOutcome: 'reject',
+  };
+  state.phaseCodexSessions['7'] = {
+    sessionId: 'sess-gate7-uuid',
+    runner: 'codex',
+    model: 'gpt-5-codex',
+    effort: 'high',
+    lastOutcome: 'approve',
+  };
+  writeState(dir, state);
+  const restored = readState(dir);
+  expect(restored.phaseCodexSessions['2']).toEqual(state.phaseCodexSessions['2']);
+  expect(restored.phaseCodexSessions['4']).toBeNull();
+  expect(restored.phaseCodexSessions['7']).toEqual(state.phaseCodexSessions['7']);
+});
+
+// §5 in-flight crash 시나리오: Codex가 sessionId를 stdout에 찍었지만 state 저장 전에
+// 크래시하면 phaseCodexSessions[phase]는 null이어야 하고, 다음 resume은 fresh 경로를 탄다.
+// 여기서는 state 레벨 invariant만 검증 (fresh spawn 선택은 runGatePhase 테스트 영역).
+it('fresh state has phaseCodexSessions=null for all gates (in-flight crash invariant)', () => {
+  const state = createInitialState('run-abc', { /* ...필수 필드 채우기... */ } as any);
+  expect(state.phaseCodexSessions).toEqual({ '2': null, '4': null, '7': null });
+});
 ```
+
+위 테스트는 기존 `writeState`/`readState`를 그대로 사용하므로 Task 1/2 구현만으로 통과한다. 이로써 §5의 "graceful 경로 persist"와 "in-flight crash → fresh fallback" 두 시나리오의 **상태 레이어 계약**이 회귀 방지된다.
 
 - [ ] **Step 9: 전체 state 테스트 통과 확인**
 
@@ -826,11 +862,14 @@ interface RawExecInput {
 
 async function runCodexExecRaw(input: RawExecInput): Promise<RawExecResult> {
   const codexBin = resolveCodexBin();
+  // 주의: `codex exec resume`의 인자 순서는 `[SESSION_ID] [PROMPT]`가 positional (spec §2 CLI 계약).
+  // sessionId를 '--model' 같은 플래그 뒤에 두면 CLI가 flag value로 오인하거나 parser 에러가 날 수 있다.
+  // 반드시 'resume' 직후 sessionId → 플래그들 → prompt placeholder(`-`) 순서를 지킨다.
   const args = input.mode === 'resume'
-    ? ['exec', 'resume',
+    ? ['exec', 'resume', input.sessionId!,
        '--model', input.preset.model,
        '-c', `model_reasoning_effort="${input.preset.effort}"`,
-       input.sessionId!, '-']
+       '-']
     : ['exec',
        '--model', input.preset.model,
        '-c', `model_reasoning_effort="${input.preset.effort}"`,
@@ -1020,7 +1059,7 @@ function rawToError(
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { EventEmitter } from 'events';
 import { runCodexGate } from '../../src/runners/codex.js';
-import type { ModelPreset } from '../../src/config.js';
+import { GATE_TIMEOUT_MS, type ModelPreset } from '../../src/config.js';
 
 // child_process.spawn을 모킹해 args/stdout/stderr/exitCode를 제어
 vi.mock('child_process', async (importOriginal) => {
@@ -1030,6 +1069,8 @@ vi.mock('child_process', async (importOriginal) => {
 
 function makeMockChild(opts: {
   stdout?: string; stderr?: string; exitCode?: number; delayMs?: number;
+  /** true면 data emit은 하되 'close' 이벤트를 영원히 발생시키지 않음 — timeout 경로 테스트용 */
+  neverClose?: boolean;
 }): any {
   const emitter: any = new EventEmitter();
   emitter.stdin = { write: vi.fn(), end: vi.fn() };
@@ -1039,7 +1080,7 @@ function makeMockChild(opts: {
   setTimeout(() => {
     if (opts.stdout) emitter.stdout.emit('data', Buffer.from(opts.stdout));
     if (opts.stderr) emitter.stderr.emit('data', Buffer.from(opts.stderr));
-    emitter.emit('close', opts.exitCode ?? 0);
+    if (!opts.neverClose) emitter.emit('close', opts.exitCode ?? 0);
   }, opts.delayMs ?? 5);
   return emitter;
 }
@@ -1124,13 +1165,51 @@ describe('runCodexGate — session_missing fallback', () => {
     }
   });
 
-  it('does NOT fall back on timeout', async () => {
+  it('does NOT fall back on timeout (category=timeout → error, no second spawn)', async () => {
+    vi.useFakeTimers();
+    try {
+      const cp = await import('child_process');
+      (cp.spawn as any).mockImplementationOnce(() =>
+        // exit/close 이벤트를 영원히 보내지 않는 child
+        makeMockChild({ stdout: '', neverClose: true })
+      );
+      const pending = runCodexGate(
+        2, preset, 'resume prompt', '/tmp/h', '/tmp/c', 'some-session', () => 'fresh'
+      );
+      // GATE_TIMEOUT_MS 초과 시점까지 시계를 전진
+      await vi.advanceTimersByTimeAsync(GATE_TIMEOUT_MS + 1000);
+      const result = await pending;
+      expect(result.type).toBe('error');
+      if (result.type === 'error') {
+        expect(result.resumeFallback).toBe(false);
+        expect(result.category).toBe('timeout');
+      }
+      // 두 번째 spawn이 호출되지 않음 (fallback 미발생)
+      expect((cp.spawn as any).mock.calls.length).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does NOT fall back on success_no_verdict (exit 0이지만 ## Verdict 헤더 없음)', async () => {
     const cp = await import('child_process');
     (cp.spawn as any).mockImplementationOnce(() =>
-      // exit를 안 보내서 timeout 발생 시뮬
-      makeMockChild({ stdout: '', delayMs: 10_000_000 })
+      makeMockChild({
+        stdout: `session id: live-session\ntokens used\n10\n\nReviewer replied but never emitted a Verdict header.\n`,
+        exitCode: 0,
+      })
     );
-    // GATE_TIMEOUT_MS를 줄여 테스트 가속화가 필요하면 별도 모킹. 여기서는 개념만 검증.
+    const result = await runCodexGate(
+      2, preset, 'resume prompt', '/tmp/h', '/tmp/c', 'live-session', () => 'fresh'
+    );
+    expect(result.type).toBe('error');
+    if (result.type === 'error') {
+      expect(result.resumeFallback).toBe(false);
+      expect(result.category).toBe('success_no_verdict');
+      expect(result.codexSessionId).toBe('live-session');
+    }
+    // 두 번째 spawn 없음 — success_no_verdict은 "리뷰 자체 문제"로 fallback 아님
+    expect((cp.spawn as any).mock.calls.length).toBe(1);
   });
 });
 
@@ -1183,7 +1262,20 @@ git commit -m "feat(runners/codex): add resume + session_missing fallback"
 - Modify: `src/phases/gate.ts`
 - Create: `tests/phases/gate-resume.test.ts`
 
-- [ ] **Step 1: `checkGateSidecars`에 `sourcePreset` hydration 추가**
+**TDD 순서 (테스트 먼저)**:
+
+- [ ] **Step 1 (TDD): 실패하는 gate-resume 테스트 파일 먼저 작성**
+
+아래 Step 8에 정의된 테스트 내용을 `tests/phases/gate-resume.test.ts`로 먼저 생성하고 실행.
+
+```bash
+pnpm -s vitest run tests/phases/gate-resume.test.ts
+```
+Expected: 다수 테스트가 implementation 없음으로 실패 (함수 미존재 또는 기존 구현 mismatch).
+
+이후 구현 단계로 진행.
+
+- [ ] **Step 2: `checkGateSidecars`에 `sourcePreset` hydration 추가**
 
 `src/phases/gate.ts`의 `checkGateSidecars` 함수 내 metadata 블록에 한 줄 추가:
 
@@ -1198,7 +1290,7 @@ git commit -m "feat(runners/codex): add resume + session_missing fallback"
   };
 ```
 
-- [ ] **Step 2: `runGatePhase`에서 sidecar replay compatibility gate 구현**
+- [ ] **Step 3: `runGatePhase`에서 sidecar replay compatibility gate 구현**
 
 `runGatePhase`의 Step 1 sidecar replay 블록을 교체:
 
@@ -1258,7 +1350,7 @@ git commit -m "feat(runners/codex): add resume + session_missing fallback"
 
 상단 import에 `getPresetById` 추가(아직 없다면).
 
-- [ ] **Step 3: `runGatePhase` 경로 분기 구현 (resume vs fresh)**
+- [ ] **Step 4: `runGatePhase` 경로 분기 구현 (resume vs fresh)**
 
 `runGatePhase`의 기존 Step 3-5(assemble prompt + dispatch)를 다음으로 교체:
 
@@ -1334,7 +1426,7 @@ git commit -m "feat(runners/codex): add resume + session_missing fallback"
 
 `GateSessionInfo` import 추가 필요 (`src/types.ts`에서).
 
-- [ ] **Step 4: Step 6(세션 저장) 추가**
+- [ ] **Step 5: Step 6(세션 저장) 추가**
 
 Dispatch 이후, sidecar 쓰기 전에:
 
@@ -1761,6 +1853,32 @@ describe('End-to-end: session_missing triggers fallback and new session id saved
   });
 });
 
+// §5 "Gate 2 호출 완료 후 state persist → crash → `harness resume`" 시나리오:
+// state가 디스크 round-trip을 거친 뒤 runGatePhase가 저장된 sessionId로 resume 경로를 탄다.
+describe('End-to-end: crash/resume — persisted session drives resume path (§5)', () => {
+  it('after writeState → readState, next runGatePhase call resumes with saved id', async () => {
+    const { writeState, readState } = await import('../../src/state.js');
+    const state = makeState();
+    state.phaseCodexSessions['2'] = {
+      sessionId: 'persisted-sess', runner: 'codex', model: 'gpt-5-codex', effort: 'high',
+      lastOutcome: 'reject',
+    };
+    writeState(runDir, state);
+    const restored = readState(runDir);
+    expect(restored.phaseCodexSessions['2']?.sessionId).toBe('persisted-sess');
+
+    (runCodexGate as any).mockResolvedValueOnce({
+      type: 'verdict', verdict: 'APPROVE', comments: '', rawOutput: '',
+      runner: 'codex', codexSessionId: 'persisted-sess',
+      sourcePreset: { model: 'gpt-5-codex', effort: 'high' },
+      resumedFrom: 'persisted-sess', resumeFallback: false,
+    } as GatePhaseResult);
+    await runGatePhase(2, restored, runDir, runDir, runDir);
+    // 6번째 인자(resumeSessionId)가 복원된 id여야 함
+    expect((runCodexGate as any).mock.calls[0][5]).toBe('persisted-sess');
+  });
+});
+
 describe('End-to-end: preset change invalidates session + sidecars', () => {
   it('subsequent gate call uses fresh path after preset change', async () => {
     const state = makeState();
@@ -1890,6 +2008,12 @@ git add -u && git commit -m "chore: lint fixes for codex session resume"
   - Pass: state.ts (정의 2) + inner.ts (2 호출) + signal.ts (1 호출) = 5+
 - [ ] **EC-13**: resume-sensitive 코드 경로 존재 확인
   - Check: `grep -l "resume" src/runners/codex.ts`와 `grep -l "buildFreshPromptOnFallback" src/phases/gate.ts` 각각 hit
+- [ ] **EC-14**: `pnpm -s vitest run tests/state.test.ts -t "phaseCodexSessions survives"` all passed
+  - Pass: §5 graceful-resume persistence round-trip + in-flight crash invariant 테스트 통과 (fail 0)
+- [ ] **EC-15**: `pnpm -s vitest run tests/integration/codex-session-resume.test.ts -t "persisted session drives resume"` all passed
+  - Pass: §5 `harness resume` end-to-end path가 저장된 sessionId로 resume 경로를 탐
+- [ ] **EC-16**: `pnpm -s vitest run tests/commands/inner.test.ts tests/signal.test.ts` all passed
+  - Pass: §4.8/§4.9 authoritative mutation sites(inner.ts, signal.ts)의 behavioral test가 통과 — 단순 presence grep을 넘어 "preset 변경/jump 후 세션·sidecar가 실제로 무효화되는지" 회귀 방지
 
 ### Spec traceability (spec 요구사항 → 구현 태스크 매핑)
 
@@ -1902,9 +2026,10 @@ git add -u && git commit -m "chore: lint fixes for codex session resume"
 | §4.5 Fallback | session_missing 감지 + closure | Task 4, 5 | EC-4, EC-6 |
 | §4.6 Logging | resumedFrom/resumeFallback 필드 | Task 1, 6 | EC-1, EC-7 |
 | §4.7 Sidecar replay compat gate | replay-level + hydration-level | Task 5 | EC-5 |
-| §4.8 Preset 변경 invalidation | helper + mutation sites | Task 2, 7 | EC-2, EC-12 |
-| §4.9 Jump invalidation | helper + SIGUSR1 + consumePendingAction | Task 2, 7 | EC-2, EC-12 |
+| §4.8 Preset 변경 invalidation | helper + inner.ts mutation site (behavioral test) | Task 2, 7 | EC-2, **EC-16**, EC-12 |
+| §4.9 Jump invalidation | helper + SIGUSR1 + consumePendingAction (behavioral test) | Task 2, 7 | EC-2, **EC-16**, EC-12 |
 | §4.10 Verdict redirect guard | runner.ts 공통 guard | Task 6 | EC-7 |
+| §5 Harness resume / 크래시 복구 | state round-trip persist, in-flight crash invariant, persisted-id resume dispatch | Task 1, 2, 8 | **EC-14, EC-15** |
 | §9 Open questions | pilot 결과 spec 기록 | Task 0 | EC-9 |
 
 ### Subjective criteria (리뷰어 판단)
