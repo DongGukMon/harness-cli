@@ -9,7 +9,6 @@ import { writeState } from '../state.js';
 import { getHead } from '../git.js';
 import { isPidAlive } from '../process.js';
 import { assembleInteractivePrompt } from '../context/assembler.js';
-import { printAdvisorReminder } from '../ui.js';
 import { runClaudeInteractive } from '../runners/claude.js';
 
 export interface InteractiveResult {
@@ -200,7 +199,6 @@ export async function runInteractivePhase(
     const { pid: claudePid } = await runClaudeInteractive(
       phase, updatedState, preset, harnessDir, runDir, promptFile,
     );
-    printAdvisorReminder(phase, preset.runner);
     const sentinelPath = path.join(runDir, `phase-${phase}.done`);
     const resolvedAttemptId = updatedState.phaseAttemptId[String(phase)] ?? attemptId;
     const result = await waitForPhaseCompletion(
@@ -208,7 +206,6 @@ export async function runInteractivePhase(
     );
     return { ...result, attemptId };
   } else {
-    // Codex runner — printAdvisorReminder is a no-op for codex, omit call
     const { runCodexInteractive } = await import('../runners/codex.js');
     const result = await runCodexInteractive(
       phase, updatedState, preset, harnessDir, runDir, promptFile, cwd,
