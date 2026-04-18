@@ -222,8 +222,8 @@ describe('readClaudeSessionUsage', () => {
     });
   });
 
-  // Case 7 — project dir missing entirely → null + single warn
-  it('returns null with a single stderr warning when the project dir does not exist', () => {
+  // Case 7 — project dir missing entirely (ENOENT) → null, no warn
+  it('returns null silently when the project dir does not exist (ENOENT)', () => {
     const result = readClaudeSessionUsage({
       sessionId: ATTEMPT_ID,
       cwd: CWD,
@@ -232,7 +232,35 @@ describe('readClaudeSessionUsage', () => {
     });
     expect(result).toBeNull();
     const writes = stderrSpy.mock.calls.map((c: any[]) => String(c[0]));
-    expect(writes.length).toBe(1);
+    expect(writes.length).toBe(0);
+  });
+
+  // Case 10 — readdirSync throws non-ENOENT → null + single warn
+  it('returns null with a single stderr warning when readdirSync throws a non-ENOENT error', () => {
+    const orig = fs.readdirSync;
+    const readdirSpy = vi.spyOn(fs, 'readdirSync').mockImplementation(((p: any, ...rest: any[]) => {
+      if (typeof p === 'string' && p.includes('claude')) {
+        const err: NodeJS.ErrnoException = new Error('Permission denied');
+        err.code = 'EACCES';
+        throw err;
+      }
+      return (orig as any)(p, ...rest);
+    }) as any);
+
+    try {
+      const result = readClaudeSessionUsage({
+        sessionId: ATTEMPT_ID,
+        cwd: CWD,
+        phaseStartTs: PHASE_START,
+        homeDir: tmpHome,
+      });
+      expect(result).toBeNull();
+      const writes = stderrSpy.mock.calls.map((c: any[]) => String(c[0]));
+      const warnWrites = writes.filter((w: string) => w.includes('project dir unreadable'));
+      expect(warnWrites).toHaveLength(1);
+    } finally {
+      readdirSpy.mockRestore();
+    }
   });
 
   // Case 8 — tie-break by lexical filename when two candidates share a timestamp

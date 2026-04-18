@@ -131,11 +131,15 @@ export async function resumeCommand(runId?: string, options: ResumeOptions = {})
       } else if (state.tmuxControlWindow) {
         killWindow(state.tmuxSession, state.tmuxControlWindow);
       }
-      // Persist cleared control-pane references before recursion so the next
-      // call doesn't re-enter this stale branch (reused-mode infinite-loop fix)
+      // Clear all tmux references before recursion so Case 3 re-derives
+      // session + mode from isInsideTmux(). Without clearing tmuxSession the
+      // reused-mode recursive call re-enters Case 2 (tmuxAlive still true)
+      // and loops forever.
       state.tmuxControlPane = '';
       state.tmuxControlWindow = '';
       state.tmuxWindows = [];
+      state.tmuxSession = '';
+      state.tmuxMode = 'dedicated';
       writeState(runDir, state);
       releaseLock(harnessDir, targetRunId);
       // Re-enter resume which will hit Case 3

@@ -200,9 +200,9 @@ describe('resumeCommand', () => {
     expect(vi.mocked(tmux.createSession)).not.toHaveBeenCalled();
   });
 
-  it('Case 2 stale pane (reused-mode): clears tmuxControlPane/Window/Windows in state.json then reaches Case 3', async () => {
+  it('Case 2 stale pane (reused-mode): outer session stays alive, recursion creates new control window', async () => {
     const { harnessDir, runId, runDir } = setupRun(repo, {
-      tmuxSession: 'harness-test',
+      tmuxSession: 'harness-reused',
       tmuxControlPane: '%stale',
       tmuxControlWindow: '@stale',
       tmuxWindows: ['@stale'],
@@ -214,33 +214,40 @@ describe('resumeCommand', () => {
     const lock = await import('../../src/lock.js');
     const proc = await import('../../src/process.js');
 
+    vi.mocked(tmux.killWindow).mockClear();
     vi.mocked(tmux.createSession).mockClear();
     vi.mocked(tmux.createWindow).mockClear();
     vi.mocked(lock.releaseLock).mockClear();
 
-    // First call: reused session alive, inner dead, control pane stale
-    // Second (recursive) call: sessionExists returns false → Case 3
-    vi.mocked(tmux.sessionExists)
-      .mockReturnValueOnce(true)   // first call: tmuxAlive → Case 2 stale path
-      .mockReturnValue(false);     // recursive call: no session → Case 3
+    // Outer tmux session stays alive throughout. In the recursive call the
+    // short-circuit `state.tmuxSession !== ''` evaluates false (we cleared it),
+    // so sessionExists is never reached on the second call.
+    vi.mocked(tmux.sessionExists).mockReturnValue(true);
     vi.mocked(tmux.paneExists).mockReturnValue(false);
+    vi.mocked(tmux.isInsideTmux).mockReturnValue(true); // reused Case 3 path
+    vi.mocked(tmux.getCurrentSessionName).mockReturnValue('harness-reused');
+    vi.mocked(tmux.getActiveWindowId).mockReturnValue('@orig');
+    vi.mocked(tmux.createWindow).mockReturnValue('@new-ctrl');
+    vi.mocked(tmux.getDefaultPaneId).mockReturnValue('%new-ctrl');
     vi.mocked(lock.readLock).mockReturnValue({ cliPid: 999, handoff: false, childPid: null, childPhase: null, runId, startedAt: null, childStartedAt: null });
     vi.mocked(proc.isPidAlive).mockReturnValue(false);
-    vi.mocked(tmux.isInsideTmux).mockReturnValue(false); // Case 3 dedicated path
+    vi.mocked(lock.pollForHandoffComplete).mockReturnValue(true);
 
     await resumeCommand(undefined, { root: repo.path });
 
-    // After the stale-branch: state.json must have cleared references
+    // Final state: all control refs cleared then re-derived by Case 3 reused path
     const savedState = JSON.parse(readFileSync(join(runDir, 'state.json'), 'utf-8'));
-    expect(savedState.tmuxControlPane).toBe('');
-    expect(savedState.tmuxControlWindow).toBe('');
-    expect(savedState.tmuxWindows).toEqual([]);
+    expect(savedState.tmuxControlPane).toBe('');                      // never set in reused Case 3
+    expect(savedState.tmuxMode).toBe('reused');                       // re-derived in Case 3
+    expect(savedState.tmuxSession).toBe('harness-reused');            // re-derived in Case 3
+    expect(savedState.tmuxControlWindow).toBe('@new-ctrl');           // Case 3 reused path assigns
+    expect(savedState.tmuxWindows).toEqual(['@new-ctrl']);            // Case 3 reused path pushes
 
-    // releaseLock must have been called before the recursive call
+    // Stale cleanup path + recursion + reused Case 3
+    expect(vi.mocked(tmux.killWindow)).toHaveBeenCalledWith('harness-reused', '@stale');
     expect(vi.mocked(lock.releaseLock)).toHaveBeenCalled();
-
-    // Case 3 (dedicated) should have been reached via the recursive call
-    expect(vi.mocked(tmux.createSession)).toHaveBeenCalled();
+    expect(vi.mocked(tmux.createWindow)).toHaveBeenCalledWith('harness-reused', 'harness-ctrl', '');
+    expect(vi.mocked(tmux.createSession)).not.toHaveBeenCalled();
   });
 
   describe('resumeCommand — loggingEnabled inheritance', () => {

@@ -99,7 +99,11 @@ export function readClaudeSessionUsage(input: ReadClaudeSessionUsageInput): Clau
   try {
     entries = fs.readdirSync(projectDir);
   } catch (err) {
-    warn(`project dir unreadable ${projectDir}: ${(err as Error).message}`);
+    // ENOENT means no claude session was ever recorded for this cwd (normal for
+    // test tmpdirs and fresh project dirs). Other errors (EACCES, EIO) still warn.
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+      warn(`project dir unreadable ${projectDir}: ${(err as Error).message}`);
+    }
     return null;
   }
 
