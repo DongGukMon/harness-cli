@@ -32,6 +32,11 @@ APPROVE or REJECT
 One to two sentences.
 
 Rules: APPROVE only if zero P0/P1 findings. Every comment must cite a specific location.
+
+Scope rules:
+- Review ONLY the artifacts provided in this prompt (e.g. <spec>, <plan>, <eval_report>, <diff>).
+- Do NOT apply personal or workspace-level conventions (commit-message formats, naming rules, protocols) unless they are explicitly cited in the provided artifacts.
+- Do NOT flag artifacts that are outside this phase's scope as "missing" — later harness phases produce plan/impl/eval artifacts.
 `;
 
 function readTemplateFile(filename: string): string {

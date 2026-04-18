@@ -150,6 +150,22 @@ describe('Gate 2 prompt', () => {
     const prompt = result as string;
     expect(prompt).toContain('Every comment must cite a specific location');
   });
+
+  it('includes scope rules that forbid external conventions and not-yet-produced artifacts', () => {
+    const cwd = makeTmpDir();
+    const state = makeState();
+
+    const specAbsPath = path.join(cwd, state.artifacts.spec);
+    fs.mkdirSync(path.dirname(specAbsPath), { recursive: true });
+    fs.writeFileSync(specAbsPath, '# Spec');
+
+    const result = assembleGatePrompt(2, state, '/tmp/harness', cwd);
+    expect(typeof result).toBe('string');
+    const prompt = result as string;
+    expect(prompt).toContain('Scope rules:');
+    expect(prompt).toContain('personal or workspace-level conventions');
+    expect(prompt).toContain('later harness phases produce plan/impl/eval artifacts');
+  });
 });
 
 describe('Gate size limits', () => {
