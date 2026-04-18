@@ -14,6 +14,14 @@
 
 **Tech Stack:** TypeScript (Node.js ≥18), vitest, markdown, tsc + esbuild-style copy-assets.
 
+## Resume Behavior Decision (spec §11 항목 선택)
+
+Spec §11은 `harness resume` 시 진행 중 run의 프롬프트 처리를 **"기존 프롬프트로 완주" vs "force rev-3 전환"** 중 택일로 열어둠. 본 plan은 **"force rev-3 전환"**을 선택한다.
+
+**근거**: rev-3 wrapper 스킬은 기존 phase-N.md의 **superset**이다 — 같은 artifact 경로, 같은 sentinel 규칙, 같은 `{runId}/phase-N.done` 계약을 유지하면서 working discipline만 추가. 따라서 reopen된 old run이 새 프롬프트를 받아도 수행하지 못할 동작이 없다. 반대로 prompt-format versioning 또는 per-run snapshot을 도입하는 건 spec 스코프 대비 과한 복잡도(state 필드 추가, 저장 포맷 마이그레이션, resume 경로 갈래 처리).
+
+**검증**: Task 7에 **resume-smoke regression test** 추가(실제 state.json 샘플을 로드 → `assembleInteractivePrompt` 호출 → 새 wrapper 내용이 정상 렌더되고 artifact 경로가 기존 state와 일치하는지 확인). 이 테스트는 "rev-3 적용 후 임의의 기존 run state로 재진입해도 프롬프트가 valid하다"를 보장.
+
 ---
 
 ## File Structure
@@ -664,6 +672,59 @@ describe('assembleInteractivePrompt wrapper skill inline', () => {
     expect(prompt).toContain('superpowers:subagent-driven-development');
   });
 });
+
+describe('wrapper contract invariants — literal (per spec §4/§5)', () => {
+  // spec §4/§5 outputs contract가 rendered prompt에 literal로 들어갔는지 확인.
+  // loose string match만으로는 프롬프트가 잘못 그라운딩될 수 있음. 구체 경로/문구 그대로 검증.
+
+  it('phase 1 — spec output artifact path + sentinel rule literal', () => {
+    const state = stubState(tmp);
+    state.runId = 'rid-1';
+    state.artifacts.spec = '/abs/spec-out.md';
+    state.artifacts.decisionLog = '/abs/decisions-out.md';
+    const prompt = assembleInteractivePrompt(1, state, '/tmp/harness');
+    // output artifacts rendered with their exact paths
+    expect(prompt).toContain('/abs/spec-out.md');
+    expect(prompt).toContain('/abs/decisions-out.md');
+    // sentinel literal path + run-scoped
+    expect(prompt).toMatch(/\.harness\/rid-1\/phase-1\.done/);
+    // "sentinel 생성 후 추가 작업 금지" invariant literal
+    expect(prompt).toMatch(/sentinel.*추가 작업 금지/);
+    // Context & Decisions section requirement surfaced
+    expect(prompt).toMatch(/Context & Decisions/);
+  });
+
+  it('phase 3 — plan + checklist paths + JSON schema literal + isolated-shell note', () => {
+    const state = stubState(tmp);
+    state.runId = 'rid-3';
+    state.artifacts.plan = '/abs/plan-out.md';
+    state.artifacts.checklist = '/abs/checklist-out.json';
+    const prompt = assembleInteractivePrompt(3, state, '/tmp/harness');
+    expect(prompt).toContain('/abs/plan-out.md');
+    expect(prompt).toContain('/abs/checklist-out.json');
+    expect(prompt).toMatch(/\.harness\/rid-3\/phase-3\.done/);
+    // checklist schema literal (checks / name / command keys)
+    expect(prompt).toMatch(/"checks"\s*:/);
+    expect(prompt).toMatch(/"name"/);
+    expect(prompt).toMatch(/"command"/);
+    // qa #4 isolated-shell guidance literal
+    expect(prompt).toMatch(/격리된 셸 환경/);
+  });
+
+  it('phase 5 — commit-per-task rule + sentinel-after-all-commits + playbook absolute refs', () => {
+    const state = stubState(tmp);
+    state.runId = 'rid-5';
+    const prompt = assembleInteractivePrompt(5, state, '/tmp/harness');
+    expect(prompt).toMatch(/\.harness\/rid-5\/phase-5\.done/);
+    // "After each task completes, git commit" override literal
+    expect(prompt).toMatch(/After each task completes, git commit/);
+    // "sentinel 이전에 모든 변경사항이 git에 커밋" invariant literal
+    expect(prompt).toMatch(/sentinel 이전에 모든 변경사항이.*커밋/);
+    // playbook @-references resolved literally (context-engineering + git-workflow)
+    expect(prompt).toMatch(/playbooks\/context-engineering\.md/);
+    expect(prompt).toMatch(/playbooks\/git-workflow-and-versioning\.md/);
+  });
+});
 ```
 
 Run:
@@ -944,6 +1005,30 @@ describe('prompt size and qa-integration guards', () => {
     // Wrapper body mentions Open Questions in both Context (gate-level) and Invariants — at least 2 hits
     expect((prompt.match(/Open Questions/g) || []).length).toBeGreaterThanOrEqual(2);
   });
+
+  it('resume-smoke — pre-rev-3 state.json loads and re-renders under rev-3 wrapper without error (spec §11 force-rev-3 decision)', () => {
+    // Simulate: a run that started pre-rev-3 is resumed. state.json has no wrapper-specific fields
+    // (wrapper 구조는 phaseCodexSessions 같은 state 변경 없음 — spec §11 보장). 현 assembler가
+    // 기존 state를 받아 new wrapper 템플릿으로 문제없이 렌더되는지 smoke-check.
+    const legacyState = stubState(tmp);
+    // 기존 run state는 artifact 경로에 .harness/<runId>/... 형태만 가짐 (스키마 v1 동일)
+    legacyState.runId = 'legacy-run-id';
+    legacyState.artifacts.spec = path.join('.harness', 'legacy-run-id', 'spec.md');
+    legacyState.artifacts.plan = path.join('.harness', 'legacy-run-id', 'plan.md');
+    legacyState.artifacts.decisionLog = path.join('.harness', 'legacy-run-id', 'decisions.md');
+    legacyState.artifacts.checklist = path.join('.harness', 'legacy-run-id', 'checklist.json');
+    legacyState.phaseAttemptId = { '1': 'legacy-a1', '3': 'legacy-a3', '5': 'legacy-a5' };
+
+    for (const phase of [1, 3, 5] as const) {
+      const prompt = assembleInteractivePrompt(phase, legacyState, '/tmp/harness');
+      // 렌더 성공 + runId/attemptId/경로가 프롬프트에 올바르게 들어감
+      expect(prompt.length).toBeGreaterThan(100);
+      expect(prompt).toContain('legacy-run-id');
+      expect(prompt).toContain(`legacy-a${phase}`);
+      expect(prompt).not.toContain('{{runId}}');
+      expect(prompt).not.toContain('{{phaseAttemptId}}');
+    }
+  });
 });
 ```
 
@@ -1026,6 +1111,21 @@ Phase 6 verify용 머신 판독 checklist. Plan 구현 완료 시 `.harness/<run
 4. **`/harness` 슬래시 커맨드 스킬 업데이트 여부** — spec §9 Option A/B/C. 본 plan 범위 **밖**. 결정은 implementation 완료 후.
 5. **Claude 플러그인 배포** — spec §8 follow-up. 별도 PR.
 6. **`test-todo` 등 dog-fooding project에 새 assembler 적용 타이밍** — 이 repo의 `harness` CLI 빌드/링크 경로가 독립 — dog-food 프로젝트는 새 dist를 참조만 하면 됨.
+
+## TODO — Deferred from gate-plan review (2026-04-18, Codex round 1)
+
+사용자 preference에 따라 P1만 수정·재검증하고 P2는 본 섹션에 기록 후 진행한다. Implementation 중 처리할 것:
+
+- **[P2] Task dependency graph 일관성** (Codex flagged): 현 graph는 `T3 → T4 → T5`지만 Task 4 Step 3 주석은 "T5 선행 필요 또는 인터리빙"이라 명시됨. 두 경로 중 하나로 정리 필요:
+  - Option 1: graph를 `T3 → T5 → T4`로 재정렬
+  - Option 2: T4와 T5를 단일 "prompt assembly" 태스크로 병합
+  - 실행 시 결정. 본 plan 문서는 Task 4 Step 3 권장 순서("T4 Step 2 → T5 Step 2~4 → T4 Step 3")를 **authoritative**로 취급.
+
+- **[P2] Eval checklist lint duplication** (Codex flagged): `ESLint clean` 항목(`pnpm lint`)이 이 repo에서 `tsc --noEmit`의 alias(`package.json` `"lint": "tsc --noEmit"`)이므로 `TypeScript compile clean`과 동일 signal. Implementation 진입 시 다음 중 선택:
+  - 항목 제거 (duplicate 제거)
+  - 실 eslint 도입 후 차별화 (추가 scope — 권장 X)
+  - 이름 바꾸기("Type-check alias signal")로 의도 명시
+  - 현 plan은 두 항목 유지 + 본 TODO로 처리.
 
 ---
 
