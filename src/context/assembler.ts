@@ -80,6 +80,20 @@ function readTemplateFile(filename: string): string {
   return fs.readFileSync(templatePath, 'utf-8');
 }
 
+const WRAPPER_SKILL_BY_PHASE: Record<1 | 3 | 5, string> = {
+  1: 'harness-phase-1-spec.md',
+  3: 'harness-phase-3-plan.md',
+  5: 'harness-phase-5-implement.md',
+};
+
+// Strip YAML frontmatter (--- ... ---) so the wrapper body can be inlined
+// directly into the phase template without duplicating the metadata header.
+function readWrapperSkill(phase: 1 | 3 | 5): string {
+  const skillPath = path.join(__dirname, 'skills', WRAPPER_SKILL_BY_PHASE[phase]);
+  const raw = fs.readFileSync(skillPath, 'utf-8');
+  return raw.replace(/^---\n[\s\S]*?\n---\n?/, '');
+}
+
 function renderTemplate(template: string, vars: Record<string, string | undefined>): string {
   // Handle {{#if variable}}...{{/if}} blocks
   let result = template.replace(
@@ -308,8 +322,6 @@ export function assembleInteractivePrompt(
   state: HarnessState,
   harnessDir: string
 ): string {
-  const templateFile = `phase-${phase}.md`;
-  const template = readTemplateFile(templateFile);
   const phaseAttemptId = state.phaseAttemptId[String(phase)] ?? '';
 
   // Phase 1 uses task.md file path (not raw task string) per spec
@@ -323,6 +335,10 @@ export function assembleInteractivePrompt(
     .map((p) => `- 이전 피드백 (반드시 반영): ${p}`)
     .join('\n');
 
+  // playbookDir: resolved at runtime from assembler module location.
+  // dev: src/context/playbooks/ ; dist: dist/src/context/playbooks/
+  const playbookDir = path.join(__dirname, 'playbooks');
+
   const vars: Record<string, string | undefined> = {
     task_path: taskMdPath,
     spec_path: state.artifacts.spec,
@@ -334,9 +350,14 @@ export function assembleInteractivePrompt(
     feedback_path: feedbackPath,
     feedback_paths: feedbackPathsList.length > 0 ? feedbackPathsList : undefined,
     harnessDir,
+    playbookDir,
   };
 
-  return renderTemplate(template, vars);
+  // Two-pass render: wrapper body vars resolve first, then thin phase template
+  // injects the rendered wrapper at {{wrapper_skill}} and resolves its own vars.
+  const wrapperSkillRendered = renderTemplate(readWrapperSkill(phase), vars);
+  const phaseTemplate = readTemplateFile(`phase-${phase}.md`);
+  return renderTemplate(phaseTemplate, { ...vars, wrapper_skill: wrapperSkillRendered });
 }
 
 export function assembleGatePrompt(
