@@ -123,6 +123,62 @@ describe('runGatePhase — resumeFallback clears stale id when new id absent', (
     await runGatePhase(2, state, runDir, runDir, runDir);
     expect(state.phaseCodexSessions['2']).toBeNull();
   });
+
+  // §4.4 P1 regression (eval gate round-6): if a resumeFallback response
+  // accidentally carries forward the stale sessionId, runGatePhase must NOT
+  // re-persist that dead lineage. Clearing happens unconditionally on
+  // resumeFallback=true, then save only a new non-empty id.
+  it('§4.4 does not re-save stale sessionId on resumeFallback=true (order: clear → conditional save)', async () => {
+    const state = makeState();
+    state.phaseCodexSessions['2'] = {
+      sessionId: 'dead-sid', runner: 'codex', model: 'gpt-5.4', effort: 'high', lastOutcome: 'reject',
+    };
+    // runCodexGate returns an error where resumeFallback=true but codexSessionId
+    // is the DEAD id (worst-case metadata carry-forward).
+    vi.mocked(runCodexGate).mockResolvedValueOnce({
+      type: 'error',
+      error: 'Resume fallback failed: fresh prompt too large',
+      runner: 'codex',
+      resumedFrom: 'dead-sid',
+      resumeFallback: true,
+      codexSessionId: 'dead-sid', // ← stale id leaked through
+    } as GatePhaseResult);
+    await runGatePhase(2, state, runDir, runDir, runDir);
+    // Cleared — not re-saved with the stale id
+    expect(state.phaseCodexSessions['2']).toBeNull();
+  });
+
+  it('§4.4 accepts a NEW non-empty id on resumeFallback=true, overwriting the dead lineage', async () => {
+    const state = makeState();
+    state.phaseCodexSessions['2'] = {
+      sessionId: 'dead-sid', runner: 'codex', model: 'gpt-5.4', effort: 'high', lastOutcome: 'reject',
+    };
+    vi.mocked(runCodexGate).mockResolvedValueOnce({
+      type: 'verdict', verdict: 'APPROVE', comments: '', rawOutput: '',
+      runner: 'codex',
+      resumedFrom: 'dead-sid',
+      resumeFallback: true,
+      codexSessionId: 'new-fresh-sid',
+    } as GatePhaseResult);
+    await runGatePhase(2, state, runDir, runDir, runDir);
+    expect(state.phaseCodexSessions['2']?.sessionId).toBe('new-fresh-sid');
+    expect(state.phaseCodexSessions['2']?.lastOutcome).toBe('approve');
+  });
+
+  // §4.1 trim-non-empty guard at persist site (P2 backported from round-3/5/6)
+  it('§4.1 rejects whitespace-only codexSessionId at persist site', async () => {
+    const state = makeState();
+    vi.mocked(runCodexGate).mockResolvedValueOnce({
+      type: 'verdict', verdict: 'APPROVE', comments: '', rawOutput: '',
+      runner: 'codex',
+      codexSessionId: '   ', // malformed
+      resumedFrom: null,
+      resumeFallback: false,
+    } as GatePhaseResult);
+    await runGatePhase(2, state, runDir, runDir, runDir);
+    // Whitespace id must NOT be persisted
+    expect(state.phaseCodexSessions['2']).toBeNull();
+  });
 });
 
 describe('runGatePhase — stillActivePhase guard', () => {

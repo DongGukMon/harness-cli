@@ -332,10 +332,11 @@ export async function runCodexGate(
   if (mode === 'resume' && first.category === 'session_missing' && buildFreshPromptOnFallback) {
     const freshPrompt = buildFreshPromptOnFallback();
     if (typeof freshPrompt !== 'string') {
-      // §4.5 "all termination paths extract metadata": even when fresh-prompt
-      // assembly fails, preserve the first attempt's session id / tokensTotal /
-      // exitCode so downstream logs aren't blank. Error message carries the
-      // closure failure reason; resumeFallback stays true to signal the branch.
+      // §4.4: when resumeFallback=true, the stale (failed-resume) session id
+      // must NOT be carried forward — otherwise the caller's save branch can
+      // mistake it for a new fresh id and re-persist the dead lineage. We
+      // preserve tokensTotal (useful for accounting) but drop codexSessionId
+      // explicitly. resumedFrom still records the stale id for audit/logging.
       const firstMeta = extractCodexMetadata(first.stdout);
       return {
         type: 'error',
@@ -346,7 +347,9 @@ export async function runCodexGate(
         sourcePreset: { model: preset.model, effort: preset.effort },
         resumedFrom: resumeSessionId ?? null,
         resumeFallback: true,
-        ...firstMeta,
+        // Only carry forward non-session metadata:
+        ...(firstMeta.tokensTotal !== undefined ? { tokensTotal: firstMeta.tokensTotal } : {}),
+        // codexSessionId intentionally omitted — the resume attempt's id is stale.
       };
     }
     const fresh = await runCodexExecRaw({

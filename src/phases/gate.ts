@@ -137,9 +137,12 @@ export async function runGatePhase(
       );
 
       if (replayCompatible && currentPreset !== undefined) {
-        // (B) Hydration gate — codex-only, requires non-empty sessionId + empty state slot
+        // (B) Hydration gate — codex-only, requires non-empty trimmed sessionId + empty state slot.
+        // §4.1: sessionId validation ('trimmed non-empty') applies at every use site, including
+        // sidecar hydration — malformed sidecar JSON with "" / whitespace-only id must be rejected.
         const canHydrate =
-          replay.codexSessionId !== undefined &&
+          typeof replay.codexSessionId === 'string' &&
+          replay.codexSessionId.trim().length > 0 &&
           replay.runner === 'codex' &&
           state.phaseCodexSessions[phaseKey] === null &&
           currentPreset.runner === 'codex' &&
@@ -289,23 +292,39 @@ export async function runGatePhase(
     return result;
   }
 
-  // Step 7: Persist session (codex only, stillActivePhase guard)
+  // Step 7: Persist session (codex only, stillActivePhase guard).
+  // §4.4 persist rules (order matters):
+  //   1. If resumeFallback=true, the prior session lineage is proven stale —
+  //      clear the slot first, before considering the returned id.
+  //   2. Only save a new lineage when the returned id is (a) non-empty
+  //      (trimmed, per §4.1) AND (b) genuinely different from the stale id
+  //      (i.e. NOT a metadata carry-forward of the dead session).
+  //      If resumeFallback=true and the id is empty/undefined or equal to
+  //      resumedFrom, the slot stays cleared.
   if (runner === 'codex' && state.currentPhase === phase) {
-    if (result.codexSessionId !== undefined) {
+    if (result.resumeFallback === true) {
+      state.phaseCodexSessions[phaseKey] = null;
+    }
+    const newSessionId = result.codexSessionId;
+    const isValidNewId = typeof newSessionId === 'string' && newSessionId.trim().length > 0;
+    // Carry-forward guard: on resumeFallback=true, reject an id that matches
+    // the stale resumedFrom — that would re-persist the dead lineage.
+    const isStaleCarryforward =
+      result.resumeFallback === true &&
+      typeof result.resumedFrom === 'string' &&
+      newSessionId === result.resumedFrom;
+    if (isValidNewId && !isStaleCarryforward) {
       const lastOutcome: 'approve' | 'reject' | 'error' =
         result.type === 'verdict'
           ? (result.verdict === 'APPROVE' ? 'approve' : 'reject')
           : 'error';
       state.phaseCodexSessions[phaseKey] = {
-        sessionId: result.codexSessionId,
+        sessionId: newSessionId!,
         runner: 'codex',
         model: preset.model,
         effort: preset.effort,
         lastOutcome,
       };
-    } else if (result.resumeFallback === true) {
-      // Resume → fallback → no new sessionId: stale id already invalid, clear slot
-      state.phaseCodexSessions[phaseKey] = null;
     }
     // §5: post-run persistence of the new session lineage is load-bearing for
     // the next retry's resume decision. Surface write failures as gate errors
