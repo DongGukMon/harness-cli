@@ -327,9 +327,27 @@ export function assembleInteractivePrompt(
   // Phase 1 uses task.md file path (not raw task string) per spec
   const taskMdPath = path.join('.harness', state.runId, 'task.md');
 
-  // feedback_path: first feedback from pendingAction, if any
-  // feedback_paths: all feedbacks (Phase 5 may have both gate-7 + verify)
-  const feedbackPaths = state.pendingAction?.feedbackPaths ?? [];
+  // Merge pendingAction.feedbackPaths with carryoverFeedback.paths when the
+  // carryover targets this phase. Carryover paths are dropped with a warning
+  // when missing on disk (spec R8 — the P7→P1→P5 bridge may lose the file);
+  // pendingAction paths are trusted (written by the harness this same turn).
+  const pendingPaths = state.pendingAction?.feedbackPaths ?? [];
+  const carryoverRawPaths =
+    state.carryoverFeedback && state.carryoverFeedback.deliverToPhase === phase
+      ? state.carryoverFeedback.paths
+      : [];
+  const carryoverPaths: string[] = [];
+  for (const p of carryoverRawPaths) {
+    const abs = path.isAbsolute(p) ? p : path.join(harnessDir, '..', p);
+    if (fs.existsSync(abs)) {
+      carryoverPaths.push(p);
+    } else {
+      process.stderr.write(
+        `⚠️  carryover feedback path not found on disk, skipping: ${p}\n`,
+      );
+    }
+  }
+  const feedbackPaths = [...pendingPaths, ...carryoverPaths];
   const feedbackPath = feedbackPaths[0];
   const feedbackPathsList = feedbackPaths
     .map((p) => `- 이전 피드백 (반드시 반영): ${p}`)
@@ -352,6 +370,12 @@ export function assembleInteractivePrompt(
     harnessDir,
     playbookDir,
   };
+
+  // Light flow: phase 1 and 5 use self-contained light templates (no wrapper skill).
+  if (state.flow === 'light' && (phase === 1 || phase === 5)) {
+    const templateFile = phase === 1 ? 'phase-1-light.md' : 'phase-5-light.md';
+    return renderTemplate(readTemplateFile(templateFile), vars);
+  }
 
   // Two-pass render: wrapper body vars resolve first, then thin phase template
   // injects the rendered wrapper at {{wrapper_skill}} and resolves its own vars.

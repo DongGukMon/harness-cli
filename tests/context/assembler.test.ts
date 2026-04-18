@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -248,5 +248,80 @@ describe('Gate size limits', () => {
 
     expect(typeof result).toBe('object');
     expect((result as { error: string }).error).toMatch(/Gate input too large/);
+  });
+});
+
+describe('assembleInteractivePrompt — flow-aware Phase 1 (light)', () => {
+  it('light + phase 1 renders phase-1-light.md with combined-doc wording', () => {
+    const state = makeState({ flow: 'light', phaseAttemptId: { '1': 'aid-light', '3': null, '5': null } });
+    const prompt = assembleInteractivePrompt(1, state, '/tmp/harness');
+    expect(prompt).toContain('## Implementation Plan');
+    expect(prompt).toContain('checklist.json');
+    expect(prompt).toContain('결합');
+    expect(prompt).toContain('aid-light');
+  });
+
+  it('full + phase 1 still renders the classic phase-1.md', () => {
+    const state = makeState({ flow: 'full', phaseAttemptId: { '1': 'aid-full', '3': null, '5': null } });
+    const prompt = assembleInteractivePrompt(1, state, '/tmp/harness');
+    expect(prompt).not.toContain('## Implementation Plan');
+    expect(prompt).toContain('## Context & Decisions');
+  });
+
+  it('light + phase 5 injects carryoverFeedback paths alongside pendingAction feedback', () => {
+    const tmp = makeTmpDir();
+    const pendingPath = path.join(tmp, 'verify-feedback.md');
+    const carryoverPath = path.join(tmp, 'gate-7-feedback.md');
+    fs.writeFileSync(pendingPath, 'verify feedback');
+    fs.writeFileSync(carryoverPath, 'gate feedback');
+    const state = makeState({
+      flow: 'light',
+      phaseAttemptId: { '1': null, '3': null, '5': 'aid-5' },
+      pendingAction: {
+        type: 'reopen_phase', targetPhase: 5, sourcePhase: 6,
+        feedbackPaths: [pendingPath],
+      },
+      carryoverFeedback: {
+        sourceGate: 7,
+        paths: [carryoverPath],
+        deliverToPhase: 5,
+      },
+    });
+    const prompt = assembleInteractivePrompt(5, state, '/tmp/harness');
+    expect(prompt).toContain('verify-feedback.md');
+    expect(prompt).toContain('gate-7-feedback.md');
+  });
+
+  it('light + phase 5 uses phase-5-light.md (no separate plan artifact)', () => {
+    const state = makeState({ flow: 'light', phaseAttemptId: { '1': null, '3': null, '5': 'aid-5' } });
+    const prompt = assembleInteractivePrompt(5, state, '/tmp/harness');
+    expect(prompt).toContain('Combined Design Spec (light)');
+    expect(prompt).not.toContain('- Plan:');
+  });
+
+  it('light + phase 5 drops carryover paths that no longer exist on disk (R8)', () => {
+    const tmp = makeTmpDir();
+    const existing = path.join(tmp, 'exists.md');
+    fs.writeFileSync(existing, 'x');
+    const state = makeState({
+      flow: 'light',
+      phaseAttemptId: { '1': null, '3': null, '5': 'aid-5' },
+      pendingAction: null,
+      carryoverFeedback: {
+        sourceGate: 7,
+        paths: [existing, path.join(tmp, 'missing.md')],
+        deliverToPhase: 5,
+      },
+    });
+    const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      const prompt = assembleInteractivePrompt(5, state, tmp);
+      expect(prompt).toContain('exists.md');
+      expect(prompt).not.toContain('missing.md');
+      const warnings = stderrSpy.mock.calls.map((c) => c[0]).join('');
+      expect(warnings).toMatch(/carryover feedback path not found.*missing\.md/);
+    } finally {
+      stderrSpy.mockRestore();
+    }
   });
 });
