@@ -51,3 +51,55 @@ describe('InputManager', () => {
     // Verified indirectly: method doesn't throw
   });
 });
+
+describe('InputManager — pendingKey buffer', () => {
+  it('waitForKey resolves immediately with pending key pressed during idle', async () => {
+    const im = new InputManager();
+    im.enterPhaseLoop(); // state -> idle
+    // Inject a key while idle (private onData via any-cast)
+    (im as any).onData(Buffer.from('s'));
+    const key = await im.waitForKey(new Set(['s', 'c', 'q']));
+    expect(key).toBe('S');
+  });
+
+  it('waitForKey ignores pending key outside validKeys', async () => {
+    const im = new InputManager();
+    im.enterPhaseLoop();
+    (im as any).onData(Buffer.from('x'));
+    // pending is 'x' which is not valid; waitForKey should clear it and wait.
+    const p = im.waitForKey(new Set(['s', 'c', 'q']));
+    (im as any).handler?.('s');
+    const key = await p;
+    expect(key).toBe('S');
+  });
+
+  it('waitForKey ignores stale pending key older than TTL', async () => {
+    const im = new InputManager();
+    im.enterPhaseLoop();
+    (im as any).onData(Buffer.from('s'));
+    // Manually age the pending entry beyond TTL (1000ms)
+    (im as any).pendingKey.timestamp = Date.now() - 2000;
+    const p = im.waitForKey(new Set(['s', 'c', 'q']));
+    (im as any).handler?.('c');
+    const key = await p;
+    expect(key).toBe('C');
+  });
+
+  it('onData does not buffer ESC sequences or control chars in pending', () => {
+    const im = new InputManager();
+    im.enterPhaseLoop();
+    (im as any).onData(Buffer.from('\x1b[A')); // arrow up
+    expect((im as any).pendingKey).toBeNull();
+    (im as any).onData(Buffer.from('\x7f')); // DEL
+    expect((im as any).pendingKey).toBeNull();
+  });
+
+  it('waitForKey normal path unchanged when no pending', async () => {
+    const im = new InputManager();
+    im.enterPhaseLoop();
+    const p = im.waitForKey(new Set(['s', 'c', 'q']));
+    (im as any).handler?.('q');
+    const key = await p;
+    expect(key).toBe('Q');
+  });
+});

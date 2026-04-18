@@ -1,11 +1,18 @@
 type InputState = 'idle' | 'configuring' | 'prompt-single' | 'prompt-line';
 
+interface PendingKey {
+  key: string;
+  timestamp: number;
+}
+
 export class InputManager {
   private state: InputState = 'idle';
   private isPreLoop: boolean = true;
   private handler: ((key: string) => void) | null = null;
   private onDataBound: ((buf: Buffer) => void) | null = null;
   private started = false;
+  private pendingKey: PendingKey | null = null;
+  private static readonly PENDING_KEY_TTL_MS = 1000;
 
   public onConfigCancel: (() => void) | null = null;
 
@@ -32,6 +39,7 @@ export class InputManager {
       process.stdin.setRawMode(false);
     }
     process.stdin.pause();
+    this.pendingKey = null;
     this.started = false;
   }
 
@@ -47,6 +55,21 @@ export class InputManager {
   waitForKey(validKeys: Set<string>): Promise<string> {
     return new Promise((resolve) => {
       this.state = 'prompt-single';
+
+      // Consume pending key from idle-state buffer if still fresh and valid.
+      if (this.pendingKey !== null) {
+        const { key, timestamp } = this.pendingKey;
+        this.pendingKey = null;
+        if (
+          Date.now() - timestamp <= InputManager.PENDING_KEY_TTL_MS &&
+          validKeys.has(key.toLowerCase())
+        ) {
+          this.state = this.isPreLoop ? 'configuring' : 'idle';
+          resolve(key.toLowerCase().toUpperCase());
+          return;
+        }
+      }
+
       this.handler = (key: string) => {
         const lower = key.toLowerCase();
         if (validKeys.has(lower)) {
@@ -94,8 +117,15 @@ export class InputManager {
     // ESC sequences (arrow keys, F-keys, etc.)
     if (str.startsWith('\x1b')) return;
 
-    // Idle/configuring without active prompt
-    if (this.state === 'idle' || this.state === 'configuring') return;
+    // Idle/configuring without active prompt — buffer single printable ASCII
+    // so a pre-emptive keystroke (typed while escalation prompt was printing)
+    // is not lost on the next waitForKey.
+    if (this.state === 'idle' || this.state === 'configuring') {
+      if (str.length === 1 && str.charCodeAt(0) >= 0x20 && str.charCodeAt(0) < 0x7f) {
+        this.pendingKey = { key: str, timestamp: Date.now() };
+      }
+      return;
+    }
 
     // Forward to active handler
     this.handler?.(str);
