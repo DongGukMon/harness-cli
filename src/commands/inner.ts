@@ -11,7 +11,7 @@ import { killSession, killWindow, selectWindow, splitPane, paneExists, selectPan
 import { renderWelcome, promptModelConfig } from '../ui.js';
 import { InputManager } from '../input.js';
 import { runRunnerAwarePreflight } from '../preflight.js';
-import { REQUIRED_PHASE_KEYS, getEffectiveReopenTarget } from '../config.js';
+import { REQUIRED_PHASE_KEYS, getEffectiveReopenTarget, getRequiredPhaseKeys } from '../config.js';
 import { createSessionLogger } from '../logger.js';
 import type { SessionLogger, HarnessState } from '../types.js';
 
@@ -148,10 +148,16 @@ export async function innerCommand(runId: string, options: InnerOptions = {}): P
   inputManager.onConfigCancel = buildConfigCancelHandler({ state, runDir, harnessDir, runId, isResume, logger, inputManager });
   inputManager.start('configuring');
 
-  // Step 5.7: Compute remaining phases (including pendingAction reopen target)
+  // Step 5.7: Compute remaining phases (including pendingAction reopen target).
+  // Light flow skips 2/3/4 so the key set is narrowed at source (getRequiredPhaseKeys).
+  const flowPhaseKeys = getRequiredPhaseKeys(state.flow);
   const remainingSet = new Set<string>();
-  for (const p of REQUIRED_PHASE_KEYS) {
-    if (Number(p) >= state.currentPhase && state.phases[p] !== 'completed') {
+  for (const p of flowPhaseKeys) {
+    if (
+      Number(p) >= state.currentPhase &&
+      state.phases[p] !== 'completed' &&
+      state.phases[p] !== 'skipped'
+    ) {
       remainingSet.add(p);
     }
   }

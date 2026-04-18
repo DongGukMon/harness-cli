@@ -43,12 +43,15 @@ export function renderControlPanel(state: HarnessState): void {
 
   for (let p = 1; p <= 7; p++) {
     const status = state.phases[String(p)] ?? 'pending';
+    const isSkipped = status === 'skipped';
     const icon = status === 'completed' ? `${GREEN}✓${RESET}`
       : status === 'in_progress' ? `${YELLOW}▶${RESET}`
       : status === 'failed' || status === 'error' ? `${RED}✗${RESET}`
+      : isSkipped ? '—'
       : ' ';
+    const statusLabel = isSkipped ? '(skipped)' : `(${status})`;
     const current = p === state.currentPhase ? ' ← current' : '';
-    console.error(`  [${icon}] Phase ${p}: ${phaseLabel(p)} (${status})${current}`);
+    console.error(`  [${icon}] Phase ${p}: ${phaseLabel(p)} ${statusLabel}${current}`);
   }
   console.error('');
   console.error(separator());
@@ -145,11 +148,11 @@ export function renderModelSelection(
   };
 
   for (const key of REQUIRED_PHASE_KEYS) {
+    const editable = !editablePhases || editablePhases.has(key);
+    if (!editable) continue;
     const preset = getPresetById(phasePresets[key]);
     const label = preset?.label ?? 'unknown';
-    const editable = !editablePhases || editablePhases.has(key);
-    const prefix = editable ? `[${key}]` : `   `;
-    console.error(`  ${prefix} Phase ${key} (${phaseLabels[key]}):  ${label}`);
+    console.error(`  [${key}] Phase ${key} (${phaseLabels[key]}):  ${label}`);
   }
   console.error(`      Phase 6 (검증):        harness-verify.sh (fixed)`);
   console.error('');

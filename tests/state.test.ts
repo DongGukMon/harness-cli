@@ -4,7 +4,7 @@ import os from 'os';
 import path from 'path';
 import { writeState, readState, createInitialState, migrateState } from '../src/state.js';
 import type { HarnessState } from '../src/types.js';
-import { PHASE_DEFAULTS, getPhaseArtifactFiles, getReopenTarget } from '../src/config.js';
+import { PHASE_DEFAULTS, getPhaseArtifactFiles, getReopenTarget, getRequiredPhaseKeys } from '../src/config.js';
 
 function makeTmpDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'state-test-'));
@@ -335,6 +335,15 @@ describe('getPhaseArtifactFiles (ADR-13)', () => {
   it('any flow + phase 5 → empty (no on-disk artifact set)', () => {
     expect(getPhaseArtifactFiles('full', 5)).toEqual([]);
     expect(getPhaseArtifactFiles('light', 5)).toEqual([]);
+  });
+});
+
+describe('getRequiredPhaseKeys (ADR-5 / inner.ts propagation)', () => {
+  it('full flow returns 1/2/3/4/5/7', () => {
+    expect([...getRequiredPhaseKeys('full')]).toEqual(['1', '2', '3', '4', '5', '7']);
+  });
+  it('light flow returns 1/5/7 only', () => {
+    expect([...getRequiredPhaseKeys('light')]).toEqual(['1', '5', '7']);
   });
 });
 
