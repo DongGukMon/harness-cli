@@ -114,6 +114,18 @@ describe('Phase 5 interactive prompt', () => {
   });
 });
 
+describe('Phase 1/3/5 HARNESS FLOW CONSTRAINT stanza', () => {
+  it.each([1, 3, 5] as const)('Phase %i prompt forbids advisor() and explains the gate reviewer', (phase) => {
+    const state = makeState({
+      phaseAttemptId: { '1': 'aid', '3': 'aid', '5': 'aid' },
+    });
+    const prompt = assembleInteractivePrompt(phase, state, '/tmp/harness');
+    expect(prompt).toContain('HARNESS FLOW CONSTRAINT');
+    expect(prompt).toContain('advisor()');
+    expect(prompt).toContain('독립 reviewer');
+  });
+});
+
 // ─── Gate Prompt Tests ────────────────────────────────────────────────────
 
 describe('Gate 2 prompt', () => {
@@ -149,6 +161,74 @@ describe('Gate 2 prompt', () => {
     expect(typeof result).toBe('string');
     const prompt = result as string;
     expect(prompt).toContain('Every comment must cite a specific location');
+  });
+
+  it('includes scope rules that forbid external conventions and not-yet-produced artifacts', () => {
+    const cwd = makeTmpDir();
+    const state = makeState();
+
+    const specAbsPath = path.join(cwd, state.artifacts.spec);
+    fs.mkdirSync(path.dirname(specAbsPath), { recursive: true });
+    fs.writeFileSync(specAbsPath, '# Spec');
+
+    const result = assembleGatePrompt(2, state, '/tmp/harness', cwd);
+    expect(typeof result).toBe('string');
+    const prompt = result as string;
+    expect(prompt).toContain('Scope rules:');
+    expect(prompt).toContain('personal or workspace-level conventions');
+    expect(prompt).toContain('later harness phases produce plan/impl/eval artifacts');
+  });
+});
+
+describe('Gate 2/4/7 lifecycle stanza', () => {
+  function writeSpecPlanEval(cwd: string, state: HarnessState, { plan = false, evalReport = false } = {}): void {
+    const specAbsPath = path.join(cwd, state.artifacts.spec);
+    fs.mkdirSync(path.dirname(specAbsPath), { recursive: true });
+    fs.writeFileSync(specAbsPath, '# Spec');
+    if (plan) {
+      const planAbsPath = path.join(cwd, state.artifacts.plan);
+      fs.mkdirSync(path.dirname(planAbsPath), { recursive: true });
+      fs.writeFileSync(planAbsPath, '# Plan');
+    }
+    if (evalReport) {
+      const evalAbsPath = path.join(cwd, state.artifacts.evalReport);
+      fs.mkdirSync(path.dirname(evalAbsPath), { recursive: true });
+      fs.writeFileSync(evalAbsPath, '# Eval');
+    }
+  }
+
+  it('Gate 2 prompt includes phase-2 lifecycle stanza (plan/impl/eval not yet produced)', () => {
+    const cwd = makeTmpDir();
+    const state = makeState();
+    writeSpecPlanEval(cwd, state);
+    const result = assembleGatePrompt(2, state, '/tmp/harness', cwd);
+    if (typeof result !== 'string') throw new Error('expected string');
+    expect(result).toContain('<harness_lifecycle>');
+    expect(result).toContain('Gate 2');
+    expect(result).toContain('have not yet been produced');
+  });
+
+  it('Gate 4 prompt includes phase-4 lifecycle stanza (impl not yet produced)', () => {
+    const cwd = makeTmpDir();
+    const state = makeState();
+    writeSpecPlanEval(cwd, state, { plan: true });
+    const result = assembleGatePrompt(4, state, '/tmp/harness', cwd);
+    if (typeof result !== 'string') throw new Error('expected string');
+    expect(result).toContain('<harness_lifecycle>');
+    expect(result).toContain('Gate 4');
+    expect(result).toContain('implementation (Phase 5) has not yet been produced');
+  });
+
+  it('Gate 7 prompt includes terminal lifecycle stanza without "not yet produced" wording', () => {
+    const cwd = makeTmpDir();
+    const state = makeState();
+    writeSpecPlanEval(cwd, state, { plan: true, evalReport: true });
+    const result = assembleGatePrompt(7, state, '/tmp/harness', cwd);
+    if (typeof result !== 'string') throw new Error('expected string');
+    expect(result).toContain('<harness_lifecycle>');
+    expect(result).toContain('Gate 7');
+    expect(result).toContain('terminal review');
+    expect(result).not.toContain('has not yet been produced');
   });
 });
 

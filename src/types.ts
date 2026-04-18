@@ -172,7 +172,14 @@ export interface LogEventBase {
 export type LogEvent =
   | (LogEventBase & { event: 'session_start'; task: string; autoMode: boolean; baseCommit: string; harnessVersion: string })
   | (LogEventBase & { event: 'session_resumed'; fromPhase: number; stateStatus: RunStatus })
-  | (LogEventBase & { event: 'phase_start'; phase: number; attemptId?: string | null; reopenFromGate?: number | null; retryIndex?: number })
+  | (LogEventBase & {
+      event: 'phase_start';
+      phase: number;
+      attemptId?: string | null;
+      reopenFromGate?: number | null;
+      retryIndex?: number;
+      preset?: { id: string; runner: 'claude' | 'codex'; model: string; effort: string };
+    })
   | (LogEventBase & {
       event: 'gate_verdict';
       phase: number;
@@ -186,6 +193,7 @@ export type LogEvent =
       recoveredFromSidecar?: boolean;
       resumedFrom?: string | null;
       resumeFallback?: boolean;
+      preset?: { id: string; runner: 'claude' | 'codex'; model: string; effort: string };
     })
   | (LogEventBase & {
       event: 'gate_error';
@@ -200,6 +208,7 @@ export type LogEvent =
       recoveredFromSidecar?: boolean;
       resumedFrom?: string | null;
       resumeFallback?: boolean;
+      preset?: { id: string; runner: 'claude' | 'codex'; model: string; effort: string };
     })
   | (LogEventBase & { event: 'gate_retry'; phase: number; retryIndex: number; retryCount: number; retryLimit: number; feedbackPath: string; feedbackBytes: number; feedbackPreview: string })
   | (LogEventBase & { event: 'escalation'; phase: number; reason: 'gate-retry-limit' | 'gate-error' | 'verify-limit' | 'verify-error'; userChoice?: 'C' | 'S' | 'Q' | 'R' })
