@@ -135,6 +135,20 @@ describe('runGatePhase — stillActivePhase guard', () => {
     await runGatePhase(2, state, runDir, runDir, runDir);
     expect(state.phaseCodexSessions['2']).toBeNull();
   });
+
+  // §4.4 step 6 / §4.10 (P0 fix): if currentPhase changed during gate,
+  // runGatePhase must not write sidecar files either — otherwise the jump
+  // invalidation's replay-sidecar deletion is re-armed by the stale gate.
+  it('does not write gate-N-raw/result.json sidecars when currentPhase changed mid-gate', async () => {
+    const state = makeState();
+    vi.mocked(runCodexGate).mockImplementationOnce(async () => {
+      state.currentPhase = 3; // simulate jump during gate run
+      return mockVerdict({ codexSessionId: 'should-not-save' });
+    });
+    await runGatePhase(2, state, runDir, runDir, runDir);
+    expect(fs.existsSync(path.join(runDir, 'gate-2-raw.txt'))).toBe(false);
+    expect(fs.existsSync(path.join(runDir, 'gate-2-result.json'))).toBe(false);
+  });
 });
 
 // ─── §4.7 sidecar replay compatibility gate (4 scenarios) ────────────────────

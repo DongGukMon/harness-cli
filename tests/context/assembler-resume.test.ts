@@ -116,4 +116,32 @@ describe('assembleGateResumePrompt — Variant B (error/approve or empty feedbac
       expect(res).not.toMatch(/<eval_report>/);
     }
   });
+
+  it('§4.3 Phase 7 resume includes eval_report + <metadata> block', () => {
+    const cwd = 'tests/context/fixtures';
+    const state = makeState();
+    const res = assembleGateResumePrompt(7, state, cwd, 'reject', 'feedback');
+    if (typeof res === 'string') {
+      expect(res).toMatch(/<spec>/);
+      expect(res).toMatch(/<plan>/);
+      expect(res).toMatch(/<eval_report>/);
+      expect(res).toMatch(/<metadata>/);
+      // metadata includes the "Verified at HEAD" breadcrumb from fresh Phase 7 parity
+      expect(res).toMatch(/Verified at HEAD:/);
+    }
+  });
+});
+
+describe('assembleGateResumePrompt — §4.4 anomaly: reject + missing feedback', () => {
+  it('selects Variant A even when previousFeedback is empty, with placeholder text', () => {
+    const cwd = 'tests/context/fixtures';
+    const state = makeState();
+    // lastOutcome=reject but empty feedback — spec §4.4 requires Variant A, not Variant B
+    const res = assembleGateResumePrompt(2, state, cwd, 'reject', '');
+    if (typeof res === 'string') {
+      expect(res).toMatch(/Updated Artifacts \(Re-Review Requested\)/);
+      expect(res).not.toMatch(/Continue Review/);
+      expect(res).toMatch(/feedback file missing despite lastOutcome=reject/);
+    }
+  });
 });

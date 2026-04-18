@@ -204,11 +204,16 @@ export async function runGatePhase(
 
   if (savedCompatible && savedSession !== null) {
     resumeSessionId = savedSession.sessionId;
+    // §4.4: when lastOutcome=reject, Variant A is mandatory; if feedback file is
+    // missing we pass a placeholder so Variant A still selects (per-spec anomaly).
+    // Feedback content only suppresses Variant A when lastOutcome !== 'reject'.
     let previousFeedback = '';
     if (savedSession.lastOutcome === 'reject') {
       try {
         previousFeedback = fs.readFileSync(sidecarFeedback(runDir, phase), 'utf-8');
-      } catch { /* feedback optional */ }
+      } catch {
+        previousFeedback = '(feedback file missing despite lastOutcome=reject — spec anomaly)';
+      }
     }
     const resumePromptResult = assembleGateResumePrompt(
       phase, state, cwd, savedSession.lastOutcome, previousFeedback,
@@ -217,8 +222,15 @@ export async function runGatePhase(
       return { type: 'error', error: resumePromptResult.error };
     }
     prompt = resumePromptResult;
-    // Closure used by runner on session_missing fallback
-    buildFreshPromptOnFallback = () => assembleGatePrompt(phase, state, harnessDir, cwd);
+    // Closure used by runner on session_missing fallback.
+    // §4.4 + §4.10: reject fresh fallback if the phase has been redirected (jump/skip)
+    // while the gate was in flight — avoid re-arming sidecars after invalidation.
+    buildFreshPromptOnFallback = () => {
+      if (state.currentPhase !== phase) {
+        return { error: `Phase ${phase} redirected to ${state.currentPhase} during gate; skipping fresh fallback` };
+      }
+      return assembleGatePrompt(phase, state, harnessDir, cwd);
+    };
   } else {
     const promptResult = assembleGatePrompt(phase, state, harnessDir, cwd);
     if (typeof promptResult === 'object' && 'error' in promptResult) {
@@ -247,6 +259,15 @@ export async function runGatePhase(
     // runCodexGate already sets resumedFrom/resumeFallback/sourcePreset; preserve them.
     // For claude runner they remain undefined.
   };
+
+  // §4.4 step 6 / §4.10: redirect guard before ANY result application.
+  // If SIGUSR1 jump/skip changed state.currentPhase while the gate was in-flight,
+  // return the raw result without touching state or writing sidecars — the
+  // invalidation hook may already have deleted replay sidecars and nulled
+  // phaseCodexSessions[phase]. Writing here would re-arm stale replay.
+  if (state.currentPhase !== phase) {
+    return result;
+  }
 
   // Step 7: Persist session (codex only, stillActivePhase guard)
   if (runner === 'codex' && state.currentPhase === phase) {

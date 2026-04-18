@@ -133,31 +133,21 @@ function buildGatePromptPhase4(state: HarnessState, cwd: string): string | { err
 
 // ─── Gate 7: Eval review (spec + plan + eval report + diff + metadata) ───────
 
-function buildGatePromptPhase7(state: HarnessState, cwd: string): string | { error: string } {
-  const specResult = readArtifactContent(state.artifacts.spec, cwd);
-  if ('error' in specResult) return specResult;
-
-  const planResult = readArtifactContent(state.artifacts.plan, cwd);
-  if ('error' in planResult) return planResult;
-
-  const evalResult = readArtifactContent(state.artifacts.evalReport, cwd);
-  if ('error' in evalResult) return evalResult;
-
-  // Build diff section per spec "Phase 7 diff 범위 규칙"
+// §4.3/§4.4: shared Phase 7 diff + metadata builder. Used by both the fresh
+// prompt and the resume prompt so resume variants include the same external-
+// commit handling and metadata block as the first-time review.
+function buildPhase7DiffAndMetadata(state: HarnessState, cwd: string): { diffSection: string; externalSummary: string; metadata: string } {
   let diffSection: string;
   let externalSummary = '';
 
   if (state.externalCommitsDetected) {
-    // Split diff: primary (harness range) + external summary
     let primary = '';
     if (state.implCommit !== null) {
-      // Phase 1-5 harness commits + Phase 6 eval commit
       primary += runGit(`git diff ${state.baseCommit}...${state.implCommit}`, cwd);
       if (state.evalCommit !== null) {
         primary += '\n' + runGit(`git diff ${state.evalCommit}^..${state.evalCommit}`, cwd);
       }
     } else {
-      // Phase 5 skipped — fallback diff includes external commits
       const target = state.evalCommit ?? 'HEAD';
       primary = runGit(`git diff ${state.baseCommit}...${target}`, cwd);
       primary =
@@ -174,14 +164,12 @@ function buildGatePromptPhase7(state: HarnessState, cwd: string): string | { err
 
     diffSection = `<diff>\n${primary}\n</diff>\n`;
 
-    // External commits summary (commit list only, no diff)
     const anchor = state.evalCommit ?? state.implCommit ?? state.baseCommit;
     const externalLog = runGit(`git log ${anchor}..HEAD --oneline`, cwd);
     if (externalLog.trim().length > 0) {
       externalSummary = `\n## External Commits (not reviewed)\n\n\`\`\`\n${externalLog}\n\`\`\`\n`;
     }
   } else {
-    // Normal mode: full diff from baseCommit to HEAD
     let diff = runGit(`git diff ${state.baseCommit}...HEAD`, cwd);
     const maxDiffBytes = MAX_DIFF_SIZE_KB * 1024;
     if (diff.length > maxDiffBytes) {
@@ -190,7 +178,6 @@ function buildGatePromptPhase7(state: HarnessState, cwd: string): string | { err
     diffSection = diff ? `<diff>\n${diff}\n</diff>\n` : '';
   }
 
-  // Metadata block per spec
   const externalNote = state.externalCommitsDetected
     ? `Note: External commits detected. See '## External Commits (not reviewed)' section below.\nPrimary diff covers harness implementation range only.\n`
     : '';
@@ -205,6 +192,21 @@ function buildGatePromptPhase7(state: HarnessState, cwd: string): string | { err
     `Verified at HEAD: ${state.verifiedAtHead ?? '(none)'} (most recent Phase 6 run).\n` +
     `Focus review on changes within the harness ranges above.\n` +
     `</metadata>\n`;
+
+  return { diffSection, externalSummary, metadata };
+}
+
+function buildGatePromptPhase7(state: HarnessState, cwd: string): string | { error: string } {
+  const specResult = readArtifactContent(state.artifacts.spec, cwd);
+  if ('error' in specResult) return specResult;
+
+  const planResult = readArtifactContent(state.artifacts.plan, cwd);
+  if ('error' in planResult) return planResult;
+
+  const evalResult = readArtifactContent(state.artifacts.evalReport, cwd);
+  if ('error' in evalResult) return evalResult;
+
+  const { diffSection, externalSummary, metadata } = buildPhase7DiffAndMetadata(state, cwd);
 
   return (
     REVIEWER_CONTRACT +
@@ -314,13 +316,11 @@ function buildResumeSections(
     if ('error' in evalResult) return evalResult;
     body += `\n<eval_report>\n${evalResult.content}\n</eval_report>\n`;
 
-    // Phase 7: include current diff for resume too
-    let diff = runGit(`git diff ${state.baseCommit}...HEAD`, cwd);
-    const maxDiffBytes = MAX_DIFF_SIZE_KB * 1024;
-    if (diff.length > maxDiffBytes) {
-      diff = truncateDiffPerFile(diff, PER_FILE_DIFF_LIMIT_KB * 1024);
-    }
-    if (diff) body += `\n<diff>\n${diff}\n</diff>\n`;
+    // §4.3: Phase 7 resume prompt must include the same diff + external summary
+    // + metadata block as the fresh Phase 7 prompt (external-commit-aware).
+    // Reuse the shared builder so the two paths never drift.
+    const { diffSection, externalSummary, metadata } = buildPhase7DiffAndMetadata(state, cwd);
+    body += `\n${diffSection}${externalSummary}\n${metadata}`;
   }
   return body;
 }
@@ -336,18 +336,23 @@ export function assembleGateResumePrompt(
   if (typeof sections !== 'string') return sections;
 
   let prompt: string;
-  if (lastOutcome === 'reject' && previousFeedback.trim().length > 0) {
-    // Variant A
+  // §4.4: variant is driven by lastOutcome, not by whether feedback exists.
+  // If lastOutcome='reject' but feedback file was missing/unreadable, the caller
+  // should still pass a placeholder string so Variant A is selected.
+  if (lastOutcome === 'reject') {
+    const feedbackBlock = previousFeedback.trim().length > 0
+      ? previousFeedback
+      : '(feedback file missing despite lastOutcome=reject — spec anomaly)';
     prompt =
       '## Updated Artifacts (Re-Review Requested)\n\n' +
       'The artifacts have been updated based on your previous feedback. Re-review the new versions and verify your prior concerns were addressed.\n\n' +
       sections +
       '\n## Your Previous Feedback (for reference)\n\n' +
-      previousFeedback + '\n\n' +
+      feedbackBlock + '\n\n' +
       '## Instructions\n\n' +
       'Return verdict in the same format you used before.\n';
   } else {
-    // Variant B
+    // Variant B for 'approve' | 'error'
     prompt =
       '## Continue Review\n\n' +
       'The previous review turn did not complete with a verdict. Re-examine the current artifacts and emit a verdict now.\n\n' +
