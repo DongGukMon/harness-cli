@@ -13,9 +13,18 @@ import { printError } from '../ui.js';
 
 export interface ResumeOptions {
   root?: string;
+  light?: boolean;
 }
 
 export async function resumeCommand(runId?: string, options: ResumeOptions = {}): Promise<void> {
+  if (options.light) {
+    process.stderr.write(
+      "Error: --light is only valid on 'harness start'. flow is frozen at run creation; " +
+      "start a new run with 'harness start --light' if you want the light flow.\n",
+    );
+    process.exit(1);
+  }
+
   // 1. Find harness root
   const harnessDir = findHarnessRoot(options.root);
   let cwd: string;

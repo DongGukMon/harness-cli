@@ -175,4 +175,25 @@ describe('startCommand', () => {
     const state = JSON.parse(readFileSync(join(harnessDir, runId, 'state.json'), 'utf-8'));
     expect(state.loggingEnabled).toBe(false);
   });
+
+  it('--light writes state.json with flow="light" and phases 2/3/4 skipped', async () => {
+    await startCommand('dummy task', { light: true, root: repo.path });
+    const harnessDir = join(repo.path, '.harness');
+    const runId = readFileSync(join(harnessDir, 'current-run'), 'utf-8').trim();
+    const state = JSON.parse(readFileSync(join(harnessDir, runId, 'state.json'), 'utf-8'));
+    expect(state.flow).toBe('light');
+    expect(state.phases['2']).toBe('skipped');
+    expect(state.phases['3']).toBe('skipped');
+    expect(state.phases['4']).toBe('skipped');
+    expect(state.artifacts.plan).toBe('');
+  });
+
+  it('--light composes with --auto (ADR-8 orthogonality)', async () => {
+    await startCommand('dummy task', { light: true, auto: true, root: repo.path });
+    const harnessDir = join(repo.path, '.harness');
+    const runId = readFileSync(join(harnessDir, 'current-run'), 'utf-8').trim();
+    const state = JSON.parse(readFileSync(join(harnessDir, runId, 'state.json'), 'utf-8'));
+    expect(state.flow).toBe('light');
+    expect(state.autoMode).toBe(true);
+  });
 });

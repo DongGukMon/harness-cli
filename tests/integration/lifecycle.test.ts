@@ -123,3 +123,21 @@ describe('CLI lifecycle integration', () => {
     expect(result.stderr).toContain('No active run');
   });
 });
+
+describe('CLI parser — --light flag registration (Task 5 smoke test)', () => {
+  it('start --help lists --light', () => {
+    const res = runCli(['start', '--help']);
+    expect(res.status).toBe(0);
+    expect(res.stdout).toMatch(/--light/);
+  });
+  it('run --help lists --light', () => {
+    const res = runCli(['run', '--help']);
+    expect(res.status).toBe(0);
+    expect(res.stdout).toMatch(/--light/);
+  });
+  it('resume --help lists --light (option is captured so runtime can reject it)', () => {
+    const res = runCli(['resume', '--help']);
+    expect(res.status).toBe(0);
+    expect(res.stdout).toMatch(/--light/);
+  });
+});

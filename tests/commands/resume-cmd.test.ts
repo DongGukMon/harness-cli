@@ -227,4 +227,16 @@ describe('resumeCommand', () => {
       expect(state.loggingEnabled).toBe(false);
     });
   });
+
+  describe('harness resume --light (rejected)', () => {
+    it('exits non-zero with a flow-frozen message', async () => {
+      const { harnessDir, runId } = setupRun(repo);
+      setCurrentRun(harnessDir, runId);
+
+      await expect(resumeCommand(runId, { light: true, root: repo.path }))
+        .rejects.toThrow(/__exit__:1/);
+      const messages = stderrSpy.mock.calls.map((c: any) => c[0]).join('');
+      expect(messages).toMatch(/flow is frozen|--light is only valid on start/i);
+    });
+  });
 });
