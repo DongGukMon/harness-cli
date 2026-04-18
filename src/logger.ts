@@ -136,13 +136,17 @@ export class FileSessionLogger implements SessionLogger {
     }
   }
 
-  logEvent(_event: DistributiveOmit<LogEvent, 'v' | 'ts' | 'runId'>): void {
+  logEvent(event: DistributiveOmit<LogEvent, 'v' | 'ts' | 'runId'>): void {
     if (this.disabled) return;
-    // Implemented in Task 7
-    // Track sessionOpenEmitted for session_start/session_resumed events (needed by tests even pre-Task-7)
-    const evt = _event as any;
-    if (evt.event === 'session_start' || evt.event === 'session_resumed') {
-      this.sessionOpenEmitted = true;
+    try {
+      const fullEvent = { v: 1, ts: Date.now(), runId: this.runId, ...event };
+      fs.appendFileSync(this.eventsPath, JSON.stringify(fullEvent) + '\n');
+      if ((event as any).event === 'session_start' || (event as any).event === 'session_resumed') {
+        this.sessionOpenEmitted = true;
+      }
+    } catch (err) {
+      this.warnOnce(`session logger: appendFileSync failed — ${(err as Error).message}`);
+      this.disabled = true;
     }
   }
 

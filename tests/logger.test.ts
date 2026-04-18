@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { computeRepoKey, NoopLogger, FileSessionLogger } from '../src/logger.js';
+import { computeRepoKey, NoopLogger, FileSessionLogger, createSessionLogger } from '../src/logger.js';
 import type { HarnessState } from '../src/types.js';
 import fs from 'fs';
 import path from 'path';
@@ -134,5 +134,68 @@ describe('FileSessionLogger — constructor + meta.json + bootstrap flags', () =
     expect(meta.resumedAt.length).toBe(1);
     expect(meta.task).toBe('resumed-task');
     expect(typeof meta.startedAt).toBe('number');
+  });
+});
+
+describe('FileSessionLogger.logEvent', () => {
+  it('appends one line per event with v:1 and monotonic ts', () => {
+    const harnessDir = makeTempHarnessDir();
+    const sessionsRoot = path.join(harnessDir, 'sessions-root');
+    const logger = new FileSessionLogger('runE', harnessDir, { sessionsRoot });
+    logger.writeMeta({ task: 't' });
+
+    logger.logEvent({ event: 'phase_start', phase: 1, attemptId: 'a1' });
+    logger.logEvent({ event: 'phase_end', phase: 1, attemptId: 'a1', status: 'completed', durationMs: 100 });
+
+    const repoKey = computeRepoKey(harnessDir);
+    const eventsPath = path.join(sessionsRoot, repoKey, 'runE', 'events.jsonl');
+    const lines = fs.readFileSync(eventsPath, 'utf-8').trim().split('\n');
+    expect(lines.length).toBe(2);
+    const e1 = JSON.parse(lines[0]);
+    const e2 = JSON.parse(lines[1]);
+    expect(e1.v).toBe(1);
+    expect(e1.runId).toBe('runE');
+    expect(e1.event).toBe('phase_start');
+    expect(e2.ts).toBeGreaterThanOrEqual(e1.ts);
+  });
+
+  it('swallows appendFileSync errors, warns once, then disables further I/O', () => {
+    const harnessDir = makeTempHarnessDir();
+    const sessionsRoot = path.join(harnessDir, 'sessions-root');
+    const logger = new FileSessionLogger('runF', harnessDir, { sessionsRoot });
+    logger.writeMeta({ task: 't' });
+
+    let appendCalls = 0;
+    const origAppend = fs.appendFileSync;
+    (fs as any).appendFileSync = () => { appendCalls++; throw new Error('boom'); };
+    const stderrCalls: string[] = [];
+    const origWrite = process.stderr.write.bind(process.stderr);
+    (process.stderr as any).write = (s: string) => { stderrCalls.push(s); return true; };
+
+    try {
+      expect(() => logger.logEvent({ event: 'phase_start', phase: 1 })).not.toThrow();
+      expect(() => logger.logEvent({ event: 'phase_end', phase: 1, status: 'completed', durationMs: 0 })).not.toThrow();
+      expect(stderrCalls.length).toBe(1); // warn once
+      expect(appendCalls).toBe(1); // disable prevents subsequent fs calls
+    } finally {
+      (fs as any).appendFileSync = origAppend;
+      (process.stderr as any).write = origWrite;
+    }
+  });
+
+  it('appending to existing events.jsonl preserves prior lines', () => {
+    const harnessDir = makeTempHarnessDir();
+    const sessionsRoot = path.join(harnessDir, 'sessions-root');
+    const logger1 = new FileSessionLogger('runG', harnessDir, { sessionsRoot });
+    logger1.writeMeta({ task: 't' });
+    logger1.logEvent({ event: 'phase_start', phase: 1 });
+
+    const logger2 = new FileSessionLogger('runG', harnessDir, { sessionsRoot });
+    logger2.logEvent({ event: 'phase_end', phase: 1, status: 'completed', durationMs: 50 });
+
+    const repoKey = computeRepoKey(harnessDir);
+    const eventsPath = path.join(sessionsRoot, repoKey, 'runG', 'events.jsonl');
+    const lines = fs.readFileSync(eventsPath, 'utf-8').trim().split('\n');
+    expect(lines.length).toBe(2);
   });
 });
