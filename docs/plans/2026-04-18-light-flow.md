@@ -319,10 +319,33 @@ pnpm vitest run tests/state.test.ts tests/state-invalidation.test.ts 2>&1 | tail
 
 Expected: all green. Previous `phaseCodexSessions` / invalidation tests still pass because we only appended to `createInitialState` and `migrateState`.
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 8: Update every literal `HarnessState` fixture across the test suite**
+
+Adding required fields `flow` and `carryoverFeedback` to `HarnessState` breaks every test that builds a literal state object. Five fixture sites need updating (verified against the current codebase):
+
+| File | Approx. line | Fixture shape |
+|---|---|---|
+| `tests/state-invalidation.test.ts` | ~15 | inline object literal in a `makeState` helper |
+| `tests/phases/gate-resume.test.ts` | ~23 | `as HarnessState` cast on a partial literal |
+| `tests/commands/inner.test.ts` | ~241 | `: HarnessState = { … }` explicit annotation |
+| `tests/signal.test.ts` | ~28 | inline literal inside a describe block |
+| `tests/integration/logging.test.ts` | ~14 | `buildState` helper with partial overrides |
+
+For each file: add the two new fields to the literal (or to the base shape the helper spreads over). Exact string to append alongside the existing `runId`, `currentPhase`, etc.:
+
+```ts
+flow: 'full',
+carryoverFeedback: null,
+```
+
+Where the helper accepts `Partial<HarnessState>` overrides, place the defaults inside the base so callers can still override with `makeState({ flow: 'light', carryoverFeedback: {...} })`.
+
+Run `pnpm tsc --noEmit 2>&1 | tail -40` after these edits. Expected: zero errors. If any other file still has a literal `HarnessState` the typecheck will surface it — update that file too before moving on.
+
+- [ ] **Step 9: Commit**
 
 ```bash
-git add src/types.ts src/state.ts tests/state.test.ts
+git add src/types.ts src/state.ts tests/state.test.ts tests/state-invalidation.test.ts tests/phases/gate-resume.test.ts tests/commands/inner.test.ts tests/signal.test.ts tests/integration/logging.test.ts
 git commit -m "$(cat <<'EOF'
 feat(state): add flow + carryoverFeedback fields; light skips 2/3/4
 
@@ -332,6 +355,9 @@ feat(state): add flow + carryoverFeedback fields; light skips 2/3/4
   blanks artifacts.plan when flow === 'light'.
 - migrateState backfills flow='full' and carryoverFeedback=null on legacy
   state.json files (ADR-7).
+- Update every literal HarnessState fixture across the test suite
+  (state-invalidation, gate-resume, inner.test, signal, integration/logging)
+  so typecheck stays clean.
 EOF
 )"
 ```
@@ -1798,22 +1824,76 @@ for (const p of flowPhaseKeys) {
 
 (The `'skipped'` guard is harmless on full flow — phases are never initialized as skipped there.)
 
-- [ ] **Step 6: Run the new UI tests + inner.test.ts**
+- [ ] **Step 6: Add a failing test for the inner.ts light-flow propagation path**
+
+The spec's §"Activation" promises that `state.flow='light'` is automatically reapplied inside `inner`/`resume` so that `promptModelConfig()` and `runRunnerAwarePreflight()` only iterate phase keys `['1','5','7']`. Task 8's E2E test calls `runPhaseLoop` directly and bypasses `innerCommand`, so this is not yet proven. Append to `tests/commands/inner.test.ts`:
+
+```ts
+describe('innerCommand — light flow propagation (Task 7)', () => {
+  it('computes remainingPhases from the light-flow key set only', async () => {
+    // Build a light-flow state that was persisted by an earlier start --light run.
+    const repo = createTestRepo();
+    const harnessDir = join(repo.path, '.harness');
+    mkdirSync(harnessDir, { recursive: true });
+    const runId = 'r-light';
+    const runDir = join(harnessDir, runId);
+    mkdirSync(runDir, { recursive: true });
+    const state = createInitialState(runId, 'task', 'base', false, false, 'light');
+    writeFileSync(join(runDir, 'task.md'), 'task');
+    writeState(runDir, state);
+    setCurrentRun(harnessDir, runId);
+
+    // Capture the remainingPhases argument promptModelConfig receives.
+    const promptMock = vi.mocked(promptModelConfig);
+    promptMock.mockImplementation(async (presets) => presets);
+
+    try {
+      await innerCommand(runId, { controlPane: '%0', root: repo.path });
+    } catch {
+      // innerCommand exits on preflight failure in test env; that's OK — we
+      // only assert on the mock call arguments captured before exit.
+    }
+
+    const lastCall = promptMock.mock.calls[promptMock.mock.calls.length - 1];
+    const editablePhases = lastCall?.[2] as string[] | undefined;
+    expect(editablePhases).toBeDefined();
+    expect(editablePhases!.sort()).toEqual(['1', '5', '7']);
+    // Full-flow phase keys 2/3/4 must NOT appear in the editable set.
+    expect(editablePhases).not.toContain('2');
+    expect(editablePhases).not.toContain('3');
+    expect(editablePhases).not.toContain('4');
+
+    repo.cleanup();
+  });
+});
+```
+
+(`promptModelConfig` is already mocked at the top of `tests/commands/inner.test.ts`; if not, add it to the existing `vi.mock('../../src/ui.js', …)` block.)
 
 Run:
 
 ```bash
-pnpm vitest run tests/ui.test.ts tests/commands/inner.test.ts 2>&1 | tail -20
+pnpm vitest run tests/commands/inner.test.ts -t 'light flow propagation' 2>&1 | tail -20
 ```
 
-Expected: all green.
+Expected: FAIL until Step 5 lands (`getRequiredPhaseKeys(state.flow)` must filter 2/3/4 out of the editable set).
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 7: Run the new UI + inner tests + full inner.test.ts**
+
+Run:
 
 ```bash
-git add src/ui.ts src/commands/inner.ts tests/ui.test.ts
+pnpm vitest run tests/ui.test.ts tests/commands/inner.test.ts 2>&1 | tail -30
+```
+
+Expected: all green including the new propagation test.
+
+- [ ] **Step 8: Commit**
+
+```bash
+git add src/ui.ts src/commands/inner.ts tests/ui.test.ts tests/commands/inner.test.ts
 git commit -m "$(cat <<'EOF'
-feat(ui): render 'skipped' phases + hide non-editable model rows
+feat(ui): render 'skipped' phases + hide non-editable model rows + inner propagation test
 
 - renderControlPanel shows 'skipped' phases with an em-dash glyph and
   the label '(skipped)' — no red error glyph (ADR-1 rev-1).
@@ -1821,6 +1901,10 @@ feat(ui): render 'skipped' phases + hide non-editable model rows
   instead of graying them in-place; combined with
   getRequiredPhaseKeys('light') in inner.ts this yields a 3-row config
   screen for light runs (phases 1/5/7 only).
+- Add tests/commands/inner.test.ts 'light flow propagation' case that
+  asserts promptModelConfig receives editablePhases=['1','5','7'] when
+  state.flow='light' (spec §"Activation" requires inner/resume to
+  auto-reapply flow from persisted state.json).
 EOF
 )"
 ```
@@ -2182,6 +2266,7 @@ Then `gh pr create` with title `feat: light flow (harness start --light)` and a 
 Anything that came up during plan-gate review but is not a P1 blocker lands here. This section is populated as the plan gate runs; keep entries short and link to the reviewer comment.
 
 - **[Gate-plan round 1, P2]** Codex flagged the earlier `tests/resume.test.ts` assertion `expect(completeInteractivePhaseFromFreshSentinel(1, state, tmp)).toBe(false || true)` as an always-pass test. That specific assertion was replaced in this revision with a concrete positive check (`toBe(true)` + `state.specCommit === 'head-sha'` via `vi.mock` of `normalizeArtifactCommit`/`getHead`); the P2 is resolved in-plan. Tracking here so future implementers do not reintroduce the pattern.
+- **[Gate-plan round 2, P2 — Spec R9]** Spec Risks §R9 calls for release-note communication that older CLIs cannot load state.json files containing `'skipped'` phase statuses. Intentionally deferred from this plan: the harness-cli repository does not currently maintain a user-facing CHANGELOG/release-notes surface (CLAUDE.md is the project's primary documentation root). When a release-notes process is adopted, add a bullet covering the schema bump. No release-note task is added to this plan.
 
 ---
 
