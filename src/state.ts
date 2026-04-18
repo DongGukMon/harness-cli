@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import type { HarnessState } from './types.js';
-import { PHASE_DEFAULTS, REQUIRED_PHASE_KEYS, MODEL_PRESETS } from './config.js';
+import { PHASE_DEFAULTS, REQUIRED_PHASE_KEYS, MODEL_PRESETS, getPresetById } from './config.js';
 
 const STATE_FILE = 'state.json';
 const STATE_TMP_FILE = 'state.json.tmp';
@@ -110,9 +110,13 @@ export function migrateState(raw: any): HarnessState {
 }
 
 /**
- * Invalidate Codex sessions for phases whose preset changed.
- * Deletes replay sidecars (raw/result/error) to prevent stale replay.
- * Preserves feedback files (reopen flow still reads them).
+ * Invalidate Codex sessions for phases whose preset **lineage** (runner/model/
+ * effort) changed. Spec §4.8 rule:
+ *   - runner changed (codex ↔ claude or mismatch) → invalidate
+ *   - same runner=codex but different model/effort → invalidate
+ *   - identical lineage (even if preset ID alias shifted) → no-op
+ * Deletes replay sidecars on invalidation; preserves feedback files (reopen
+ * flow still reads them).
  */
 export function invalidatePhaseSessionsOnPresetChange(
   state: HarnessState,
@@ -120,7 +124,20 @@ export function invalidatePhaseSessionsOnPresetChange(
   runDir: string,
 ): void {
   for (const phase of GATE_PHASES) {
-    if (state.phasePresets[phase] !== prevPresets[phase]) {
+    const prevId = prevPresets[phase];
+    const currId = state.phasePresets[phase];
+    if (prevId === undefined || currId === undefined) continue;
+
+    const prev = getPresetById(prevId);
+    const curr = getPresetById(currId);
+    // If either preset id is unknown (migration artifact), fall back to ID
+    // comparison — safer to invalidate than to carry a stale session.
+    const lineageChanged = (prev === undefined || curr === undefined)
+      ? prevId !== currId
+      : (prev.runner !== curr.runner ||
+         (curr.runner === 'codex' && (prev.model !== curr.model || prev.effort !== curr.effort)));
+
+    if (lineageChanged) {
       state.phaseCodexSessions[phase] = null;
       for (const suffix of ['raw.txt', 'result.json', 'error.md']) {
         const filename = `gate-${phase}-${suffix}`;

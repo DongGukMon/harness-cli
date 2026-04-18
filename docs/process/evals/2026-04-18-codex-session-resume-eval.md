@@ -68,12 +68,12 @@
 
  RUN  v2.1.9 /Users/daniel/.grove/github.com/DongGukMon/harness-cli/worktrees/codex-optimization
 
- ✓ tests/state-invalidation.test.ts (5 tests) 5ms
+ ✓ tests/state-invalidation.test.ts (5 tests) 4ms
 
  Test Files  1 passed (1)
       Tests  5 passed (5)
-   Start at  14:50:22
-   Duration  206ms (transform 34ms, setup 0ms, collect 36ms, tests 5ms, environment 0ms, prepare 25ms)
+   Start at  15:01:06
+   Duration  231ms (transform 38ms, setup 0ms, collect 36ms, tests 4ms, environment 0ms, prepare 38ms)
 ```
 
 </details>
@@ -102,8 +102,8 @@
 
  Test Files  1 passed (1)
       Tests  7 passed (7)
-   Start at  14:50:23
-   Duration  235ms (transform 33ms, setup 0ms, collect 36ms, tests 18ms, environment 0ms, prepare 26ms)
+   Start at  15:01:07
+   Duration  217ms (transform 34ms, setup 0ms, collect 38ms, tests 18ms, environment 0ms, prepare 27ms)
 ```
 
 </details>
@@ -130,12 +130,12 @@ Use '--' to separate paths from revisions, like this:
 
  RUN  v2.1.9 /Users/daniel/.grove/github.com/DongGukMon/harness-cli/worktrees/codex-optimization
 
- ✓ tests/runners/codex-resume.test.ts (7 tests) 45ms
+ ✓ tests/runners/codex-resume.test.ts (7 tests) 44ms
 
  Test Files  1 passed (1)
       Tests  7 passed (7)
-   Start at  14:50:23
-   Duration  288ms (transform 50ms, setup 0ms, collect 58ms, tests 45ms, environment 0ms, prepare 42ms)
+   Start at  15:01:07
+   Duration  302ms (transform 52ms, setup 0ms, collect 62ms, tests 44ms, environment 0ms, prepare 34ms)
 ```
 
 </details>
@@ -164,8 +164,8 @@ Use '--' to separate paths from revisions, like this:
 
  Test Files  1 passed (1)
       Tests  10 passed (10)
-   Start at  14:50:24
-   Duration  281ms (transform 49ms, setup 0ms, collect 58ms, tests 48ms, environment 0ms, prepare 27ms)
+   Start at  15:01:08
+   Duration  271ms (transform 52ms, setup 0ms, collect 59ms, tests 48ms, environment 0ms, prepare 27ms)
 ```
 
 </details>
@@ -190,12 +190,12 @@ Use '--' to separate paths from revisions, like this:
 
  RUN  v2.1.9 /Users/daniel/.grove/github.com/DongGukMon/harness-cli/worktrees/codex-optimization
 
- ✓ tests/integration/codex-session-resume.test.ts (1 test) 6ms
+ ✓ tests/integration/codex-session-resume.test.ts (6 tests) 38ms
 
  Test Files  1 passed (1)
-      Tests  1 passed (1)
-   Start at  14:50:25
-   Duration  229ms (transform 53ms, setup 0ms, collect 54ms, tests 6ms, environment 0ms, prepare 33ms)
+      Tests  6 passed (6)
+   Start at  15:01:08
+   Duration  263ms (transform 48ms, setup 0ms, collect 57ms, tests 38ms, environment 0ms, prepare 27ms)
 ```
 
 </details>
@@ -220,57 +220,58 @@ Use '--' to separate paths from revisions, like this:
 
  RUN  v2.1.9 /Users/daniel/.grove/github.com/DongGukMon/harness-cli/worktrees/codex-optimization
 
- ✓ tests/state.test.ts (20 tests) 58ms
- ✓ tests/logger.test.ts (24 tests) 87ms
- ✓ tests/phases/gate.test.ts (24 tests) 93ms
- ✓ tests/phases/gate-resume.test.ts (10 tests) 111ms
- ✓ tests/commands/inner.test.ts (13 tests) 125ms
- ✓ tests/preflight.test.ts (29 tests | 1 skipped) 242ms
- ✓ tests/integration/logging.test.ts (15 tests) 185ms
- ✓ tests/phases/verify.test.ts (12 tests) 20ms
- ✓ tests/runners/codex-resume.test.ts (7 tests) 56ms
- ✓ tests/phases/runner.test.ts (60 tests) 381ms
- ✓ tests/lock.test.ts (20 tests) 406ms
- ✓ tests/signal.test.ts (15 tests) 477ms
- ✓ tests/context/assembler.test.ts (9 tests) 7ms
- ✓ tests/context/assembler-resume.test.ts (7 tests) 26ms
- ✓ tests/state-invalidation.test.ts (5 tests) 7ms
- ✓ tests/root.test.ts (10 tests) 169ms
- ✓ tests/tmux.test.ts (33 tests) 817ms
-   ✓ pollForPidFile > returns null on timeout when file never appears 403ms
-   ✓ pollForPidFile > returns null when file contains non-numeric content 407ms
- ✓ tests/integration/codex-session-resume.test.ts (1 test) 16ms
- ✓ tests/terminal.test.ts (5 tests) 5ms
- ✓ tests/commands/status-list.test.ts (7 tests) 768ms
- ✓ tests/commands/jump.test.ts (5 tests) 722ms
+ ✓ tests/logger.test.ts (24 tests) 16ms
+ ✓ tests/state.test.ts (20 tests) 31ms
+ ✓ tests/phases/gate-resume.test.ts (10 tests) 102ms
+ ✓ tests/phases/gate.test.ts (24 tests) 101ms
+ ✓ tests/commands/inner.test.ts (13 tests) 117ms
+ ✓ tests/preflight.test.ts (29 tests | 1 skipped) 217ms
+ ✓ tests/integration/logging.test.ts (15 tests) 250ms
+ ✓ tests/integration/codex-session-resume.test.ts (6 tests) 122ms
+ ✓ tests/phases/verify.test.ts (12 tests) 73ms
+ ✓ tests/runners/codex-resume.test.ts (7 tests) 47ms
+ ✓ tests/lock.test.ts (20 tests) 429ms
+ ✓ tests/phases/runner.test.ts (60 tests) 423ms
+ ✓ tests/signal.test.ts (15 tests) 484ms
+ ✓ tests/context/assembler.test.ts (9 tests) 12ms
+ ✓ tests/state-invalidation.test.ts (5 tests) 5ms
+ ✓ tests/context/assembler-resume.test.ts (7 tests) 25ms
+ ✓ tests/root.test.ts (10 tests) 194ms
+ ✓ tests/tmux.test.ts (33 tests) 822ms
+   ✓ pollForPidFile > returns null on timeout when file never appears 402ms
+   ✓ pollForPidFile > returns null when file contains non-numeric content 404ms
+ ✓ tests/terminal.test.ts (5 tests) 4ms
+ ✓ tests/commands/status-list.test.ts (7 tests) 694ms
+ ✓ tests/conformance/phase-models.test.ts (9 tests) 4ms
+ ✓ tests/commands/jump.test.ts (5 tests) 717ms
  ✓ tests/input.test.ts (7 tests) 2ms
- ✓ tests/conformance/phase-models.test.ts (9 tests) 2ms
- ✓ tests/ui.test.ts (6 tests) 3ms
- ✓ tests/phases/verdict.test.ts (4 tests) 1ms
- ✓ tests/commands/skip.test.ts (4 tests) 567ms
- ✓ tests/process.test.ts (6 tests) 55ms
- ✓ tests/runners/claude.test.ts (1 test) 14ms
- ✓ tests/integration/lifecycle.test.ts (8 tests) 1223ms
- ✓ tests/runners/codex.test.ts (1 test) 6ms
- ✓ tests/commands/resume-cmd.test.ts (10 tests) 1749ms
- ✓ tests/resume.test.ts (6 tests) 1459ms
-   ✓ resumeRun > clears pendingAction when rerun_verify and phase 6 completed 329ms
- ✓ tests/git.test.ts (16 tests) 1491ms
- ✓ tests/artifact.test.ts (12 tests) 2386ms
-   ✓ normalizeArtifactCommit > creates commit for new untracked file 353ms
-   ✓ normalizeArtifactCommit > recovers from interrupted git add (target-only staged) 381ms
- ✓ tests/commands/run.test.ts (13 tests) 2697ms
-   ✓ startCommand > accepts whitespace-only task as untitled 348ms
-   ✓ startCommand > creates run directory with state.json + task.md 353ms
-   ✓ startCommand > creates required directories 377ms
+ ✓ tests/ui.test.ts (6 tests) 2ms
+ ✓ tests/process.test.ts (6 tests) 32ms
+ ✓ tests/commands/skip.test.ts (4 tests) 517ms
+ ✓ tests/phases/verdict.test.ts (4 tests) 2ms
+ ✓ tests/runners/claude.test.ts (1 test) 18ms
+ ✓ tests/runners/codex.test.ts (1 test) 15ms
+ ✓ tests/resume.test.ts (6 tests) 1453ms
+   ✓ resumeRun > clears pendingAction when rerun_verify and phase 6 completed 316ms
+ ✓ tests/integration/lifecycle.test.ts (8 tests) 1266ms
+ ✓ tests/commands/resume-cmd.test.ts (10 tests) 1718ms
+ ✓ tests/git.test.ts (16 tests) 1528ms
+ ✓ tests/artifact.test.ts (12 tests) 2390ms
+   ✓ normalizeArtifactCommit > creates commit for new untracked file 359ms
+   ✓ normalizeArtifactCommit > recovers from interrupted git add (target-only staged) 338ms
+ ✓ tests/commands/run.test.ts (13 tests) 2716ms
+   ✓ startCommand > accepts empty task as untitled 314ms
+   ✓ startCommand > accepts whitespace-only task as untitled 330ms
+   ✓ startCommand > creates run directory with state.json + task.md 335ms
+   ✓ startCommand > creates required directories 341ms
  ✓ tests/phases/interactive.test.ts (33 tests) 4965ms
-   ✓ runInteractivePhase — advisor reminder fires before sendKeysToPane > printAdvisorReminder is called before sendKeysToPane 1949ms
-   ✓ runInteractivePhase — advisor reminder fires before sendKeysToPane > sendKeysToPane command includes --dangerously-skip-permissions and --effort 1865ms
+   ✓ runInteractivePhase — advisor reminder fires before sendKeysToPane > printAdvisorReminder is called before sendKeysToPane 1917ms
+   ✓ runInteractivePhase — advisor reminder fires before sendKeysToPane > sendKeysToPane command includes --dangerously-skip-permissions and --effort 1858ms
 
  Test Files  36 passed (36)
-      Tests  466 passed | 1 skipped (467)
-   Start at  14:50:25
-   Duration  5.34s (transform 1.22s, setup 0ms, collect 2.62s, tests 21.40s, environment 4ms, prepare 1.69s)
+      Tests  471 passed | 1 skipped (472)
+   Start at  15:01:09
+   Duration  5.36s (transform 1.11s, setup 0ms, collect 2.66s, tests 21.51s, environment 4ms, prepare 1.67s)
 ```
 
 </details>
@@ -350,8 +351,8 @@ Use '--' to separate paths from revisions, like this:
 
  Test Files  1 passed (1)
       Tests  8 passed | 12 skipped (20)
-   Start at  14:50:32
-   Duration  210ms (transform 33ms, setup 0ms, collect 38ms, tests 2ms, environment 0ms, prepare 26ms)
+   Start at  15:01:16
+   Duration  209ms (transform 34ms, setup 0ms, collect 35ms, tests 2ms, environment 0ms, prepare 26ms)
 ```
 
 </details>
@@ -443,12 +444,12 @@ src/phases/gate.ts
 
  RUN  v2.1.9 /Users/daniel/.grove/github.com/DongGukMon/harness-cli/worktrees/codex-optimization
 
- ✓ tests/state.test.ts (20 tests | 16 skipped) 10ms
+ ✓ tests/state.test.ts (20 tests | 16 skipped) 9ms
 
  Test Files  1 passed (1)
       Tests  4 passed | 16 skipped (20)
-   Start at  14:50:32
-   Duration  214ms (transform 33ms, setup 0ms, collect 36ms, tests 10ms, environment 0ms, prepare 29ms)
+   Start at  15:01:16
+   Duration  219ms (transform 36ms, setup 0ms, collect 39ms, tests 9ms, environment 0ms, prepare 30ms)
 ```
 
 </details>
@@ -473,12 +474,12 @@ src/phases/gate.ts
 
  RUN  v2.1.9 /Users/daniel/.grove/github.com/DongGukMon/harness-cli/worktrees/codex-optimization
 
- ✓ tests/integration/codex-session-resume.test.ts (1 test) 8ms
+ ✓ tests/integration/codex-session-resume.test.ts (6 tests | 5 skipped) 9ms
 
  Test Files  1 passed (1)
-      Tests  1 passed (1)
-   Start at  14:50:33
-   Duration  234ms (transform 44ms, setup 0ms, collect 51ms, tests 8ms, environment 0ms, prepare 27ms)
+      Tests  1 passed | 5 skipped (6)
+   Start at  15:01:17
+   Duration  254ms (transform 53ms, setup 0ms, collect 60ms, tests 9ms, environment 0ms, prepare 30ms)
 ```
 
 </details>
@@ -503,13 +504,13 @@ src/phases/gate.ts
 
  RUN  v2.1.9 /Users/daniel/.grove/github.com/DongGukMon/harness-cli/worktrees/codex-optimization
 
- ✓ tests/commands/inner.test.ts (13 tests) 35ms
- ✓ tests/signal.test.ts (15 tests) 237ms
+ ✓ tests/commands/inner.test.ts (13 tests) 39ms
+ ✓ tests/signal.test.ts (15 tests) 242ms
 
  Test Files  2 passed (2)
       Tests  28 passed (28)
-   Start at  14:50:34
-   Duration  496ms (transform 129ms, setup 0ms, collect 162ms, tests 272ms, environment 0ms, prepare 68ms)
+   Start at  15:01:17
+   Duration  482ms (transform 126ms, setup 0ms, collect 160ms, tests 281ms, environment 0ms, prepare 56ms)
 ```
 
 </details>
@@ -542,8 +543,8 @@ src/phases/gate.ts
 
  Test Files  1 passed (1)
       Tests  4 passed | 6 skipped (10)
-   Start at  14:50:34
-   Duration  260ms (transform 53ms, setup 0ms, collect 61ms, tests 19ms, environment 0ms, prepare 26ms)
+   Start at  15:01:18
+   Duration  261ms (transform 51ms, setup 0ms, collect 58ms, tests 19ms, environment 0ms, prepare 29ms)
 ```
 
 </details>
@@ -572,8 +573,8 @@ src/phases/gate.ts
 
  Test Files  1 passed (1)
       Tests  1 passed | 12 skipped (13)
-   Start at  14:50:35
-   Duration  249ms (transform 69ms, setup 0ms, collect 80ms, tests 3ms, environment 0ms, prepare 26ms)
+   Start at  15:01:19
+   Duration  250ms (transform 69ms, setup 0ms, collect 81ms, tests 3ms, environment 0ms, prepare 25ms)
 ```
 
 </details>
@@ -598,12 +599,12 @@ src/phases/gate.ts
 
  RUN  v2.1.9 /Users/daniel/.grove/github.com/DongGukMon/harness-cli/worktrees/codex-optimization
 
- ✓ tests/phases/runner.test.ts (60 tests | 56 skipped) 8ms
+ ✓ tests/phases/runner.test.ts (60 tests | 56 skipped) 7ms
 
  Test Files  1 passed (1)
       Tests  4 passed | 56 skipped (60)
-   Start at  14:50:36
-   Duration  277ms (transform 89ms, setup 0ms, collect 100ms, tests 8ms, environment 0ms, prepare 32ms)
+   Start at  15:01:19
+   Duration  288ms (transform 91ms, setup 0ms, collect 102ms, tests 7ms, environment 0ms, prepare 28ms)
 ```
 
 </details>
