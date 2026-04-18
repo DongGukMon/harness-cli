@@ -13,11 +13,6 @@ import type { HarnessState } from '../../src/types.js';
 
 // ─── Module mocks for runInteractivePhase ordering test ─────────────────────
 
-vi.mock('../../src/ui.js', async (importActual) => {
-  const actual = await importActual<typeof import('../../src/ui.js')>();
-  return { ...actual, printAdvisorReminder: vi.fn() };
-});
-
 vi.mock('../../src/tmux.js', () => ({
   sendKeysToPane: vi.fn(),
   pollForPidFile: vi.fn().mockResolvedValue(12345),
@@ -571,39 +566,9 @@ describe('validatePhaseArtifacts — Phase 5', () => {
   });
 });
 
-// ─── runInteractivePhase: advisor reminder ordering ──────────────────────────
+// ─── runInteractivePhase: Claude dispatch command shape ──────────────────────
 
-describe('runInteractivePhase — advisor reminder fires after runClaudeInteractive', () => {
-  it('printAdvisorReminder is called after all sendKeysToPane calls', async () => {
-    const { sendKeysToPane } = await import('../../src/tmux.js');
-    const { printAdvisorReminder } = await import('../../src/ui.js');
-    const { runInteractivePhase } = await import('../../src/phases/interactive.js');
-
-    const runDir = makeTmpDir();
-    const harnessDir = makeTmpDir();
-    const repoDir = createTestRepo();
-
-    const state = makeState({ tmuxSession: 'test-session', tmuxWorkspacePane: '%1', tmuxControlPane: '%0' });
-
-    // Clear any previous call records from other tests
-    vi.mocked(printAdvisorReminder).mockClear();
-    vi.mocked(sendKeysToPane).mockClear();
-
-    // Run; it will resolve as 'failed' (no sentinel, PID dies immediately) — that's fine
-    await runInteractivePhase(1, state, harnessDir, runDir, repoDir, 'test-attempt-id');
-
-    const reminderOrder = vi.mocked(printAdvisorReminder).mock.invocationCallOrder[0];
-    // sendKeysToPane is called multiple times (C-c pre-clear, wrapped cmd);
-    // reminder should fire after all of them (post-dispatch).
-    const sendKeysCalls = vi.mocked(sendKeysToPane).mock.invocationCallOrder;
-    const lastSendKeysOrder = sendKeysCalls[sendKeysCalls.length - 1];
-
-    expect(reminderOrder).toBeDefined();
-    expect(lastSendKeysOrder).toBeDefined();
-    expect(reminderOrder).toBeGreaterThan(lastSendKeysOrder);
-    expect(vi.mocked(printAdvisorReminder)).toHaveBeenCalledWith(1, 'claude');
-  });
-
+describe('runInteractivePhase — Claude dispatch command shape', () => {
   it('sendKeysToPane command includes --dangerously-skip-permissions and --effort', async () => {
     const { sendKeysToPane } = await import('../../src/tmux.js');
     const { runInteractivePhase } = await import('../../src/phases/interactive.js');
