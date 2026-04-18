@@ -48,9 +48,17 @@ where `encodedCwd = cwd.replace(/[^a-zA-Z0-9]/g, '-')`. Confirmed empirically: `
 
 ### 2.2 Fallback — time-window scan
 
-If the pinned file is **completely missing** (ENOENT) when we read it — typically because a future Claude version silently ignored `--session-id` and wrote its auto-generated UUID file instead — fall back to scanning `~/.claude/projects/<encodedCwd>/*.jsonl` for files whose **first assistant entry's timestamp** is `>= phaseStartTs`. Among matches, pick the one with the **smallest** first-assistant timestamp (i.e., the session that began closest to — but not before — phase open). Parse the same way.
+If the pinned file is **completely missing** (ENOENT) when we read it — typically because a future Claude version silently ignored `--session-id` and wrote its auto-generated UUID file instead — fall back to scanning `~/.claude/projects/<encodedCwd>/*.jsonl`:
 
-"Empty" or "no assistant entries" is **not** a fallback trigger — that's a legitimate zero-sum outcome (Claude session existed but no billable turns occurred).
+1. Enumerate all `*.jsonl` files in the project dir.
+2. For each, read entries until the **first** `type: assistant` entry is found; record its `timestamp`.
+3. Keep only candidates whose first-assistant `timestamp >= phaseStartTs`. Files with no assistant entries, or with a first-assistant timestamp earlier than `phaseStartTs`, are dropped.
+4. Among remaining candidates, select the one with the **smallest** first-assistant timestamp (i.e., the session that began closest to — but not before — phase open). Ties are broken by lexical filename order (deterministic).
+5. Parse the selected file the same way as the pinned file.
+
+The scan is bounded to the phase's own encoded project dir. It does **not** short-circuit on the first match — it must enumerate all candidates to satisfy the selection rule.
+
+"Empty" or "no assistant entries" in the pinned file is **not** a fallback trigger — that's a legitimate zero-sum outcome (Claude session existed but no billable turns occurred).
 
 Scan is opt-in per call, bounded to the phase's own project dir, and short-circuits on the first match. On any error the reader still returns `null`.
 
@@ -148,13 +156,15 @@ Fixtures under `tests/fixtures/claude-sessions/`:
 - `malformed-line.jsonl` — one bad JSON line surrounded by valid entries; parser skips the bad line and sums the rest.
 - `no-assistant-entries.jsonl` — only `queue-operation` / `user` entries; returns `{0,0,0,0,0}`.
 - `cache-only.jsonl` — all entries miss `input_tokens` but have `cache_creation_input_tokens`; correct sum.
-- `fallback-candidate.jsonl` — used to exercise the time-window fallback (pinned UUID file missing, scan finds this one).
+- `fallback-before.jsonl` — first assistant timestamp < `phaseStartTs` (must be excluded by the scanner).
+- `fallback-early.jsonl` — first assistant timestamp `== phaseStartTs + 1s` (the one the scanner should pick).
+- `fallback-late.jsonl` — first assistant timestamp `== phaseStartTs + 60s` (must NOT be picked when `fallback-early` is also present).
 
 Cases:
 1. happy path, pinned UUID, correct totals.
-2. pinned file missing + fallback finds the right file.
-3. pinned file missing + fallback finds nothing → `null`.
-4. malformed line skipped.
+2. pinned file missing + fallback scan with `fallback-before` + `fallback-early` + `fallback-late` all present in the dir → scanner returns the `fallback-early` aggregates (verifies both the ≥ `phaseStartTs` filter and the smallest-timestamp selection rule).
+3. pinned file missing + fallback finds nothing (only `fallback-before` present) → `null`.
+4. malformed line skipped **AND** stderr is called exactly once (spy on `process.stderr.write` / `console.error`) to report the skipped line tally.
 5. no assistant entries → zero sum (not null).
 6. cache-only entries sum correctly.
 7. project dir missing entirely → `null` + single stderr warn.
