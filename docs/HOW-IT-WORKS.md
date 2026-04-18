@@ -220,6 +220,18 @@ Available presets are defined in `MODEL_PRESETS` in `src/config.ts`: `opus-max` 
 
 ---
 
+## Phase 1/3/5 Wrapper Skill Layer (2026-04-18 rev)
+
+Interactive phase prompts are composed from a three-layer structure so the CLI-driven run and the `/harness` slash-command plugin converge on the same contract:
+
+1. **`phase-N.md` template** (`src/context/prompts/phase-{1,3,5}.md`) — thin binding. Each template is only a `{{wrapper_skill}}` placeholder plus a "Harness Runtime Context" reference block that names `runId`, `phaseAttemptId`, artifact paths, and (optionally) previous feedback. The template itself carries no harness-specific process rules.
+2. **Wrapper skill** (`src/context/skills/harness-phase-{1,3,5}-*.md`) — the harness-specific process overlay. Each wrapper has YAML frontmatter (`name`, `description`), a `## Context` gate-rubric summary, `## Inputs` with `@`-refs and optional feedback guarded by `{{#if feedback_path}}`, a numbered `## Process`, and `## Invariants` that carries the sentinel rule, gate-level reminders (e.g. Open Questions for Phase 1), and the `HARNESS FLOW CONSTRAINT` block (advisor() forbidden, scope locked to harness artifacts). `assembleInteractivePrompt` in `src/context/assembler.ts` strips the frontmatter, renders all `{{…}}` vars against the wrapper body, and injects the result into the thin template.
+3. **Auxiliary playbooks** (`src/context/playbooks/`) — agent-skills playbooks vendored at a pinned upstream SHA (see `VENDOR.md`). Phase 5 wrapper `@`-refs `@{{playbookDir}}/context-engineering.md` and `@{{playbookDir}}/git-workflow-and-versioning.md`; `playbookDir` is resolved from the assembler module location so the path lands under `dist/src/context/playbooks/` at runtime and `src/context/playbooks/` in dev.
+
+Gate prompts (phases 2/4/7) are a separate layer: `REVIEWER_CONTRACT_BY_GATE` combines the shared `REVIEWER_CONTRACT_BASE` preamble with a per-gate 5-axis rubric (`FIVE_AXIS_SPEC_GATE` / `FIVE_AXIS_PLAN_GATE` / `FIVE_AXIS_EVAL_GATE`), and each gate prompt also carries a `<harness_lifecycle>` stanza (see `buildLifecycleContext`) so the reviewer knows which later-phase artifacts do not yet exist.
+
+---
+
 ## Runner Architecture
 
 Phases that involve an AI agent are dispatched to one of two runners depending on the preset's `runner` field (`claude` or `codex`).

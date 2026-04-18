@@ -128,3 +128,58 @@ describe('wrapper contract invariants — literal (per spec §4/§5)', () => {
     expect(prompt).toMatch(/playbooks\/git-workflow-and-versioning\.md/);
   });
 });
+
+describe('BUG-B regression — HARNESS FLOW CONSTRAINT survives thin binding', () => {
+  // PR #11 added "HARNESS FLOW CONSTRAINT" (advisor() forbidden) inline to
+  // phase-{1,3,5}.md. T5 thinned those templates; the constraint now lives in
+  // each wrapper's Invariants section. Guard against regressing the migration.
+  it.each([1, 3, 5] as const)('phase %i — advisor() forbidden + reviewer explanation present', (phase) => {
+    const state = stubState(tmp);
+    const prompt = assembleInteractivePrompt(phase, state, '/tmp/harness');
+    expect(prompt).toContain('HARNESS FLOW CONSTRAINT');
+    expect(prompt).toContain('advisor()');
+    expect(prompt).toContain('독립 reviewer');
+  });
+});
+
+describe('prompt size and qa-integration guards', () => {
+  it('phase 5 prompt (largest) stays well under a generous ceiling', () => {
+    const state = stubState(tmp);
+    const prompt = assembleInteractivePrompt(5, state, '/tmp/harness');
+    // MAX_PROMPT_SIZE_KB is 64KB per config. Wrapper+vars+context must fit comfortably.
+    expect(prompt.length).toBeLessThan(60 * 1024);
+  });
+
+  it('phase 1 wrapper surfaces Open Questions requirement (qa #7)', () => {
+    const state = stubState(tmp);
+    const prompt = assembleInteractivePrompt(1, state, '/tmp/harness');
+    expect(prompt).toMatch(/Open Questions/);
+    expect(prompt).toMatch(/P1/);  // gate severity warning for missing section
+    // Wrapper body mentions Open Questions in both Context (gate-level) and Invariants — at least 2 hits
+    expect((prompt.match(/Open Questions/g) || []).length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('resume-smoke — pre-rev-3 state.json loads and re-renders under rev-3 wrapper without error (spec §11 force-rev-3 decision)', () => {
+    // Simulate: a run that started pre-rev-3 is resumed. state.json has no wrapper-specific fields
+    // (wrapper 구조는 phaseCodexSessions 같은 state 변경 없음 — spec §11 보장). 현 assembler가
+    // 기존 state를 받아 new wrapper 템플릿으로 문제없이 렌더되는지 smoke-check.
+    const legacyState = stubState(tmp);
+    // 기존 run state는 artifact 경로에 .harness/<runId>/... 형태만 가짐 (스키마 v1 동일)
+    legacyState.runId = 'legacy-run-id';
+    legacyState.artifacts.spec = path.join('.harness', 'legacy-run-id', 'spec.md');
+    legacyState.artifacts.plan = path.join('.harness', 'legacy-run-id', 'plan.md');
+    legacyState.artifacts.decisionLog = path.join('.harness', 'legacy-run-id', 'decisions.md');
+    legacyState.artifacts.checklist = path.join('.harness', 'legacy-run-id', 'checklist.json');
+    legacyState.phaseAttemptId = { '1': 'legacy-a1', '3': 'legacy-a3', '5': 'legacy-a5' };
+
+    for (const phase of [1, 3, 5] as const) {
+      const prompt = assembleInteractivePrompt(phase, legacyState, '/tmp/harness');
+      // 렌더 성공 + runId/attemptId/경로가 프롬프트에 올바르게 들어감
+      expect(prompt.length).toBeGreaterThan(100);
+      expect(prompt).toContain('legacy-run-id');
+      expect(prompt).toContain(`legacy-a${phase}`);
+      expect(prompt).not.toContain('{{runId}}');
+      expect(prompt).not.toContain('{{phaseAttemptId}}');
+    }
+  });
+});
