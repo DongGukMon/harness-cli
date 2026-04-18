@@ -30,6 +30,7 @@ export async function runCodexInteractive(
   runDir: string,
   promptFile: string,
   cwd: string,
+  codexHome: string | null = null,
 ): Promise<CodexInteractiveResult> {
   // Prompt size check
   let promptSize: number;
@@ -63,6 +64,9 @@ export async function runCodexInteractive(
     stdio: ['pipe', 'pipe', 'pipe'],
     detached: true,
     cwd,
+    env: codexHome === null
+      ? process.env
+      : { ...process.env, CODEX_HOME: codexHome },
   });
 
   const childPid = child.pid!;
@@ -168,6 +172,7 @@ interface RawExecInput {
   harnessDir: string;
   cwd: string;
   phase: number;
+  codexHome: string | null;
 }
 
 /**
@@ -198,6 +203,9 @@ async function runCodexExecRaw(input: RawExecInput): Promise<RawExecResult> {
     stdio: ['pipe', 'pipe', 'pipe'],
     detached: true,
     cwd: input.cwd,
+    env: input.codexHome === null
+      ? process.env
+      : { ...process.env, CODEX_HOME: input.codexHome },
   });
   const childPid = child.pid!;
   const startTime = getProcessStartTime(childPid);
@@ -317,6 +325,7 @@ export async function runCodexGate(
   cwd: string,
   resumeSessionId?: string | null,
   buildFreshPromptOnFallback?: () => string | { error: string },
+  codexHome: string | null = null,
 ): Promise<GatePhaseResult> {
   const mode: 'fresh' | 'resume' = resumeSessionId ? 'resume' : 'fresh';
   const first = await runCodexExecRaw({
@@ -327,6 +336,7 @@ export async function runCodexGate(
     harnessDir,
     cwd,
     phase,
+    codexHome,
   });
 
   // §4.5 fallback: only for session_missing, and only when we were actually resuming.
@@ -361,6 +371,7 @@ export async function runCodexGate(
       harnessDir,
       cwd,
       phase,
+      codexHome,
     });
     return rawToResult(fresh, preset, resumeSessionId ?? null, /* resumeFallback */ true);
   }

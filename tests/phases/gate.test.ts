@@ -9,6 +9,15 @@ import type { GateResult } from '../../src/types.js';
 vi.mock('../../src/runners/codex.js', () => ({ runCodexGate: vi.fn() }));
 vi.mock('../../src/runners/claude.js', () => ({ runClaudeGate: vi.fn() }));
 vi.mock('../../src/context/assembler.js', () => ({ assembleGatePrompt: vi.fn() }));
+vi.mock('../../src/runners/codex-isolation.js', async () => {
+  const actual = await vi.importActual<typeof import('../../src/runners/codex-isolation.js')>(
+    '../../src/runners/codex-isolation.js',
+  );
+  return {
+    ...actual,
+    ensureCodexIsolation: vi.fn((runDir: string) => `${runDir}/codex-home`),
+  };
+});
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
@@ -415,6 +424,89 @@ describe('runGatePhase — one-shot sidecar replay', () => {
     expect((result as any).recoveredFromSidecar).toBe(true);
     expect(result.type).toBe('verdict');
     void assembleGatePrompt; // silence unused import warning
+  });
+
+  it('ensureCodexIsolation(runDir) is called and codexHome threaded to runCodexGate (positive path, codexNoIsolate=false)', async () => {
+    const { assembleGatePrompt: mockAssembler } = await import('../../src/context/assembler.js');
+    const { runCodexGate: mockCodex } = await import('../../src/runners/codex.js');
+    const { ensureCodexIsolation } = await import('../../src/runners/codex-isolation.js');
+
+    vi.mocked(mockAssembler).mockReturnValue('mock prompt');
+    vi.mocked(mockCodex).mockResolvedValue({
+      type: 'verdict', verdict: 'APPROVE', comments: '', rawOutput: '## Verdict\nAPPROVE\n',
+    } as any);
+
+    const runDir = makeTmpDir();
+    const state = {
+      phasePresets: { '2': 'codex-high' },
+      gateRetries: { '2': 0 },
+      phaseCodexSessions: { '2': null, '4': null, '7': null },
+      currentPhase: 2,
+      codexNoIsolate: false,
+    } as any;
+
+    await runGatePhase(2, state, '/fake-harness', runDir, '/cwd');
+
+    expect(vi.mocked(ensureCodexIsolation)).toHaveBeenCalledWith(runDir);
+    // codexHome is the 8th positional arg of runCodexGate
+    const call = vi.mocked(mockCodex).mock.calls[0];
+    expect(call[7]).toBe(`${runDir}/codex-home`);
+  });
+
+  it('codexNoIsolate=true: ensureCodexIsolation NOT called; runCodexGate receives codexHome=null', async () => {
+    const { assembleGatePrompt: mockAssembler } = await import('../../src/context/assembler.js');
+    const { runCodexGate: mockCodex } = await import('../../src/runners/codex.js');
+    const { ensureCodexIsolation } = await import('../../src/runners/codex-isolation.js');
+
+    vi.mocked(mockAssembler).mockReturnValue('mock prompt');
+    vi.mocked(mockCodex).mockResolvedValue({
+      type: 'verdict', verdict: 'APPROVE', comments: '', rawOutput: '## Verdict\nAPPROVE\n',
+    } as any);
+
+    const runDir = makeTmpDir();
+    const state = {
+      phasePresets: { '2': 'codex-high' },
+      gateRetries: { '2': 0 },
+      phaseCodexSessions: { '2': null, '4': null, '7': null },
+      currentPhase: 2,
+      codexNoIsolate: true,
+    } as any;
+
+    await runGatePhase(2, state, '/fake-harness', runDir, '/cwd');
+
+    expect(vi.mocked(ensureCodexIsolation)).not.toHaveBeenCalled();
+    const call = vi.mocked(mockCodex).mock.calls[0];
+    expect(call[7]).toBeNull();
+  });
+
+  it('CodexIsolationError propagates as gate error (no retry — hard abort)', async () => {
+    const { assembleGatePrompt: mockAssembler } = await import('../../src/context/assembler.js');
+    const { runCodexGate: mockCodex } = await import('../../src/runners/codex.js');
+    const isolationMod = await import('../../src/runners/codex-isolation.js');
+    const { CodexIsolationError } = isolationMod;
+
+    vi.mocked(mockAssembler).mockReturnValue('mock prompt');
+    vi.mocked(isolationMod.ensureCodexIsolation).mockImplementationOnce(() => {
+      throw new CodexIsolationError('fake-fail: auth not found');
+    });
+
+    const runDir = makeTmpDir();
+    const state = {
+      phasePresets: { '2': 'codex-high' },
+      gateRetries: { '2': 0 },
+      phaseCodexSessions: { '2': null, '4': null, '7': null },
+      currentPhase: 2,
+      codexNoIsolate: false,
+    } as any;
+
+    const result = await runGatePhase(2, state, '/fake-harness', runDir, '/cwd');
+
+    expect(result.type).toBe('error');
+    if (result.type === 'error') {
+      expect(result.error).toMatch(/fake-fail.*auth not found/);
+    }
+    // Runner must NOT be called when isolation bootstrap fails.
+    expect(vi.mocked(mockCodex)).not.toHaveBeenCalled();
   });
 
   it('with flag.value=false: skips replay, runs runner (no infinite retry on REJECT sidecar)', async () => {

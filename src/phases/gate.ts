@@ -5,6 +5,7 @@ import { assembleGatePrompt, assembleGateResumePrompt } from '../context/assembl
 import { getPresetById } from '../config.js';
 import { runClaudeGate } from '../runners/claude.js';
 import { runCodexGate } from '../runners/codex.js';
+import { ensureCodexIsolation, CodexIsolationError } from '../runners/codex-isolation.js';
 import { writeState } from '../state.js';
 import { parseVerdict, buildGateResult } from './verdict.js';
 export { parseVerdict, buildGateResult } from './verdict.js';
@@ -264,13 +265,29 @@ export async function runGatePhase(
 
   const promptBytes = Buffer.byteLength(prompt, 'utf8');
 
-  // Step 6: Dispatch to runner
+  // Step 6: Dispatch to runner.
+  // For codex runner, bootstrap the per-run CODEX_HOME isolation (unless
+  // user opted out via --codex-no-isolate). CodexIsolationError aborts the
+  // gate hard (no retry) — surfacing as a gate error is preferable to
+  // silent fallback to the user's real ~/.codex (re-exposes BUG-C).
   const runner = preset.runner;
+  let codexHome: string | null = null;
+  if (runner === 'codex' && !state.codexNoIsolate) {
+    try {
+      codexHome = ensureCodexIsolation(runDir);
+    } catch (err) {
+      if (err instanceof CodexIsolationError) {
+        return { type: 'error', error: err.message, runner: 'codex' };
+      }
+      throw err;
+    }
+  }
   const runStartedAt = Date.now();
   const rawResult = runner === 'claude'
     ? await runClaudeGate(phase, preset, prompt, harnessDir, cwd)
     : await runCodexGate(
         phase, preset, prompt, harnessDir, cwd, resumeSessionId, buildFreshPromptOnFallback,
+        codexHome,
       );
   const durationMs = Date.now() - runStartedAt;
 

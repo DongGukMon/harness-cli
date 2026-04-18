@@ -80,6 +80,11 @@ export interface HarnessState {
   // Tracks which phase triggered a reopen (for phase_start.reopenFromGate)
   // keys "1","3","5" → number (triggering phase 2/4/6/7) or null
   phaseReopenSource: Record<string, number | null>;
+  // BUG-C root-cause fix (Issue #13): when true, codex subprocesses run with
+  // the user's inherited CODEX_HOME (no isolation). Default false — every
+  // codex-phase spawn runs inside <runDir>/codex-home/ with only auth.json
+  // symlinked in. Persisted so that `harness resume` honors the decision.
+  codexNoIsolate: boolean;
 }
 
 export interface LockData {
@@ -250,12 +255,13 @@ export interface SessionMeta {
   harnessVersion: string;
   resumedAt: number[];
   bootstrapOnResume?: boolean;
+  codexHome?: string;
 }
 
 export interface SessionLogger {
   logEvent(event: DistributiveOmit<LogEvent, 'v' | 'ts' | 'runId'>): void;
   writeMeta(partial: Partial<SessionMeta> & { task: string }): void;
-  updateMeta(update: { pushResumedAt?: number; task?: string }): void;
+  updateMeta(update: { pushResumedAt?: number; task?: string; codexHome?: string }): void;
   finalizeSummary(state: HarnessState): void;
   close(): void;
   hasBootstrapped(): boolean;

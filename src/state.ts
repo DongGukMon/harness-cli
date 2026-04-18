@@ -79,6 +79,7 @@ export function migrateState(raw: any): HarnessState {
     if (raw.phaseReopenFlags[key] === undefined) raw.phaseReopenFlags[key] = false;
   }
   if (raw.loggingEnabled === undefined) raw.loggingEnabled = false;
+  if (raw.codexNoIsolate === undefined) raw.codexNoIsolate = false;
   if (!raw.phaseReopenSource || typeof raw.phaseReopenSource !== 'object') {
     raw.phaseReopenSource = { '1': null, '3': null, '5': null };
   }
@@ -183,6 +184,7 @@ export function createInitialState(
   autoMode: boolean,
   loggingEnabled: boolean = false,
   flow: 'full' | 'light' = 'full',
+  codexNoIsolate: boolean = false,
 ): HarnessState {
   const phasePresets: Record<string, string> = {};
   for (const phase of REQUIRED_PHASE_KEYS) {
@@ -263,5 +265,6 @@ export function createInitialState(
     tmuxControlPane: '',
     loggingEnabled,
     phaseReopenSource: { '1': null, '3': null, '5': null },
+    codexNoIsolate,
   };
 }

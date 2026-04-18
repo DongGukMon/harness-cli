@@ -196,4 +196,25 @@ describe('startCommand', () => {
     expect(state.flow).toBe('light');
     expect(state.autoMode).toBe(true);
   });
+
+  it('state.codexNoIsolate=true AND stderr warning when --codex-no-isolate passed', async () => {
+    await startCommand('test task', { root: repo.path, codexNoIsolate: true });
+    const harnessDir = join(repo.path, '.harness');
+    const runId = readFileSync(join(harnessDir, 'current-run'), 'utf-8').trim();
+    const state = JSON.parse(readFileSync(join(harnessDir, runId, 'state.json'), 'utf-8'));
+    expect(state.codexNoIsolate).toBe(true);
+    const stderr = stderrSpy.mock.calls.map((c: any) => c[0]).join('');
+    expect(stderr).toMatch(/CODEX_HOME isolation disabled/i);
+    expect(stderr).toMatch(/BUG-C risk/);
+  });
+
+  it('state.codexNoIsolate=false (default) and no warning when flag omitted', async () => {
+    await startCommand('test task', { root: repo.path });
+    const harnessDir = join(repo.path, '.harness');
+    const runId = readFileSync(join(harnessDir, 'current-run'), 'utf-8').trim();
+    const state = JSON.parse(readFileSync(join(harnessDir, runId, 'state.json'), 'utf-8'));
+    expect(state.codexNoIsolate).toBe(false);
+    const stderr = stderrSpy.mock.calls.map((c: any) => c[0]).join('');
+    expect(stderr).not.toMatch(/CODEX_HOME isolation disabled/i);
+  });
 });

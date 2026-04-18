@@ -173,6 +173,30 @@ describe('runCodexGate — resume path', () => {
   });
 });
 
+describe('runCodexGate — CODEX_HOME on resume-fallback (BUG-C isolation §7.2)', () => {
+  it('BOTH spawns (session_missing → fresh fallback) carry CODEX_HOME=<provided>', async () => {
+    const cp = await import('child_process');
+    (cp.spawn as any)
+      .mockImplementationOnce(() =>
+        makeMockChild({ stderr: 'error: session not found\n', exitCode: 1 }),
+      )
+      .mockImplementationOnce(() =>
+        makeMockChild({ stdout: SUCCESS_STDOUT.replace('abc-123-def', 'fallback-sid') }),
+      );
+    const result = await runCodexGate(
+      2, preset, 'resume prompt', '/tmp/h', '/tmp/c', 'dead-sid',
+      () => 'fresh prompt body',
+      '/iso/run',
+    );
+    expect(result.type).toBe('verdict');
+    // Both calls MUST carry CODEX_HOME — a bypass on either path re-exposes BUG-C.
+    const env1 = (cp.spawn as any).mock.calls[0][2].env;
+    const env2 = (cp.spawn as any).mock.calls[1][2].env;
+    expect(env1.CODEX_HOME).toBe('/iso/run');
+    expect(env2.CODEX_HOME).toBe('/iso/run');
+  });
+});
+
 describe('runCodexGate — metadata captured on error paths', () => {
   it('captures sessionId and tokensTotal on nonzero exit', async () => {
     const cp = await import('child_process');
