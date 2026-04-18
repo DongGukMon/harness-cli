@@ -1112,6 +1112,20 @@ Phase 6 verify용 머신 판독 checklist. Plan 구현 완료 시 `.harness/<run
 5. **Claude 플러그인 배포** — spec §8 follow-up. 별도 PR.
 6. **`test-todo` 등 dog-fooding project에 새 assembler 적용 타이밍** — 이 repo의 `harness` CLI 빌드/링크 경로가 독립 — dog-food 프로젝트는 새 dist를 참조만 하면 됨.
 
+## Review Findings — T2 code review (2026-04-18) — to resolve in T4
+
+Code-quality review of Task 2 surfaced issues that belong to the plan level, not the T2 implementation. T2 wrote exactly what the plan specifies; these must be addressed when Task 4 (assembler wrapper inline) lands.
+
+- **[Important — correctness] Auxiliary playbook `@`-path resolves to wrong directory.** `harness-phase-5-implement.md` uses `@{{harnessDir}}/../dist/src/context/playbooks/...`. `harnessDir` is populated by `findHarnessRoot()` as `<user-project>/.harness`, so the path resolves to `<user-project>/dist/src/context/playbooks/` — inside the user's project, not the harness-cli install. At runtime the `@`-ref will 404 or load nothing, defeating T1's vendoring.
+  - **Fix in T4**: introduce a new template variable (e.g. `playbookDir`) derived from the assembler module's location (`path.join(__dirname, '..', 'context', 'playbooks')` after T6's copy-assets wiring places them alongside the assembler in `dist/src/context/`). Update `harness-phase-5-implement.md` lines 20–21 + footnote on line 23 accordingly.
+  - Keep the variable name decision for the T4 author.
+
+- **[Minor — clarity] `@` prefix asymmetry on feedback inputs.** phase-1 lines 17–18 and phase-3 lines 16–18 use `@` on every `Inputs` path except `{{feedback_path}}`. Likely intentional (optional input, may be empty), but undocumented. Either add a one-word rationale inline or normalize in T4.
+
+- **[Minor — contract] Under-specified handoff between Phase 3 and Phase 5.** phase-5 line 26 refers to a "plan header sub-skill declaration" but phase-3 never instructs the plan author to produce such a header. Either add a line to phase-3 Process step 1 (optional sub-skill declaration in plan header) or drop the "plan header" wording in phase-5 and just state default + alternative.
+
+---
+
 ## TODO — Deferred from gate-plan review (2026-04-18, Codex round 1) — RESOLVED 2026-04-18
 
 사용자 preference에 따라 P1만 수정·재검증하고 P2는 본 섹션에 기록 후 진행한다. Implementation 진입 시점(2026-04-18 skills-synth 브랜치 시작)에 다음과 같이 확정:
