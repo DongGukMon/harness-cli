@@ -1,6 +1,6 @@
 import { existsSync, readFileSync, statSync, unlinkSync } from 'fs';
 import { execSync } from 'child_process';
-import { join } from 'path';
+import { isAbsolute, join } from 'path';
 import { getHead, isAncestor, detectExternalCommits } from './git.js';
 import { readState, writeState } from './state.js';
 import { normalizeArtifactCommit } from './artifact.js';
@@ -14,6 +14,8 @@ import {
 } from './phases/runner.js';
 import { InputManager } from './input.js';
 import { NoopLogger } from './logger.js';
+import { getPhaseArtifactFiles } from './config.js';
+import { isValidChecklistSchema } from './phases/checklist.js';
 import type { HarnessState, PhaseNumber } from './types.js';
 
 /** Create a no-op InputManager for use in resumeRun (deferred refactor: inputManager passed by inner.ts in future). */
@@ -469,7 +471,7 @@ function updateExternalCommitsDetected(state: HarnessState, cwd: string, runDir:
  * Runs normalize_artifact_commit for Phase 1/3.
  * Returns true if the phase can be treated as completed.
  */
-function completeInteractivePhaseFromFreshSentinel(
+export function completeInteractivePhaseFromFreshSentinel(
   phase: PhaseNumber,
   state: HarnessState,
   cwd: string
@@ -477,22 +479,42 @@ function completeInteractivePhaseFromFreshSentinel(
   try {
     if (phase === 1 || phase === 3) {
       // Check artifact existence + non-empty + mtime >= phaseOpenedAt
-      const artifactKeys: Array<'spec' | 'decisionLog' | 'plan' | 'checklist'> =
-        phase === 1 ? ['spec', 'decisionLog'] : ['plan', 'checklist'];
+      const artifactKeys = getPhaseArtifactFiles(state.flow, phase);
+      if (artifactKeys.length === 0) return false;
       const openedAt = state.phaseOpenedAt[String(phase)];
 
       for (const key of artifactKeys) {
         const relPath = state.artifacts[key];
-        const absPath = join(cwd, relPath);
+        if (!relPath) return false;
+        const absPath = isAbsolute(relPath) ? relPath : join(cwd, relPath);
         if (!existsSync(absPath)) return false;
         const stat = statSync(absPath);
         if (stat.size === 0) return false;
         if (openedAt !== null && Math.floor(stat.mtimeMs) < openedAt) return false;
       }
 
+      // Light + phase 1: checklist schema + '## Implementation Plan' header
+      if (state.flow === 'light' && phase === 1) {
+        const checklistAbs = isAbsolute(state.artifacts.checklist)
+          ? state.artifacts.checklist
+          : join(cwd, state.artifacts.checklist);
+        if (!isValidChecklistSchema(checklistAbs)) return false;
+
+        const specAbs = isAbsolute(state.artifacts.spec)
+          ? state.artifacts.spec
+          : join(cwd, state.artifacts.spec);
+        try {
+          const body = readFileSync(specAbs, 'utf-8');
+          if (!/^##\s+Implementation\s+Plan\s*$/m.test(body)) return false;
+        } catch {
+          return false;
+        }
+      }
+
       // Run normalize_artifact_commit for non-gitignored artifacts
       for (const key of artifactKeys) {
         const relPath = state.artifacts[key];
+        if (!relPath) continue;
         if (relPath.startsWith('.harness/')) continue;
         const message = `harness[${state.runId}]: Phase ${phase} — ${String(key)}`;
         normalizeArtifactCommit(relPath, message, cwd);

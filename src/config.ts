@@ -1,4 +1,4 @@
-import type { PendingAction } from './types.js';
+import type { PendingAction, FlowMode, PhaseNumber, Artifacts, GatePhase, InteractivePhase } from './types.js';
 
 export interface ModelPreset {
   id: string;
@@ -61,3 +61,38 @@ export const PHASE_ARTIFACT_FILES: Record<number, string[]> = {
   1: ['spec', 'decisionLog'],
   3: ['plan', 'checklist'],
 };
+
+export const LIGHT_REQUIRED_PHASE_KEYS = ['1', '5', '7'] as const;
+
+export const LIGHT_PHASE_DEFAULTS: Record<number, string> = {
+  1: 'opus-max',
+  5: 'sonnet-high',
+  7: 'codex-high',
+};
+
+export function getRequiredPhaseKeys(flow: FlowMode): readonly string[] {
+  return flow === 'light' ? LIGHT_REQUIRED_PHASE_KEYS : REQUIRED_PHASE_KEYS;
+}
+
+export function getPhaseDefaults(flow: FlowMode): Record<number, string> {
+  return flow === 'light' ? LIGHT_PHASE_DEFAULTS : PHASE_DEFAULTS;
+}
+
+export function getPhaseArtifactFiles(
+  flow: FlowMode,
+  phase: PhaseNumber,
+): Array<keyof Artifacts> {
+  if (flow === 'light') {
+    return phase === 1 ? ['spec', 'decisionLog', 'checklist'] : [];
+  }
+  if (phase === 1) return ['spec', 'decisionLog'];
+  if (phase === 3) return ['plan', 'checklist'];
+  return [];
+}
+
+export function getReopenTarget(flow: FlowMode, gate: GatePhase): InteractivePhase {
+  if (flow === 'light' && gate === 7) return 1;
+  if (gate === 2) return 1;
+  if (gate === 4) return 3;
+  return 5; // gate 7 + full
+}

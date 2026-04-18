@@ -8,7 +8,7 @@ import {
   GATE_TIMEOUT_MS,
   VERIFY_RETRY_LIMIT,
   TERMINAL_PHASE,
-  PHASE_ARTIFACT_FILES,
+  getPhaseArtifactFiles,
   getPresetById,
 } from '../config.js';
 import { writeState } from '../state.js';
@@ -125,12 +125,12 @@ function normalizeInteractiveArtifacts(
   state: HarnessState,
   cwd: string
 ): void {
-  type ArtifactKey = keyof typeof state.artifacts;
-  const artifactKeys = PHASE_ARTIFACT_FILES[phase] as ArtifactKey[] | undefined;
-  if (!artifactKeys) return;
+  const artifactKeys = getPhaseArtifactFiles(state.flow, phase);
+  if (artifactKeys.length === 0) return;
 
   for (const key of artifactKeys) {
     const relPath = state.artifacts[key];
+    if (!relPath) continue;
     // Skip gitignored artifacts (decisions.md, checklist.json are in .harness/)
     if (relPath.startsWith('.harness/')) continue;
 

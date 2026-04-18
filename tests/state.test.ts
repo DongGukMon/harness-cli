@@ -4,7 +4,7 @@ import os from 'os';
 import path from 'path';
 import { writeState, readState, createInitialState, migrateState } from '../src/state.js';
 import type { HarnessState } from '../src/types.js';
-import { PHASE_DEFAULTS } from '../src/config.js';
+import { PHASE_DEFAULTS, getPhaseArtifactFiles, getReopenTarget } from '../src/config.js';
 
 function makeTmpDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'state-test-'));
@@ -316,5 +316,39 @@ describe('flow + carryoverFeedback (light-flow spec)', () => {
     writeState(dir, state);
     const restored = readState(dir);
     expect(restored?.carryoverFeedback).toEqual(state.carryoverFeedback);
+  });
+});
+
+describe('getPhaseArtifactFiles (ADR-13)', () => {
+  it('full + phase 1 → spec + decisionLog', () => {
+    expect(getPhaseArtifactFiles('full', 1)).toEqual(['spec', 'decisionLog']);
+  });
+  it('full + phase 3 → plan + checklist', () => {
+    expect(getPhaseArtifactFiles('full', 3)).toEqual(['plan', 'checklist']);
+  });
+  it('light + phase 1 → spec + decisionLog + checklist', () => {
+    expect(getPhaseArtifactFiles('light', 1)).toEqual(['spec', 'decisionLog', 'checklist']);
+  });
+  it('light + phase 3 → empty (phase is skipped)', () => {
+    expect(getPhaseArtifactFiles('light', 3)).toEqual([]);
+  });
+  it('any flow + phase 5 → empty (no on-disk artifact set)', () => {
+    expect(getPhaseArtifactFiles('full', 5)).toEqual([]);
+    expect(getPhaseArtifactFiles('light', 5)).toEqual([]);
+  });
+});
+
+describe('getReopenTarget (ADR-4)', () => {
+  it('full + gate 2 → phase 1', () => {
+    expect(getReopenTarget('full', 2)).toBe(1);
+  });
+  it('full + gate 4 → phase 3', () => {
+    expect(getReopenTarget('full', 4)).toBe(3);
+  });
+  it('full + gate 7 → phase 5 (unchanged from current behaviour)', () => {
+    expect(getReopenTarget('full', 7)).toBe(5);
+  });
+  it('light + gate 7 → phase 1 (design combined doc is re-authored)', () => {
+    expect(getReopenTarget('light', 7)).toBe(1);
   });
 });
