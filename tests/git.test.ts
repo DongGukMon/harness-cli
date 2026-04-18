@@ -179,12 +179,12 @@ describe('generateRunId', () => {
     expect(id).toMatch(/^\d{4}-\d{2}-\d{2}-cafe-au-lait$/);
   });
 
-  it('truncates slug to 50 chars at word boundary', () => {
-    // Create a task that produces a slug longer than 50 chars
+  it('truncates slug to 25 chars at word boundary', () => {
+    // Create a task that produces a slug longer than 25 chars
     const task = 'implement the full authentication and authorization system for users';
     const id = generateRunId(task, harnessDir);
     const slug = id.slice('YYYY-MM-DD-'.length);
-    expect(slug.length).toBeLessThanOrEqual(50);
+    expect(slug.length).toBeLessThanOrEqual(25);
     // Should not end with a partial word (no trailing -)
     expect(slug).not.toMatch(/-$/);
   });
