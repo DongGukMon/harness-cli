@@ -56,8 +56,13 @@ export async function runClaudeInteractive(
   const pidFile = path.join(runDir, `claude-${phase}-${attemptId}.pid`);
   if (fs.existsSync(pidFile)) fs.unlinkSync(pidFile);
 
-  // Launch Claude via exec wrapper
-  const claudeArgs = `--dangerously-skip-permissions --model ${preset.model} --effort ${preset.effort} @${path.resolve(promptFile)}`;
+  // Launch Claude via exec wrapper.
+  // Pin Claude's session UUID to our attemptId so the session JSONL lands at
+  // ~/.claude/projects/<encodedCwd>/<attemptId>.jsonl (§D5 of the token-capture design).
+  // Guard against empty attemptId (shouldn't happen given upstream contract) by
+  // omitting the flag rather than passing an invalid argument.
+  const sessionIdArg = attemptId ? `--session-id ${attemptId} ` : '';
+  const claudeArgs = `--dangerously-skip-permissions ${sessionIdArg}--model ${preset.model} --effort ${preset.effort} @${path.resolve(promptFile)}`;
   const wrappedCmd = `sh -c 'echo $$ > ${pidFile}; exec claude ${claudeArgs}'`;
   sendKeysToPane(sessionName, workspacePane, wrappedCmd);
 
