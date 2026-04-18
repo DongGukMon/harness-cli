@@ -132,12 +132,16 @@ export function validatePhaseArtifacts(
     try {
       const head = execSync('git rev-parse HEAD', { cwd, encoding: 'utf-8' }).trim();
       const base = state.implRetryBase;
-      // HEAD must have advanced beyond the retry base
-      if (head === base) return false;
-
-      // Working tree must be clean
       const status = execSync('git status --porcelain', { cwd, encoding: 'utf-8' }).trim();
-      return status === '';
+      // Working tree must always be clean
+      if (status !== '') return false;
+      // HEAD advanced — always valid
+      if (head !== base) return true;
+      // HEAD did not advance. Accept only on reopen (implCommit already set):
+      // a verify-failure reopen may legitimately require only gitignored artifact
+      // fixes (e.g., checklist.json) and no further impl commits. First-attempt
+      // zero-commit is still rejected to prevent empty sessions passing through.
+      return state.implCommit !== null;
     } catch {
       return false;
     }
@@ -191,14 +195,12 @@ export async function runInteractivePhase(
   const promptFile = path.join(runDir, `phase-${phase}-init-prompt.md`);
   fs.writeFileSync(promptFile, prompt, 'utf-8');
 
-  printAdvisorReminder(phase, preset.runner);
-  await new Promise<void>((resolve) => setTimeout(resolve, 300));
-
   // Dispatch to runner
   if (preset.runner === 'claude') {
     const { pid: claudePid } = await runClaudeInteractive(
       phase, updatedState, preset, harnessDir, runDir, promptFile,
     );
+    printAdvisorReminder(phase, preset.runner);
     const sentinelPath = path.join(runDir, `phase-${phase}.done`);
     const resolvedAttemptId = updatedState.phaseAttemptId[String(phase)] ?? attemptId;
     const result = await waitForPhaseCompletion(
@@ -206,7 +208,7 @@ export async function runInteractivePhase(
     );
     return { ...result, attemptId };
   } else {
-    // Codex runner
+    // Codex runner — printAdvisorReminder is a no-op for codex, omit call
     const { runCodexInteractive } = await import('../runners/codex.js');
     const result = await runCodexInteractive(
       phase, updatedState, preset, harnessDir, runDir, promptFile, cwd,

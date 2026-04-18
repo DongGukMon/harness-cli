@@ -558,12 +558,23 @@ describe('validatePhaseArtifacts — Phase 5', () => {
     const result = validatePhaseArtifacts(5, state, repoDir);
     expect(result).toBe(false);
   });
+
+  it('accepts zero-commit reopen when implCommit is already set', () => {
+    // A Phase 6 verify-failure reopen may require only gitignored artifact
+    // fixes (e.g., checklist.json). Claude writes the sentinel without new
+    // commits; validation must not fail.
+    const repoDir = createTestRepo();
+    const head = execSync('git rev-parse HEAD', { cwd: repoDir, encoding: 'utf-8' }).trim();
+    const state = makeState({ implRetryBase: head, implCommit: 'prior-impl-sha' });
+    const result = validatePhaseArtifacts(5, state, repoDir);
+    expect(result).toBe(true);
+  });
 });
 
 // ─── runInteractivePhase: advisor reminder ordering ──────────────────────────
 
-describe('runInteractivePhase — advisor reminder fires before sendKeysToPane', () => {
-  it('printAdvisorReminder is called before sendKeysToPane', async () => {
+describe('runInteractivePhase — advisor reminder fires after runClaudeInteractive', () => {
+  it('printAdvisorReminder is called after all sendKeysToPane calls', async () => {
     const { sendKeysToPane } = await import('../../src/tmux.js');
     const { printAdvisorReminder } = await import('../../src/ui.js');
     const { runInteractivePhase } = await import('../../src/phases/interactive.js');
@@ -582,12 +593,14 @@ describe('runInteractivePhase — advisor reminder fires before sendKeysToPane',
     await runInteractivePhase(1, state, harnessDir, runDir, repoDir, 'test-attempt-id');
 
     const reminderOrder = vi.mocked(printAdvisorReminder).mock.invocationCallOrder[0];
-    // sendKeysToPane is called twice: C-c pre-clear, then the actual command
-    const sendKeysToPaneOrder = vi.mocked(sendKeysToPane).mock.invocationCallOrder[0];
+    // sendKeysToPane is called multiple times (C-c pre-clear, wrapped cmd);
+    // reminder should fire after all of them (post-dispatch).
+    const sendKeysCalls = vi.mocked(sendKeysToPane).mock.invocationCallOrder;
+    const lastSendKeysOrder = sendKeysCalls[sendKeysCalls.length - 1];
 
     expect(reminderOrder).toBeDefined();
-    expect(sendKeysToPaneOrder).toBeDefined();
-    expect(reminderOrder).toBeLessThan(sendKeysToPaneOrder);
+    expect(lastSendKeysOrder).toBeDefined();
+    expect(reminderOrder).toBeGreaterThan(lastSendKeysOrder);
     expect(vi.mocked(printAdvisorReminder)).toHaveBeenCalledWith(1, 'claude');
   });
 
@@ -612,6 +625,6 @@ describe('runInteractivePhase — advisor reminder fires before sendKeysToPane',
 
     expect(command).toContain('--dangerously-skip-permissions');
     expect(command).toContain('--effort');
-    expect(command).toContain('max');
+    expect(command).toContain('xHigh');
   });
 });

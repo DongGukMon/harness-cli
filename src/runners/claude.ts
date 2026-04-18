@@ -25,7 +25,10 @@ export async function runClaudeInteractive(
   const sessionName = state.tmuxSession;
   const workspacePane = state.tmuxWorkspacePane;
 
-  // Kill previous workspace process if alive (and matches saved start-time)
+  // Kill previous workspace process if alive (and matches saved start-time).
+  // Claude Code does not exit after writing the sentinel — it stays idle awaiting input.
+  // If we don't kill it, the next sendKeysToPane below types the wrapper command INTO
+  // Claude's input box (not a shell prompt), the PID file never appears, and phase reopen fails.
   if (state.lastWorkspacePid !== null && isPidAlive(state.lastWorkspacePid)) {
     const savedStart = state.lastWorkspacePidStartTime;
     const actualStart = getProcessStartTime(state.lastWorkspacePid);
@@ -35,7 +38,13 @@ export async function runClaudeInteractive(
       while (isPidAlive(state.lastWorkspacePid) && Date.now() < deadline) {
         await new Promise<void>((r) => setTimeout(r, 200));
       }
+      if (isPidAlive(state.lastWorkspacePid)) {
+        await killProcessGroup(state.lastWorkspacePid, SIGTERM_WAIT_MS);
+      }
     }
+    state.lastWorkspacePid = null;
+    state.lastWorkspacePidStartTime = null;
+    writeState(runDir, state);
   }
 
   // Safety: Ctrl+C + wait

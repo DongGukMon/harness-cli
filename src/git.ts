@@ -91,7 +91,7 @@ export function getFileStatus(filePath: string, cwd?: string): string {
 // 3. Replace non-alphanumeric with -
 // 4. Collapse consecutive -
 // 5. Trim leading/trailing -
-// 6. Max 50 chars (cut at word boundary = last -)
+// 6. Max 25 chars (cut at word boundary = last -)
 // 7. Empty → "untitled"
 // Format: YYYY-MM-DD-<slug>[-N] (N if directory exists)
 export function generateRunId(task: string, harnessDir: string): string {
@@ -115,9 +115,9 @@ export function generateRunId(task: string, harnessDir: string): string {
     // 5. Trim leading/trailing -
     .replace(/^-+|-+$/g, '');
 
-  // 6. Max 50 chars, cut at word boundary (last -)
-  if (slug.length > 50) {
-    const truncated = slug.slice(0, 50);
+  // 6. Max 25 chars, cut at word boundary (last -)
+  if (slug.length > 25) {
+    const truncated = slug.slice(0, 25);
     const lastDash = truncated.lastIndexOf('-');
     slug = lastDash > 0 ? truncated.slice(0, lastDash) : truncated;
   }
