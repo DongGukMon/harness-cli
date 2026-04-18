@@ -332,14 +332,21 @@ export async function runCodexGate(
   if (mode === 'resume' && first.category === 'session_missing' && buildFreshPromptOnFallback) {
     const freshPrompt = buildFreshPromptOnFallback();
     if (typeof freshPrompt !== 'string') {
+      // §4.5 "all termination paths extract metadata": even when fresh-prompt
+      // assembly fails, preserve the first attempt's session id / tokensTotal /
+      // exitCode so downstream logs aren't blank. Error message carries the
+      // closure failure reason; resumeFallback stays true to signal the branch.
+      const firstMeta = extractCodexMetadata(first.stdout);
       return {
         type: 'error',
         error: `Resume fallback failed: ${freshPrompt.error}`,
         rawOutput: first.stdout,
         runner: 'codex',
+        exitCode: first.exitCode ?? undefined,
         sourcePreset: { model: preset.model, effort: preset.effort },
         resumedFrom: resumeSessionId ?? null,
         resumeFallback: true,
+        ...firstMeta,
       };
     }
     const fresh = await runCodexExecRaw({

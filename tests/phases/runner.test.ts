@@ -916,6 +916,80 @@ describe('handleGatePhase — gate_verdict emission (APPROVE)', () => {
     }
   });
 
+  // §4.6 resume-log-field emission (EC-17): four-scenario coverage for
+  // resumedFrom/resumeFallback on gate_verdict + gate_error events.
+  it('§4.6 emits gate_verdict with resumedFrom=null + resumeFallback=false on fresh spawn', async () => {
+    const runDir = makeTmpDir();
+    const state = makeState({ currentPhase: 2 });
+    const { logger, eventsPath, cleanup } = makeTestLogger(state.runId);
+    vi.mocked(runGatePhase).mockResolvedValueOnce({
+      type: 'verdict', verdict: 'APPROVE', comments: '', rawOutput: '',
+      runner: 'codex', codexSessionId: 'fresh-abc',
+      resumedFrom: null, resumeFallback: false,
+    } as any);
+    try {
+      await handleGatePhase(2, state, HDIR, runDir, CWD, createNoOpInputManager(), logger, { value: false });
+      const v = readEvents(eventsPath).find((e: any) => e.event === 'gate_verdict');
+      expect(v).toBeDefined();
+      expect(v.resumedFrom).toBeNull();
+      expect(v.resumeFallback).toBe(false);
+      expect(v.codexSessionId).toBe('fresh-abc');
+    } finally { cleanup(); }
+  });
+
+  it('§4.6 emits gate_verdict with resumedFrom=<prev> + resumeFallback=false on successful resume', async () => {
+    const runDir = makeTmpDir();
+    const state = makeState({ currentPhase: 2 });
+    const { logger, eventsPath, cleanup } = makeTestLogger(state.runId);
+    vi.mocked(runGatePhase).mockResolvedValueOnce({
+      type: 'verdict', verdict: 'REJECT', comments: 'x', rawOutput: '',
+      runner: 'codex', codexSessionId: 'prev-abc',
+      resumedFrom: 'prev-abc', resumeFallback: false,
+    } as any);
+    try {
+      await handleGatePhase(2, state, HDIR, runDir, CWD, createNoOpInputManager(), logger, { value: false });
+      const v = readEvents(eventsPath).find((e: any) => e.event === 'gate_verdict');
+      expect(v.resumedFrom).toBe('prev-abc');
+      expect(v.resumeFallback).toBe(false);
+    } finally { cleanup(); }
+  });
+
+  it('§4.6 emits gate_verdict with resumedFrom=<prev> + resumeFallback=true on session_missing fallback', async () => {
+    const runDir = makeTmpDir();
+    const state = makeState({ currentPhase: 2 });
+    const { logger, eventsPath, cleanup } = makeTestLogger(state.runId);
+    vi.mocked(runGatePhase).mockResolvedValueOnce({
+      type: 'verdict', verdict: 'APPROVE', comments: '', rawOutput: '',
+      runner: 'codex', codexSessionId: 'new-abc',
+      resumedFrom: 'dead-abc', resumeFallback: true,
+    } as any);
+    try {
+      await handleGatePhase(2, state, HDIR, runDir, CWD, createNoOpInputManager(), logger, { value: false });
+      const v = readEvents(eventsPath).find((e: any) => e.event === 'gate_verdict');
+      expect(v.resumedFrom).toBe('dead-abc');
+      expect(v.resumeFallback).toBe(true);
+      expect(v.codexSessionId).toBe('new-abc');
+    } finally { cleanup(); }
+  });
+
+  it('§4.6 emits gate_error with resumedFrom/resumeFallback on error path', async () => {
+    const runDir = makeTmpDir();
+    const state = makeState({ currentPhase: 2 });
+    const { logger, eventsPath, cleanup } = makeTestLogger(state.runId);
+    vi.mocked(runGatePhase).mockResolvedValueOnce({
+      type: 'error', error: 'Codex gate timed out after 360000ms',
+      runner: 'codex', codexSessionId: 'partial-abc',
+      resumedFrom: 'prev-abc', resumeFallback: false,
+    } as any);
+    try {
+      await handleGatePhase(2, state, HDIR, runDir, CWD, createNoOpInputManager(), logger, { value: false });
+      const e = readEvents(eventsPath).find((ev: any) => ev.event === 'gate_error');
+      expect(e).toBeDefined();
+      expect(e.resumedFrom).toBe('prev-abc');
+      expect(e.resumeFallback).toBe(false);
+    } finally { cleanup(); }
+  });
+
   it('emits state_anomaly(pending_action_stale_after_approve) when pendingAction is not null after APPROVE', async () => {
     const runDir = makeTmpDir();
     const state = makeState({
