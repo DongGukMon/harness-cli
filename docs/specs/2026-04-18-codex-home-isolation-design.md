@@ -157,6 +157,16 @@ Migration (`src/state.ts` `migrateState`): `if (raw.codexNoIsolate === undefined
 
 `createInitialState(runId, task, baseCommit, autoMode, loggingEnabled, codexNoIsolate = false)` threads the option.
 
+**Test fixture sweep**. This repo has hand-written `HarnessState` objects in multiple test files that must be updated to include the new field, or `pnpm tsc --noEmit` fails. The sweep target list (discovered via `rg 'HarnessState' tests/`):
+
+- `tests/state.test.ts` — migration + round-trip tests (update + add a `codexNoIsolate` migration case).
+- `tests/phases/gate-resume.test.ts` — state fixtures used for resume/lineage tests.
+- `tests/commands/inner.test.ts` — state fixtures for inner command tests.
+- `tests/integration/logging.test.ts` — state fixtures that produce the session meta.
+- Any additional files surfaced by `rg 'HarnessState' tests/` at impl time.
+
+Each fixture either (a) uses `createInitialState(...)` — zero-diff thanks to default `codexNoIsolate = false`, or (b) constructs a state literal — requires adding `codexNoIsolate: false`.
+
 ### 4.6 CLI flag
 
 New option on `harness start` and `harness run` in `bin/harness.ts`:
@@ -172,6 +182,12 @@ Not surfaced on `harness resume` — decision is fixed at run-start time. Resume
 ### 4.7 Logging
 
 Add `codexHome` (absolute path) to `SessionMeta` (`~/.harness/sessions/<hash>/<runId>/meta.json`). Written once on session bootstrap by `sessionLogger.writeMeta(…)`. No per-event overhead.
+
+Concrete integration points:
+
+- `src/types.ts` — extend `SessionMeta` with `codexHome?: string` (optional for back-compat when `--codex-no-isolate` is set).
+- `src/commands/inner.ts` — the bootstrap call site is `logger.writeMeta({ task: state.task })`. Extend to `logger.writeMeta({ task: state.task, codexHome: state.codexNoIsolate ? undefined : codexHomeFor(runDir) })`. Use `codexHomeFor` (pure function — no FS side effect) so meta reflects the planned path even before the first gate runs.
+- `src/logger.ts` — `writeMeta` already merges the partial into meta.json; no logic change beyond type.
 
 This is pure observability — post-mortem debugging ("where did that session rollout file go?") without bloating `events.jsonl`.
 
@@ -250,12 +266,12 @@ Fallback policy: **abort, not silent bypass**. Silent fallback to non-isolated w
 
 ## 8. Eval checklist (consumed by Phase 6 `harness-verify.sh`)
 
+Structural (build gates):
+
 ```
 - pnpm tsc --noEmit            → exit 0
 - pnpm vitest run              → all pass (baseline 531 + new tests)
 - pnpm build                   → exit 0 (tsc + copy-assets)
-- test exists: tests/runners/codex-isolation.test.ts
-- test exists: assertion "CODEX_HOME" in tests/runners/codex.test.ts OR codex-resume.test.ts
 - file exists: src/runners/codex-isolation.ts
 - grep-assert: "codexNoIsolate" present in src/types.ts
 - grep-assert: "CODEX_HOME" present in src/runners/codex.ts
@@ -263,19 +279,64 @@ Fallback policy: **abort, not silent bypass**. Silent fallback to non-isolated w
 - grep-assert: "Scope rules" still present in src/context/assembler.ts (defense-in-depth retained)
 ```
 
+Behavioral (prove the fix, not just surface changes):
+
+```
+- test passes: "ensureCodexIsolation creates <runDir>/codex-home/ with auth.json symlink" in tests/runners/codex-isolation.test.ts
+- test passes: "ensureCodexIsolation is idempotent on second call" in tests/runners/codex-isolation.test.ts
+- test passes: "ensureCodexIsolation throws CodexIsolationError when real auth.json missing" in tests/runners/codex-isolation.test.ts
+- test passes: "runCodexGate spawn env contains CODEX_HOME=<provided path>" in tests/runners/codex.test.ts OR codex-resume.test.ts
+- test passes: "runCodexGate spawn env does NOT contain CODEX_HOME when codexHome is null (escape hatch)" (same file)
+- test passes: "runCodexInteractive spawn env contains CODEX_HOME=<provided path>" (same file)
+- test passes: "gate.ts propagates CodexIsolationError as gate_error (no retry)" in tests/phases/gate.test.ts
+- test passes: "interactive.ts propagates CodexIsolationError as phase error" in tests/phases/interactive.test.ts
+- test passes: "startCommand with --codex-no-isolate sets state.codexNoIsolate=true and emits stderr warning" in tests/commands/run.test.ts
+- test passes: "migrateState adds codexNoIsolate=false to legacy state" in tests/state.test.ts
+- test passes: "SessionMeta contains codexHome path when isolation enabled" in tests/integration/logging.test.ts (or tests/logger.test.ts)
+- test passes: "SessionMeta does NOT contain codexHome when --codex-no-isolate" (same file)
+```
+
+Evidence (attached to PR body):
+
+```
+- Manual smoke artifact: harness run in a throwaway repo produces
+  .harness/<runId>/codex-home/auth.json as a symlink pointing at real auth.
+- Manual smoke artifact: .harness/<runId>/codex-home/sessions/YYYY/MM/DD/rollout-*.jsonl
+  is populated after first gate fires.
+- Manual smoke artifact: gate verdict (gate-2-raw.txt) does NOT reference user's
+  personal convention content (grep -i 'lore commit protocol' returns no hits).
+- Manual smoke artifact: harness run --codex-no-isolate does NOT create codex-home/,
+  state.json contains "codexNoIsolate": true, stderr warning line visible.
+```
+
 ## 9. Implementation plan (ordered)
 
-1. **Scaffold `src/runners/codex-isolation.ts`** (§4.3). Export `CodexIsolationError`, `codexHomeFor`, `ensureCodexIsolation`.
-2. **Unit test `tests/runners/codex-isolation.test.ts`** (§7.1) — TDD: write first, fail, then step 1 makes them pass.
-3. **Type + state migration**: `HarnessState.codexNoIsolate`, `migrateState`, `createInitialState` signature. Update existing call sites (`start.ts`).
-4. **Runner signature extension**: `runCodexInteractive` + `runCodexGate` accept `codexHome: string | null`. Spawn `env` branch. Existing tests still pass (backward-compat default).
-5. **Runner env tests** (§7.2) — extend existing codex test files with env-capture assertions.
-6. **Caller integration**: `src/phases/gate.ts` + `src/phases/interactive.ts` call `ensureCodexIsolation(runDir)` unless `state.codexNoIsolate`.
-7. **CLI flag**: `bin/harness.ts` + `StartOptions` (`src/commands/start.ts`).
-8. **Logging**: add `codexHome` to `SessionMeta` write-through.
-9. **Integration test updates** (§7.3) — extend `tests/commands/run.test.ts` and related.
-10. **Typecheck + full vitest run + build**. Fix any breakage.
-11. **Manual smoke** (§7.4). Capture output in PR body.
+TDD rhythm: where a test is listed before its implementation, write the failing test first, then the code that makes it pass. Where an interface change precedes tests (e.g. adding a required state field), the fixture sweep is mechanical and tests come after.
+
+1. **Write failing unit tests for `ensureCodexIsolation`** — `tests/runners/codex-isolation.test.ts` per §7.1. These fail because the module doesn't exist.
+2. **Scaffold `src/runners/codex-isolation.ts`** (§4.3). Export `CodexIsolationError`, `codexHomeFor`, `ensureCodexIsolation`. Step 1 tests now pass.
+3. **Type + state migration**:
+   - `src/types.ts`: add `HarnessState.codexNoIsolate: boolean` and `SessionMeta.codexHome?: string`.
+   - `src/state.ts`: `migrateState` defaults `codexNoIsolate = false`; extend `createInitialState` signature.
+   - **Fixture sweep** (§4.5): update every hand-written `HarnessState` literal in tests to include `codexNoIsolate: false`. Run `pnpm tsc --noEmit` iteratively until clean.
+   - Add one migration test case to `tests/state.test.ts`: legacy state (no field) → migrated state has `codexNoIsolate: false`.
+4. **Runner signature extension**: `runCodexInteractive` + `runCodexGate` accept `codexHome: string | null` param. Spawn `env` branch per §4.2. Existing tests still pass (default null preserves current spawn options).
+5. **Runner env tests** (§7.2) — extend `tests/runners/codex.test.ts` + `codex-resume.test.ts` with env-capture assertions: when `codexHome` is a path, `spawn.mock.calls[i][2].env.CODEX_HOME === codexHome`; when null, no `CODEX_HOME` present. Both fresh and resume spawn paths asserted.
+6. **Caller integration** (gate):
+   - Write failing test in `tests/phases/gate.test.ts` asserting `CodexIsolationError` → `gate_error` (no retry).
+   - Modify `src/phases/gate.ts` to call `ensureCodexIsolation(runDir)` unless `state.codexNoIsolate`; wrap in try/catch producing a `GatePhaseResult` error. Test passes.
+7. **Caller integration** (interactive):
+   - Write failing test in `tests/phases/interactive.test.ts` for the codex-interactive branch asserting propagation.
+   - Modify `src/phases/interactive.ts` codex branch with same pattern. Test passes.
+8. **CLI flag + warning**:
+   - `bin/harness.ts`: add `--codex-no-isolate` option on `start` and `run` subcommands.
+   - `src/commands/start.ts`: `StartOptions.codexNoIsolate?: boolean`, threaded into `createInitialState`. On `true`, emit stderr warning: `⚠️  CODEX_HOME isolation disabled. Codex subprocess may load personal conventions (BUG-C risk).`
+   - Extend `tests/commands/run.test.ts` with two cases: flag sets `state.codexNoIsolate = true` AND emits the warning line; absence of flag leaves it `false`.
+9. **Logger/SessionMeta integration**:
+   - `src/commands/inner.ts`: change the bootstrap `logger.writeMeta({ task: state.task })` to include `codexHome: state.codexNoIsolate ? undefined : codexHomeFor(runDir)`.
+   - Extend `tests/integration/logging.test.ts` (or `tests/logger.test.ts`) with assertions per §8: meta.json includes `codexHome` when isolation enabled; absent under `--codex-no-isolate`.
+10. **Typecheck + full vitest run + build**. Fix any breakage surfaced by the fixture sweep.
+11. **Manual smoke** (§7.4). Capture evidence per §8 Evidence block. Save to PR body.
 12. **PR**.
 
 ## 10. Open Questions — resolved
