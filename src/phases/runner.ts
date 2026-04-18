@@ -14,7 +14,7 @@ import { writeState } from '../state.js';
 import { getHead } from '../git.js';
 import { normalizeArtifactCommit } from '../artifact.js';
 import { runInteractivePhase } from './interactive.js';
-import { runGatePhase, checkGateSidecars } from './gate.js';
+import { runGatePhase } from './gate.js';
 import { runVerifyPhase } from './verify.js';
 import {
   promptChoice,
@@ -341,9 +341,8 @@ export async function handleGatePhase(
   state.phases[String(phase)] = 'in_progress';
   writeState(runDir, state);
 
-  void checkGateSidecars; // imported for potential direct use elsewhere
   printInfo(`Codex 리뷰 진행 중... (최대 ${Math.round(GATE_TIMEOUT_MS / 1000)}초 소요)`);
-  const result = await runGatePhase(phase, state, harnessDir, runDir, cwd);
+  const result = await runGatePhase(phase, state, harnessDir, runDir, cwd, sidecarReplayAllowed);
 
   if (result.type === 'verdict') {
     if (result.verdict === 'APPROVE') {
@@ -377,7 +376,6 @@ export async function handleGatePhase(
     }
     await handleGateError(phase, result.error, state, runDir, cwd, inputManager, logger);
   }
-  void sidecarReplayAllowed;
 }
 
 export async function handleGateReject(

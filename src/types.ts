@@ -117,6 +117,8 @@ export interface GateError {
   promptBytes?: number;
   durationMs?: number;
   exitCode?: number;
+  tokensTotal?: number;
+  codexSessionId?: string;
   recoveredFromSidecar?: boolean;
 }
 
