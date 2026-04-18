@@ -137,15 +137,31 @@ describe('inner.ts: consumePendingAction behavior', () => {
     expect(raw.currentPhase).toBe(3);
   });
 
-  // §4.8 authoritative wiring (EC-16a): behavioral coverage for the exact
-  // code block in src/commands/inner.ts:
-  //   const prevPresets = { ...state.phasePresets };
-  //   state.phasePresets = <new presets>;
-  //   invalidatePhaseSessionsOnPresetChange(state, prevPresets, runDir);
-  // We do not invoke the full promptModelConfig flow (heavy TTY mocks), but we
-  // replay the exact sequence to prove the wiring contract: changed phase
-  // sessions are nulled, replay sidecars deleted, feedback preserved; unchanged
-  // phases untouched.
+  // §4.8 authoritative wiring (EC-16a) — part 1: source-level regression guard.
+  // If someone removes the `invalidatePhaseSessionsOnPresetChange(...)` call from
+  // `inner.ts` (or severs the prev-presets snapshot before `promptModelConfig`),
+  // this test fails — independent of the helper's own unit tests. This catches
+  // the "helper works but inner.ts no longer calls it" class of regression that
+  // helper-level replay tests miss.
+  it('§4.8 src/commands/inner.ts wires promptModelConfig → invalidatePhaseSessionsOnPresetChange in sequence', () => {
+    const srcPath = path.resolve(__dirname, '../../src/commands/inner.ts');
+    const src = fs.readFileSync(srcPath, 'utf-8');
+
+    // Must import the helper
+    expect(src).toMatch(/invalidatePhaseSessionsOnPresetChange.*from ['"]\.\.\/state\.js['"]/);
+
+    // Must snapshot prev, call promptModelConfig, then invalidate — in that order.
+    const snapIdx = src.search(/const prevPresets\s*=\s*\{\s*\.\.\.state\.phasePresets\s*\}/);
+    const promptIdx = src.search(/state\.phasePresets\s*=\s*await\s+promptModelConfig\(/);
+    const invalidateIdx = src.search(/invalidatePhaseSessionsOnPresetChange\(state,\s*prevPresets,/);
+    expect(snapIdx).toBeGreaterThan(-1);
+    expect(promptIdx).toBeGreaterThan(snapIdx);
+    expect(invalidateIdx).toBeGreaterThan(promptIdx);
+  });
+
+  // §4.8 authoritative wiring (EC-16a) — part 2: behavioral test that replays
+  // the exact three-line sequence from inner.ts and asserts the invalidation
+  // contract end-to-end (session nulled, sidecars deleted, feedback preserved).
   it('§4.8 preset change via promptModelConfig nulls changed phase, deletes replay sidecars, preserves feedback', async () => {
     const { invalidatePhaseSessionsOnPresetChange } = await import('../../src/state.js');
 

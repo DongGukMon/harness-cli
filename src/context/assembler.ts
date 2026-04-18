@@ -335,6 +335,17 @@ export function assembleGateResumePrompt(
   const sections = buildResumeSections(phase, state, cwd);
   if (typeof sections !== 'string') return sections;
 
+  // §4.3: resume-prompt instruction blocks restate the structured output contract
+  // and, for Variant A, the "prior concerns addressed" check + "APPROVE only if
+  // zero P0/P1 findings" approval rule. REVIEWER_CONTRACT itself is already in the
+  // session, so we do not re-include it — only the per-turn instruction tail.
+  const structuredOutputReminder =
+    'Respond with the same structured sections as before:\n' +
+    '- `## Verdict` (exactly `APPROVE` or `REJECT`)\n' +
+    '- `## Comments` (each finding labeled `[P0|P1|P2|P3]`, with Location/Issue/Suggestion/Evidence)\n' +
+    '- `## Summary` (1–2 sentences)\n' +
+    'Approval rule: `APPROVE` only if there are zero P0 and zero P1 findings.\n';
+
   let prompt: string;
   // §4.4: variant is driven by lastOutcome, not by whether feedback exists.
   // If lastOutcome='reject' but feedback file was missing/unreadable, the caller
@@ -350,7 +361,9 @@ export function assembleGateResumePrompt(
       '\n## Your Previous Feedback (for reference)\n\n' +
       feedbackBlock + '\n\n' +
       '## Instructions\n\n' +
-      'Return verdict in the same format you used before.\n';
+      'Verify that each P0/P1 concern from your previous feedback has been addressed in the updated artifacts. ' +
+      'Raise any new issues you discover. If prior concerns remain unresolved, keep the matching severity labels.\n\n' +
+      structuredOutputReminder;
   } else {
     // Variant B for 'approve' | 'error'
     prompt =
@@ -358,7 +371,7 @@ export function assembleGateResumePrompt(
       'The previous review turn did not complete with a verdict. Re-examine the current artifacts and emit a verdict now.\n\n' +
       sections +
       '\n## Instructions\n\n' +
-      'Return verdict in the same format you used before.\n';
+      structuredOutputReminder;
   }
 
   if (prompt.length > MAX_PROMPT_SIZE_KB * 1024) {
