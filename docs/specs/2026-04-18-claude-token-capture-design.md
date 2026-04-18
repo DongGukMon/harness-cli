@@ -48,7 +48,9 @@ where `encodedCwd = cwd.replace(/[^a-zA-Z0-9]/g, '-')`. Confirmed empirically: `
 
 ### 2.2 Fallback — time-window scan
 
-If the pinned file is missing or empty when we read it (e.g., a future Claude version silently ignores `--session-id`), fall back to scanning `~/.claude/projects/<encodedCwd>/*.jsonl` for files whose **first assistant entry's timestamp** is `>= phaseStartTs`. Among matches, pick the one with the **smallest** first-assistant timestamp (i.e., the session that began closest to — but not before — phase open). Parse the same way.
+If the pinned file is **completely missing** (ENOENT) when we read it — typically because a future Claude version silently ignored `--session-id` and wrote its auto-generated UUID file instead — fall back to scanning `~/.claude/projects/<encodedCwd>/*.jsonl` for files whose **first assistant entry's timestamp** is `>= phaseStartTs`. Among matches, pick the one with the **smallest** first-assistant timestamp (i.e., the session that began closest to — but not before — phase open). Parse the same way.
+
+"Empty" or "no assistant entries" is **not** a fallback trigger — that's a legitimate zero-sum outcome (Claude session existed but no billable turns occurred).
 
 Scan is opt-in per call, bounded to the phase's own project dir, and short-circuits on the first match. On any error the reader still returns `null`.
 
@@ -125,7 +127,17 @@ No state.json schema change. No migration. `events.jsonl` v:1 is append-only wit
 
 ### 2.7 Error handling
 
-`readClaudeSessionUsage` never throws. On any error (missing dir, ENOENT, malformed JSON line, fs permission, invalid shape) it logs **one** `warnOnce`-style stderr line per failure and returns `null`. Callers in `handleInteractivePhase` do not wrap in extra try/catch beyond this contract.
+`readClaudeSessionUsage` never throws. Failure semantics (single source of truth — §2.8 tests and T2 behavior MUST align with this table):
+
+| Failure class | Outcome | Logging |
+|---|---|---|
+| Pinned file `ENOENT` | trigger §2.2 fallback scan | none (normal path) |
+| Hard I/O error: project dir unreadable, fs permission/EIO on the jsonl file | **return `null`** | one stderr line per phase |
+| Per-line `JSON.parse` throws (truncated / invalid JSON) | **skip that line**, keep summing the rest | module-level "skipped lines" warn once per phase, at the end |
+| Per-line shape mismatch (JSON parse ok, `type !== 'assistant'` or `message.usage` missing or field not a number) | **skip silently**, keep summing | none (expected for non-assistant rows) |
+| Zero assistant entries after full parse | return `{ 0, 0, 0, 0, 0 }` | none |
+
+Callers in `handleInteractivePhase` do not wrap in extra try/catch beyond this contract.
 
 ### 2.8 Testing strategy
 
@@ -168,12 +180,13 @@ Cases:
 ### T2 — parser module + unit tests (TDD)
 **Files:** `src/runners/claude-usage.ts` (new), `tests/runners/claude-usage.test.ts` (new), `tests/fixtures/claude-sessions/*.jsonl` (new).
 
-1. Write failing tests first for the 7 cases in §2.8.
-2. Implement `encodeProjectDir(cwd)` — single-regex replace.
+1. Write failing tests first for the cases in §2.8 (which aligns 1:1 with the failure-semantics table in §2.7).
+2. Implement `encodeProjectDir(cwd)` — single-regex replace `/[^a-zA-Z0-9]/g → '-'`.
 3. Implement `readClaudeSessionUsage({ sessionId, cwd, phaseStartTs, homeDir = os.homedir() })`:
-   - Compute pinned path. If exists: parse line-by-line, sum.
-   - Else: list project dir, find earliest jsonl whose first assistant entry timestamp ≥ phaseStartTs; parse it.
-   - On any caught error: stderr warn once, return `null`.
+   - Compute pinned path. **If pinned file exists:** read and parse line-by-line (per-line `JSON.parse` errors are skipped silently; one trailing stderr warn at end if ≥1 line was skipped). Aggregate per §2.4. Return the aggregate (zero-sum is valid).
+   - **If pinned file is ENOENT:** fall back to §2.2 scan — list project dir, for each `*.jsonl` find the earliest `type: assistant` entry, keep those with `timestamp >= phaseStartTs`, pick the one with the smallest first-assistant timestamp, parse it.
+   - **Hard I/O error at any point** (project dir unreadable, pinned file `readFileSync` throws with non-ENOENT, or the fallback scan itself fails): stderr warn once, return `null`.
+   - **Empty pinned file / zero assistant entries**: NOT a fallback trigger — return `{0,0,0,0,0}`.
 4. Re-run tests; all pass.
 
 **Exit criterion:** `pnpm vitest run tests/runners/claude-usage.test.ts` green.
@@ -198,14 +211,14 @@ In `handleInteractivePhase`:
 - Call it once **after** `runInteractivePhase` resolves and attach to every `phase_end` emission in the function (completed path, failed path, redirected-by-signal path **skip** — redirect means the phase didn't really run its own work).
 - Don't add tokens to the early `throw` catch path's phase_end — unreachable in practice (integration tests to confirm).
 
-Tests:
-- Drop fixture jsonl at the expected path.
-- Mock/stub `runInteractivePhase` to return completed.
-- Drive `handleInteractivePhase` with a minimal state; capture the logged event.
-- Assert `claudeTokens` present and correct.
-- Repeat with codex preset; assert field absent.
+Tests (cover all three observable states of D3 / §2.5):
 
-**Exit criterion:** new test green; existing `pnpm vitest run` baseline (497 passed / 1 skipped) still holds (count may increase with new tests).
+1. **Claude preset + fixture jsonl present** → assert `claudeTokens` present, correct aggregated object matching the fixture.
+2. **Claude preset + no jsonl fixture** (neither pinned nor in project dir) → assert `claudeTokens: null` (not absent — explicit failure marker).
+3. **Codex preset** → assert `claudeTokens` field absent from the `phase_end` event (field-level undefined).
+4. **Redirected-by-signal branch** (existing repo test path in `tests/phases/runner.test.ts` already exercises this; extend or add a sibling case) → assert the `phase_end` event with `details: { reason: 'redirected' }` has NO `claudeTokens` field. Rationale: the runner didn't actually perform its own work; meter read is meaningless.
+
+**Exit criterion:** new tests green; existing `pnpm vitest run` baseline (497 passed / 1 skipped) still holds (count increases with new tests).
 
 ### T5 — smoke & PR
 **Files:** none (runtime verification).
@@ -235,7 +248,11 @@ Tests:
 Manual smoke (not automatable — requires an interactive Claude session):
 - `pnpm build` in this worktree.
 - Run a trivial `harness run --enable-logging "<task>"` from a scratch worktree (or Desktop experimental dir).
-- Verify `events.jsonl` phases 1/3/5 `phase_end` events have `claudeTokens` with `total > 0` and the four subfields.
+- Verify `events.jsonl` phases 1/3/5 `phase_end` events have `claudeTokens` with:
+  - all four subfields present (`input`, `output`, `cacheRead`, `cacheCreate`) + `total`;
+  - each subfield is a finite non-negative number;
+  - arithmetic identity: `total === input + output + cacheRead + cacheCreate`;
+  - at least one phase with `total > 0` (sanity that a real session was captured).
 - Sample (last 5 lines or redacted) → PR body.
 
 ---
@@ -270,6 +287,13 @@ Manual smoke (not automatable — requires an interactive Claude session):
 | fs.readFileSync of a multi-MB jsonl blows up memory | low | typical phase jsonl is <2 MB per observation; we scan line-by-line via `split('\n')`. If needed, switch to streaming later. |
 | Race: phase_end fires before Claude flushes last turn | low | accepted; see Q2. |
 | Project dir encoding drift (Claude Code changes the hash scheme) | medium | pinned lookup still works (filename == attemptId regardless of parent dir). Fallback scan relies on encoding — if Claude changes it, unit-test fails fast and we patch `encodeProjectDir`. |
+
+---
+
+## 6.1 Deferred from plan gate review (recorded, not blocking)
+
+- **P2 (gate round 1): No automated test for `--session-id` flag in `runClaudeInteractive`.**
+  Current `tests/runners/claude.test.ts` only asserts exports; adding a command-string assertion requires mocking `sendKeysToPane` / `pollForPidFile` / fs write (non-trivial scaffolding not present yet in that test file). Acceptance is covered implicitly by T4 integration test (fixture jsonl at the pinned path → event carries tokens → implies the flag worked end-to-end) + manual smoke result attached to PR. Defer a dedicated unit test for T3 to a follow-up if the integration coverage proves insufficient.
 
 ---
 
