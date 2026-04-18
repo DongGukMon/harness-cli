@@ -9,6 +9,7 @@ import {
   VERIFY_RETRY_LIMIT,
   TERMINAL_PHASE,
   PHASE_ARTIFACT_FILES,
+  getPresetById,
 } from '../config.js';
 import { writeState } from '../state.js';
 import { getHead } from '../git.js';
@@ -27,6 +28,21 @@ import {
 } from '../ui.js';
 
 // ─── Phase type dispatch helpers ──────────────────────────────────────────────
+
+/**
+ * Resolve the preset assigned to a phase into a log-event payload shape.
+ * Returns undefined when no preset is configured (e.g. verify phase 6) — callers
+ * should omit the `preset` field rather than emit a partial object.
+ */
+function getPhasePresetMeta(state: HarnessState, phase: number):
+  | { id: string; runner: 'claude' | 'codex'; model: string; effort: string }
+  | undefined {
+  const id = state.phasePresets?.[String(phase)];
+  if (!id) return undefined;
+  const p = getPresetById(id);
+  if (!p) return undefined;
+  return { id: p.id, runner: p.runner, model: p.model, effort: p.effort };
+}
 
 function isInteractivePhase(phase: number): phase is InteractivePhase {
   return phase === 1 || phase === 3 || phase === 5;
@@ -215,8 +231,9 @@ export async function handleInteractivePhase(
 
   const isReopen = state.phaseReopenFlags[String(phase)] ?? false;
   const reopenFromGate = isReopen ? (state.phaseReopenSource[String(phase)] ?? undefined) : undefined;
+  const preset = getPhasePresetMeta(state, phase);
 
-  logger.logEvent({ event: 'phase_start', phase, attemptId, reopenFromGate });
+  logger.logEvent({ event: 'phase_start', phase, attemptId, reopenFromGate, preset });
 
   // Clear the logging-only reopen source (keep phaseReopenFlags for runInteractivePhase)
   if (state.phaseReopenSource[String(phase)] !== null) {
@@ -345,6 +362,7 @@ export async function handleGatePhase(
 
   // Capture retryIndex BEFORE any mutation (spec §5.3)
   const retryIndex = state.gateRetries[String(phase)] ?? 0;
+  const gatePresetMeta = getPhasePresetMeta(state, phase);
 
   printInfo(`Codex 리뷰 진행 중... (최대 ${Math.round(GATE_TIMEOUT_MS / 1000)}초 소요)`);
   const result = await runGatePhase(phase, state, harnessDir, runDir, cwd, sidecarReplayAllowed);
@@ -375,6 +393,7 @@ export async function handleGatePhase(
           recoveredFromSidecar: result.recoveredFromSidecar ?? false,
           resumedFrom: result.resumedFrom,
           resumeFallback: result.resumeFallback,
+          preset: gatePresetMeta,
         });
       }
 
@@ -420,6 +439,7 @@ export async function handleGatePhase(
           recoveredFromSidecar: result.recoveredFromSidecar ?? false,
           resumedFrom: result.resumedFrom,
           resumeFallback: result.resumeFallback,
+          preset: gatePresetMeta,
         });
       }
       await handleGateReject(phase, result.comments, retryIndex, state, harnessDir, runDir, cwd, inputManager, logger);
@@ -441,6 +461,7 @@ export async function handleGatePhase(
         recoveredFromSidecar: result.recoveredFromSidecar ?? false,
         resumedFrom: result.resumedFrom,
         resumeFallback: result.resumeFallback,
+        preset: gatePresetMeta,
       });
     }
     await handleGateError(phase, result.error, state, runDir, cwd, inputManager, logger);

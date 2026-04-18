@@ -855,6 +855,31 @@ describe('handleInteractivePhase — event emission', () => {
       cleanup();
     }
   });
+
+  it('emits phase_start with preset { id, runner, model, effort } for phase 1', async () => {
+    const runDir = makeTmpDir();
+    const state = makeState({ currentPhase: 1 });
+    const { logger, eventsPath, cleanup } = makeTestLogger(state.runId);
+
+    vi.mocked(runInteractivePhase).mockImplementationOnce(async (phase, st, _h, _r, _c, attemptId) => {
+      st.phases[String(phase)] = 'completed';
+      return { status: 'completed', attemptId } as any;
+    });
+
+    try {
+      await handleInteractivePhase(1, state, HDIR, runDir, CWD, logger);
+      const events = readEvents(eventsPath);
+      const phaseStart = events.find((e: any) => e.event === 'phase_start');
+      expect(phaseStart.preset).toMatchObject({
+        id: expect.any(String),
+        runner: expect.stringMatching(/^(claude|codex)$/),
+        model: expect.any(String),
+        effort: expect.any(String),
+      });
+    } finally {
+      cleanup();
+    }
+  });
 });
 
 // ─── handleGatePhase — event emission ─────────────────────────────────────────
@@ -886,6 +911,37 @@ describe('handleGatePhase — gate_verdict emission (APPROVE)', () => {
       expect(verdict.runner).toBe('codex');
       expect(verdict.tokensTotal).toBe(45000);
       expect(verdict.retryIndex).toBe(0);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('emits gate_verdict with preset { id, runner, model, effort } for phase 2', async () => {
+    const runDir = makeTmpDir();
+    const state = makeState({ currentPhase: 2 });
+    const { logger, eventsPath, cleanup } = makeTestLogger(state.runId);
+
+    vi.mocked(runGatePhase).mockResolvedValueOnce({
+      type: 'verdict',
+      verdict: 'APPROVE',
+      comments: '',
+      rawOutput: '',
+      runner: 'codex',
+      promptBytes: 1000,
+      durationMs: 5000,
+      tokensTotal: 45000,
+    } as any);
+
+    try {
+      await handleGatePhase(2, state, HDIR, runDir, CWD, createNoOpInputManager(), logger, { value: false });
+      const events = readEvents(eventsPath);
+      const verdict = events.find((e: any) => e.event === 'gate_verdict');
+      expect(verdict.preset).toMatchObject({
+        id: expect.any(String),
+        runner: 'codex',
+        model: expect.any(String),
+        effort: expect.any(String),
+      });
     } finally {
       cleanup();
     }
@@ -1145,6 +1201,35 @@ describe('handleGatePhase — gate_error emission', () => {
       expect(errEvent.runner).toBe('codex');
       expect(errEvent.error).toBe('subprocess timeout');
       expect(errEvent.exitCode).toBe(1);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('emits gate_error with preset { id, runner, model, effort } for phase 2', async () => {
+    const runDir = makeTmpDir();
+    const state = makeState({ currentPhase: 2 });
+    const { logger, eventsPath, cleanup } = makeTestLogger(state.runId);
+
+    vi.mocked(runGatePhase).mockResolvedValueOnce({
+      type: 'error',
+      error: 'subprocess timeout',
+      runner: 'codex',
+      durationMs: 60000,
+      exitCode: 1,
+    } as any);
+    vi.mocked(promptChoice).mockResolvedValueOnce('Q');
+
+    try {
+      await handleGatePhase(2, state, HDIR, runDir, CWD, createNoOpInputManager(), logger, { value: false });
+      const events = readEvents(eventsPath);
+      const errEvent = events.find((e: any) => e.event === 'gate_error');
+      expect(errEvent.preset).toMatchObject({
+        id: expect.any(String),
+        runner: 'codex',
+        model: expect.any(String),
+        effort: expect.any(String),
+      });
     } finally {
       cleanup();
     }
