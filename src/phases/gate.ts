@@ -159,7 +159,18 @@ export async function runGatePhase(
             effort: currentPreset.effort,
             lastOutcome,
           };
-          try { writeState(runDir, state); } catch { /* best-effort */ }
+          // §5: persistence of phaseCodexSessions must NOT be silently best-effort.
+          // If writeState fails here, surface a gate error so resume state cannot
+          // silently diverge from the sidecar hydration.
+          try {
+            writeState(runDir, state);
+          } catch (err) {
+            return {
+              type: 'error',
+              error: `Failed to persist phaseCodexSessions during sidecar hydration (phase ${phase}): ${(err as Error).message}`,
+              rawOutput: replay.type === 'verdict' ? replay.rawOutput : (replay.rawOutput ?? ''),
+            };
+          }
         }
         return { ...replay, recoveredFromSidecar: true };
       }
@@ -191,10 +202,19 @@ export async function runGatePhase(
     savedSession.effort === preset.effort
   );
 
-  // Defense-in-depth: 비호환이면 저장된 세션 null 처리
+  // Defense-in-depth: 비호환이면 저장된 세션 null 처리. §5: persistence must not
+  // silently fail — a dropped null here would let a stale incompatible session
+  // linger for the next run.
   if (savedSession !== null && !savedCompatible) {
     state.phaseCodexSessions[phaseKey] = null;
-    try { writeState(runDir, state); } catch { /* best-effort */ }
+    try {
+      writeState(runDir, state);
+    } catch (err) {
+      return {
+        type: 'error',
+        error: `Failed to persist phaseCodexSessions after incompatible-session clear (phase ${phase}): ${(err as Error).message}`,
+      };
+    }
   }
 
   // Step 5: Assemble prompt (resume vs fresh)
@@ -287,7 +307,19 @@ export async function runGatePhase(
       // Resume → fallback → no new sessionId: stale id already invalid, clear slot
       state.phaseCodexSessions[phaseKey] = null;
     }
-    try { writeState(runDir, state); } catch { /* best-effort */ }
+    // §5: post-run persistence of the new session lineage is load-bearing for
+    // the next retry's resume decision. Surface write failures as gate errors
+    // instead of continuing with an in-memory/disk divergence.
+    try {
+      writeState(runDir, state);
+    } catch (err) {
+      return {
+        ...result,
+        type: 'error',
+        error: `Gate succeeded but failed to persist phaseCodexSessions (phase ${phase}): ${(err as Error).message}. Result: ${result.type === 'verdict' ? result.verdict : 'error'}`,
+        rawOutput: result.type === 'verdict' ? result.rawOutput : (result.rawOutput ?? ''),
+      };
+    }
   }
 
   // Step 8: Write extended sidecar (with sourcePreset for future replay compat)
