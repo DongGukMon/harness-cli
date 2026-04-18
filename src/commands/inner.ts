@@ -53,7 +53,7 @@ export async function innerCommand(runId: string, options: InnerOptions = {}): P
   if (controlValid && workspaceValid) {
     // Both panes valid and distinct — reuse
   } else if (controlValid) {
-    const workspacePaneId = splitPane(state.tmuxSession, controlPaneId, 'h', 70);
+    const workspacePaneId = splitPane(state.tmuxSession, controlPaneId, 'h', 60);
     state.tmuxWorkspacePane = workspacePaneId;
   } else {
     process.stderr.write(`Fatal: control pane ${controlPaneId} does not exist.\n`);
