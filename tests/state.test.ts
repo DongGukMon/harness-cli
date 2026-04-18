@@ -14,6 +14,49 @@ function makeState(): HarnessState {
   return createInitialState('run-abc', 'test task', 'deadbeef', false);
 }
 
+describe('phaseCodexSessions (spec §4.1 / §5)', () => {
+  it('createInitialState defaults all gate phases to null (in-flight crash invariant)', () => {
+    const state = makeState();
+    expect(state.phaseCodexSessions).toEqual({ '2': null, '4': null, '7': null });
+  });
+
+  it('survives writeState → readState round-trip', () => {
+    const dir = makeTmpDir();
+    tmpDirs.push(dir);
+    const state = makeState();
+    state.phaseCodexSessions['2'] = {
+      sessionId: 'sess-gate2', runner: 'codex', model: 'gpt-5.4', effort: 'high', lastOutcome: 'reject',
+    };
+    state.phaseCodexSessions['7'] = {
+      sessionId: 'sess-gate7', runner: 'codex', model: 'gpt-5.4', effort: 'high', lastOutcome: 'approve',
+    };
+    writeState(dir, state);
+    const restored = readState(dir);
+    expect(restored?.phaseCodexSessions['2']).toEqual(state.phaseCodexSessions['2']);
+    expect(restored?.phaseCodexSessions['4']).toBeNull();
+    expect(restored?.phaseCodexSessions['7']).toEqual(state.phaseCodexSessions['7']);
+  });
+
+  it('migrateState adds default phaseCodexSessions when missing', () => {
+    const legacy = JSON.parse(JSON.stringify(makeState()));
+    delete legacy.phaseCodexSessions;
+    const migrated = migrateState(legacy);
+    expect(migrated.phaseCodexSessions).toEqual({ '2': null, '4': null, '7': null });
+  });
+
+  it('migrateState discards malformed GateSessionInfo entries', () => {
+    const base = makeState();
+    (base as any).phaseCodexSessions = {
+      '2': { sessionId: '', runner: 'codex', model: 'x', effort: 'high', lastOutcome: 'reject' },
+      '4': null,
+      '7': { sessionId: 'abc', runner: 'codex', model: 'x', effort: 'high', lastOutcome: 'invalid' },
+    };
+    const migrated = migrateState(base as any);
+    expect(migrated.phaseCodexSessions['2']).toBeNull();
+    expect(migrated.phaseCodexSessions['7']).toBeNull();
+  });
+});
+
 const tmpDirs: string[] = [];
 
 afterEach(() => {

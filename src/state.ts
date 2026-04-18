@@ -6,6 +6,8 @@ import { PHASE_DEFAULTS, REQUIRED_PHASE_KEYS, MODEL_PRESETS } from './config.js'
 const STATE_FILE = 'state.json';
 const STATE_TMP_FILE = 'state.json.tmp';
 
+const GATE_PHASES = ['2', '4', '7'] as const;
+
 /**
  * Write state atomically: write to .tmp → fsync → rename
  */
@@ -83,7 +85,69 @@ export function migrateState(raw: any): HarnessState {
   for (const key of ['1', '3', '5']) {
     if (raw.phaseReopenSource[key] === undefined) raw.phaseReopenSource[key] = null;
   }
+  if (!raw.phaseCodexSessions || typeof raw.phaseCodexSessions !== 'object') {
+    raw.phaseCodexSessions = { '2': null, '4': null, '7': null };
+  }
+  for (const key of GATE_PHASES) {
+    const v = raw.phaseCodexSessions[key];
+    if (v === undefined || v === null) {
+      raw.phaseCodexSessions[key] = null;
+      continue;
+    }
+    if (
+      typeof v !== 'object' ||
+      typeof v.sessionId !== 'string' ||
+      v.sessionId.trim().length === 0 ||
+      (v.runner !== 'claude' && v.runner !== 'codex') ||
+      typeof v.model !== 'string' ||
+      typeof v.effort !== 'string' ||
+      (v.lastOutcome !== 'approve' && v.lastOutcome !== 'reject' && v.lastOutcome !== 'error')
+    ) {
+      raw.phaseCodexSessions[key] = null;
+    }
+  }
   return raw as HarnessState;
+}
+
+/**
+ * Invalidate Codex sessions for phases whose preset changed.
+ * Deletes replay sidecars (raw/result/error) to prevent stale replay.
+ * Preserves feedback files (reopen flow still reads them).
+ */
+export function invalidatePhaseSessionsOnPresetChange(
+  state: HarnessState,
+  prevPresets: Record<string, string>,
+  runDir: string,
+): void {
+  for (const phase of GATE_PHASES) {
+    if (state.phasePresets[phase] !== prevPresets[phase]) {
+      state.phaseCodexSessions[phase] = null;
+      for (const suffix of ['raw.txt', 'result.json', 'error.md']) {
+        const filename = `gate-${phase}-${suffix}`;
+        try { fs.unlinkSync(path.join(runDir, filename)); } catch { /* ignore missing */ }
+      }
+    }
+  }
+}
+
+/**
+ * Invalidate Codex sessions for all gate phases at or after targetPhase (backward jump).
+ * Deletes replay sidecars; preserves feedback files.
+ */
+export function invalidatePhaseSessionsOnJump(
+  state: HarnessState,
+  targetPhase: number,
+  runDir: string,
+): void {
+  for (const phase of GATE_PHASES) {
+    if (Number(phase) >= targetPhase) {
+      state.phaseCodexSessions[phase] = null;
+      for (const suffix of ['raw.txt', 'result.json', 'error.md']) {
+        const filename = `gate-${phase}-${suffix}`;
+        try { fs.unlinkSync(path.join(runDir, filename)); } catch { /* ignore missing */ }
+      }
+    }
+  }
 }
 
 /**
@@ -153,6 +217,7 @@ export function createInitialState(
     },
     phasePresets,
     phaseReopenFlags: { '1': false, '3': false, '5': false },
+    phaseCodexSessions: { '2': null, '4': null, '7': null },
     lastWorkspacePid: null,
     lastWorkspacePidStartTime: null,
     tmuxSession: '',
