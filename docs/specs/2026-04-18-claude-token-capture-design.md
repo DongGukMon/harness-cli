@@ -234,6 +234,7 @@ Tests (cover all three observable states of D3 / §2.5, plus every real-work `ph
 3. **Codex preset** (any outcome) → assert `claudeTokens` field absent from the `phase_end` event (field-level undefined).
 4. **Redirected-by-signal branch** (existing repo test path in `tests/phases/runner.test.ts` already exercises this; extend or add a sibling case) → assert the `phase_end` event with `details: { reason: 'redirected' }` has NO `claudeTokens` field. Rationale: the runner didn't actually perform its own work; meter read is meaningless.
 5. **Claude preset + throw path** — drive `runInteractivePhase` to reject with an error; assert the catch-block `phase_end` event carries `claudeTokens` (object or null, not undefined). Establishes parity with §2.6 "four real-work emission sites".
+6. **Claude preset + artifact-commit failure path** (phase 1 or 3) — stub `normalizeInteractiveArtifacts` (or the underlying `normalizeArtifactCommit`) to throw after `runInteractivePhase` returns `completed`; assert the resulting `phase_end` event has `status: 'failed'` and `claudeTokens` is present (object or null, not undefined). Closes the last of the four real-work emission sites.
 
 **Exit criterion:** new tests green; existing `pnpm vitest run` baseline (497 passed / 1 skipped) still holds (count increases with new tests).
 
@@ -303,7 +304,7 @@ Manual smoke (not automatable — requires an interactive Claude session):
 | `--session-id` causes Claude to attempt to resume a non-existent session and error out | low | attemptId is freshly random; Claude's docs say the flag "uses a specific session ID for the conversation". If observed, gate behind a boolean constant and fall back to time-window scan only. |
 | fs.readFileSync of a multi-MB jsonl blows up memory | low | typical phase jsonl is <2 MB per observation; we scan line-by-line via `split('\n')`. If needed, switch to streaming later. |
 | Race: phase_end fires before Claude flushes last turn | low | accepted; see Q2. |
-| Project dir encoding drift (Claude Code changes the hash scheme) | medium | Both pinned and fallback paths route through `encodeProjectDir(cwd)`, so drift breaks both at once. Detection relies on (a) a lightweight smoke check during CI — pinned file's parent dir is probed post-phase — and (b) the manual smoke in §4 failing to find `claudeTokens` in events.jsonl. On drift, update the one regex in `encodeProjectDir`; no other code needs to change. |
+| Project dir encoding drift (Claude Code changes the hash scheme) | medium | Both pinned and fallback paths route through `encodeProjectDir(cwd)`, so drift breaks both at once. Detection mechanism = the §4 manual smoke: if `events.jsonl` ships with no `claudeTokens` on Claude interactive phases, drift has occurred. No in-process automated probe is planned (kept out of scope to avoid coupling lifecycle health to an external-schema assumption). On drift, update the one regex in `encodeProjectDir`; no other code needs to change. |
 
 ---
 
