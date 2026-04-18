@@ -26,7 +26,7 @@ Round 2/3 skipped — Round 1 naturally produced a P7 REJECT chain that exercise
 | 1 | P7 gate #0 | 1m 16s | codex-high | 29k gate-tokens | **REJECT** (promptBytes=40227). Flagged missing `python3 -m todo.cli` entry + shallow atomic-save test |
 | 2 | P1 reopen | 3m 13s | opus-max xHigh | 1,741,590 | feedback_path injected ✓. Claude self-identified "Phase 1 re-run after Gate 7 rejection" |
 | 2 | P5 rerun | 1m 2s → **FAILED** | sonnet-high | 954,603 | Artifact validator rejected: `.gitignore` uncommitted. See [P1-RESUME] |
-| — | (manual recovery) | ~2 min | — | — | kill hung resume, clear stale tmux state in state.json, commit `.omx/` gitignore line, `harness resume` |
+| — | (manual recovery) | ~2 min | — | — | kill hung resume, clear stale tmux state in state.json, commit `.omx/` gitignore line (**external commit `335345b` outside harness**), `harness resume`. Per spec R10 this could have triggered `externalCommitsDetected`; no such event appeared in events.jsonl and resume advanced cleanly — the detection either silently permits single `.gitignore`-only commits or didn't fire at all. Not instrumented here; follow-up check. |
 | 2 | P5 rerun (after recovery) | 1m 4s | sonnet-high | 702,164 | completed |
 | 2 | P6 verify | 0.6s | (script) | — | 4/4 checks pass (checklist gained `python3 -m todo.cli --help` check) |
 | 2 | P7 gate #1 | 1m 28s | codex-high | 36k gate-tokens | **REJECT** (promptBytes=50102). Flagged unconditional `save()` after `list` + spec-checkbox/eval mismatch |
@@ -38,6 +38,14 @@ Round 2/3 skipped — Round 1 naturally produced a P7 REJECT chain that exercise
 **Aggregate Claude tokens (sum of `phase_end.claudeTokens.total`)**: ≈ 8.74M (P1×3 + P5×4)
 **Aggregate Codex tokens (gate)**: ≈ 108k (3 verdicts)
 **Combined**: ~8.85M tokens for Round 1. Gate prompt growth: 40KB → 50KB → 63KB across retries (feedback accretion).
+
+**Footnote — effective cost vs raw tokens**: ~94% of Claude total is `cacheRead` (cheapest tier). The **non-cached** portion — which drives real cost — is:
+- Claude P1 total output: 172,961 tokens (25,972 + 57,501 + 89,488)
+- Claude P5 total output: 51,317 tokens (15,002 + 7,709 + 13,641 + 14,965)
+- Claude `input` (non-cache) total: 13,081
+- Claude `cacheCreate` total: 981,932 (charged at 1.25×)
+- Codex total: 108,416
+Effective cost ≈ $0.60–1.20 depending on pricing (vs ~$20+ if 8.7M were all fresh). The dogfood prompt's 300k soft threshold refers to non-cached budget, roughly **equivalent to the ~345k output+non-cache-input total** here. Marginally over but not catastrophic. Cache-read volume is cosmetic, not budget.
 
 ## ADR verification checklist
 
@@ -63,6 +71,7 @@ Round 2/3 skipped — Round 1 naturally produced a P7 REJECT chain that exercise
 - [x] **ADR-14 persist across P1 completion**: When P1 reopen completed, `pendingAction → null` but `carryoverFeedback` preserved
 - [x] **ADR-14 consume**: P5 init prompt included `이전 피드백 (반드시 반영): /.../gate-7-feedback.md` line (assembler read `carryoverFeedback.paths`)
 - [x] **ADR-14 clear**: After P5 completed, `carryoverFeedback: None`. Verified at both P5 #1 end and final state
+- [x] **Resume `--light` rejection**: `hc-light resume --light` against this completed run exits with code 1 + message `"Error: --light is only valid on 'harness start'. flow is frozen at run creation; start a new run with 'harness start --light' if you want the light flow."` — fires on flag presence regardless of state.flow value (per `src/commands/resume.ts:20-26`).
 
 ## Common fixes verification
 
@@ -75,18 +84,19 @@ Round 2/3 skipped — Round 1 naturally produced a P7 REJECT chain that exercise
 
 ## New observations
 
-### [P0] Resume after interrupted run is broken in reused-tmux mode (infinite recursion)
+### [P0] Resume after interrupted run hangs silently in reused-tmux mode (likely infinite recursion per static analysis)
 
 **Reproduction**: When a light-flow run terminates via `session_end: interrupted` (e.g., because P5 validator rejects the artifact due to dirty tree), the `start`-created ctrl window (`@51`/`%70`) is cleaned up on exit. But `state.json` still references `tmuxControlPane: '%70'` / `tmuxControlWindow: '@51'`. On subsequent `harness resume` from **inside tmux** (reused mode):
 
+Symptom (empirical): `node .../harness.js resume` hangs silently. No events emitted, no visible UI. `sample` on the hung PID shows 786 frames of `Builtins_InterpreterEntryTrampoline` — V8 spinning in JS interpreter, consistent with a tight CPU loop but not direct evidence of recursion depth.
+
+Static analysis of the probable path (not instrumented-confirmed):
 1. `tmuxAlive` = true (outer tmux session still exists)
 2. `innerAlive` = false (inner process dead)
 3. Case 2 branch fires, `paneExists('%70')` = false
 4. Falls to `else` at `src/commands/resume.ts:127-136` — cleans up via `killWindow`, releases lock, recurses
 5. **But state.tmuxControlPane / tmuxControlWindow are never cleared before recursion.**
 6. Recursive `resumeCommand` re-reads state → same stale values → Case 2 re-fires → infinite loop.
-
-Symptom: `node .../harness.js resume` hangs silently. `sample` shows V8 spinning in interpreter. No events emitted, no visible UI.
 
 Workaround: manually edit state.json to clear `tmuxControlPane`, `tmuxControlWindow`, `tmuxWindows`, `tmuxMode='dedicated'`, then resume. Creates a fresh Case 3 ctrl window.
 
@@ -128,7 +138,7 @@ Workaround: manually edit state.json to clear `tmuxControlPane`, `tmuxControlWin
 
 **Files**: `src/phases/interactive.ts:148-164` (`validatePhaseArtifacts` Phase 5 branch).
 
-### [P1] Gate-retry ceiling hit on realistic task — light's P1-reopen cost is steep
+### [P1] Gate-retry ceiling hit on realistic task — light's P1-reopen cost is steep (+ correlates with legacy issue #8)
 
 **Reproduction**: Round 1 exhausted all 3 gate retries (limit = `GATE_RETRY_LIMIT`). Each P7 REJECT triggered a full P1 re-design → P5 re-impl cycle:
 - Cycle 1 (P1 rev1 → P5 → P6 → P7 #0 REJECT): 7m 49s
@@ -139,6 +149,8 @@ Workaround: manually edit state.json to clear `tmuxControlPane`, `tmuxControlWin
 Codex's rev2 finding ("`list` command unnecessarily saves on every run") was legit; the feedback cycle produced a genuinely better design. But **ADR-4's "always reopen P1 on REJECT"** means even small impl-level issues trigger a full re-design session. For a LOW-spec task this cost is disproportionate.
 
 **Impact**: Light flow's promise of "1–4h task → under 40min harness" holds only when P7 approves on first or second try. A naturally-chatty Codex reviewer with even moderately ambiguous requirements will hit the 3-retry ceiling. At ceiling, the run is at risk of hitting `status: completed` on force-pass (auto mode) or manual escalation (interactive). Users may develop "approve anything" habits.
+
+**Cross-ref legacy issue #8 (`opus-max xHigh` overweight for simple CLI)**: P1 rev3 took **7m 14s** on `opus-max xHigh` for what is still a LOW-spec todo CLI. CLAUDE.md already tracks #8 as "미처리" (P1). Light flow inherits this exact pain because ADR-6 keeps `opus-max` as P1 default. A lighter default (`opus-high` or a `--simple` hint per issue #8 proposal) would compound with the retry-ceiling mitigation to cut Round 1 wall by ~5–8 min.
 
 **Proposed fix candidates**:
 1. **Mid-impl fix path**: When Codex's REJECT only cites impl-level issues (detectable by e.g. reviewer emitting `scope: impl`), reopen P5 with feedback instead of P1 + P5. Would require reviewer contract extension. Medium effort.
