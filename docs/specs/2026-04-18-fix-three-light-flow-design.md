@@ -1,239 +1,291 @@
-# Fix Three Light-Flow Bugs from 2026-04-18 Dogfood — Design Spec (Light)
+# Light Flow Three-Bug Fix — Design Spec (Light)
 
-관련 문서:
+관련 산출물:
 - Task: `.harness/2026-04-18-fix-three-light-flow/task.md`
+- Gate 7 피드백 (이번 revision에서 반영): `.harness/2026-04-18-fix-three-light-flow/gate-7-feedback.md`
 - Decision Log: `.harness/2026-04-18-fix-three-light-flow/decisions.md`
-- Eval Checklist: `.harness/2026-04-18-fix-three-light-flow/checklist.json`
-- Gate 7 Feedback (incorporated in this revision): `.harness/2026-04-18-fix-three-light-flow/gate-7-feedback.md`
-- 모태 설계: `docs/specs/2026-04-18-light-flow-design.md`, `docs/plans/2026-04-18-light-flow.md` (PR #10/#17)
-- Dogfood 관찰: commits `6812980`, `34a3d3d`, `4a0f0a5`
-- 관련 PR 배경: #11 (BUG-A/B/C + `HARNESS FLOW CONSTRAINT`), #15 (Phase 1 wrapper skill이 `## Open Questions` 강제), #16 (Claude token capture — `claude-usage.ts`의 stderr warn source)
+- Eval Checklist (JSON): `.harness/2026-04-18-fix-three-light-flow/checklist.json`
+- Dogfood 관측: `observations.md` (P0 / P0-FOLLOWUP / P2 / P3 섹션)
 
 ## Context & Decisions
 
-2026-04-18 dogfood (`harness start --light`) 라운드 1에서 세 가지 버그가 drain 됐다:
+### 배경
+2026-04-18 light flow 도그푸딩(`experimental-todo-light`, run baseline `e03bb1d`)에서 세 가지 버그가 발견됐다:
 
-- **P0 Resume infinite-loop** — reused-tmux 모드에서 control pane이 stale일 때, `resumeCommand`가 tmux 상태를 디스크에 정리하지 않고 재귀 호출한다. 결과: 재귀가 같은 stale state를 다시 읽고 Case 2를 무한 반복 (V8 InterpreterEntryTrampoline spin). 회복하려면 `state.json`을 수동 편집해야 했다.
-- **P2 Light Phase 1 `## Open Questions` 누락 regression** — Full flow는 PR #15 wrapper skill이 `## Open Questions`를 강제하지만, light flow는 standalone `phase-1-light.md` prompt를 사용하고 이 섹션을 요구하지 않는다. 그 결과 라운드 1의 세 combined doc 모두 해당 섹션이 누락되었다.
-- **P3 Control panel mislabel** — `src/ui.ts`가 `state.flow`와 무관하게 Phase 1을 `"Spec 작성"`으로 표시한다. Light flow는 ADR-3대로 "brainstorm + plan"이므로 "Spec" label은 절반만 반영.
+1. **[P0]** `harness resume`가 reused-tmux 모드에서 stale control pane을 만나면 무한 recursion으로 silently 멈춤 (`observations.md` §P0 참조). 수동 복구(state.json 편집) 없이는 탈출 불가.
+2. **[P2]** Light Phase 1 combined 문서에서 `## Open Questions` 섹션이 강제되지 않아 3회 round 모두 해당 섹션이 누락됨. Full flow는 PR #15 wrapper skill로 이 섹션을 enforce하지만 light flow는 standalone `phase-1-light.md`를 사용해 regression.
+3. **[P3]** Control panel UI가 `state.flow === 'light'`이어도 Phase 1을 `"Spec 작성"`으로 라벨링해 "plan" 절반이 가려진다 (ADR-3: light P1 = brainstorm + plan 결합).
 
-### Gate 7 feedback (2차 revision에서 반영)
+### Gate 7 revision 계기
+이 revision 이전 구현(commit `55c16ec` + `20f11e8`)은 세 수정과 `Case 2 stale pane` 회귀 테스트 1개, `## Open Questions` regex validator 2곳, UI 라벨 스위치를 ship했다. Gate 7에서 다음 두 안건이 REJECT로 올라왔다:
 
-1. **P1 (test rigor) — `tests/commands/resume-cmd.test.ts`의 `Case 2 stale pane (reused-mode)` 테스트가 실제 reused-모드 경로를 exercise 하지 않는다.** 리뷰어는 recursive call에서 `sessionExists`가 `false`를 반환하고 `createSession`을 assert 하는 것은 dedicated-스타일 fallback 검증이라 지적했다. spec의 **T1 의도(reused-모드 stale → Case 3 → `createWindow` 호출)** 를 검증하려면 (a) recursive call에서도 tmux 세션은 살아 있어야 하고, (b) `isInsideTmux === true` 세팅으로 reused-모드 Case 3 분기에서 새 control window 생성을 단언해야 한다.
-   - 이 지적은 단순 테스트 보강으로 끝나지 않는다. **현재 P0 구현(55c16ec)은 `tmuxControlPane`/`tmuxControlWindow`/`tmuxWindows`만 비운다.** reused-모드에서 사용자 세션이 계속 살아 있으면 recursive call에서도 `tmuxAlive === true` → Case 2 재진입 → `tmuxControlPane === ''` → 다시 stale 브랜치 → 무한 루프가 그대로 재현된다. 즉, **reviewer의 test-rigor 지적은 구현 자체가 reused-모드 recursion을 Case 3로 빼내지 못함을 간접적으로 드러낸다.** 본 revision은 구현 범위를 확장해 `tmuxSession` (그리고 `tmuxMode`) 도 stale 브랜치에서 초기화해 recursion이 Case 3 `createWindow` 경로에 자연스럽게 떨어지도록 한다.
-2. **P3 (eval artifact 신호/잡음) — `pnpm vitest run` stdout/stderr에 `[harness.claudeUsage] project dir unreadable /Users/daniel/.claude/projects/-tmp-cwd ENOENT` 다수 + `warning: Not a git repository. Use --no-index …` 1건이 찍혀 eval 리포트가 시끄럽다.** 리뷰어는 "해당 경고를 테스트 하니스에서 억제하거나 리포트에서 명시 annotate"을 제안. suppression을 기본 선택으로 삼는다 — claude-usage의 warn은 실제 production에서는 의미 있지만 test fixture에서는 거의 100% false-positive이므로, **test 경로에서만** suppressible 하게 만든다. Annotation은 보조 수단.
+- **[P1 — Gate 7]** `tests/commands/resume-cmd.test.ts::Case 2 stale pane (reused-mode)` 테스트는 recursive call에서 `sessionExists → false`, `isInsideTmux → false`를 강제해 **dedicated Case 3**에서 `createSession`을 검증한다. 스펙의 T1/Task 1이 요구한 "reused 모드 Case 3 → `createWindow` 호출 검증" 경로는 실제로 실행되지 않았다 — 즉 테스트가 의도한 버그 시나리오를 커버하지 않는다.
+- **[P3 — Gate 7]** `docs/process/evals/2026-04-18-fix-three-light-flow-eval.md::tests::stderr`에 `[harness.claudeUsage] project dir unreadable ... ENOENT ...` 5줄 + `git diff --no-index` usage block이 기록됐는데 summary는 "3/3 checks pass"만 제시해 **고신호 아티팩트로 보이지만 실제로는 알려진 벤인 노이즈**가 섞여 있다. 억제하거나 리포트에 annotation이 필요.
 
-### Guiding Decisions
+### 핵심 결정
 
-1. **Minimal surface (revised)** — P0/P2/P3 세 지점 + 테스트 하니스 stderr suppression만 고친다. 인접 리팩터·전역 flow-aware 레이블 도입(Full flow에서도) 등은 범위 외. 단, P0 수정 범위는 gate-7 feedback에 따라 **`tmuxSession` + `tmuxMode` clear** 까지 확대한다 (원래 "`Pane/Window/Windows`만"에서 확대).
-2. **Full flow 회귀 zero** — `flow === 'full'` 경로는 동작·레이블·리턴값이 bit-identical 유지. 라벨 분기·정규식 분기에서만 `state.flow === 'light'` 가드 추가. resume.ts 변경은 `flow` 와 무관하게 reused/dedicated 양쪽 모두의 infinite-loop 회복 경로이므로 full flow에도 긍정 영향만 줌.
-3. **ADR-13 symmetry** — Phase 1 artifact validation은 `interactive.ts::validatePhaseArtifacts`와 `resume.ts::completeInteractivePhaseFromFreshSentinel` 두 경로에서 동일한 규칙을 적용해야 한다 (첫 실행 / resume fresh sentinel 두 경로).
-4. **Recursion safety (strengthened)** — resume의 recursive fallback은 반드시 (a) 다음 호출이 **디스크에 persist 된 상태**를 기반으로 진행하고, (b) 해당 상태가 같은 stale-분기로 재진입하지 않도록 **탈출 조건**을 만족해야 한다. reused-모드에서는 `tmuxSession` 까지 비워야 `sessionExists('') === false` → `tmuxAlive === false` → Case 3 분기로 빠지는 탈출 경로가 생긴다. `tmuxMode` 도 default(`'dedicated'`) 로 리셋해 Case 3가 `isInsideTmux()` 를 재평가하도록 한다 (현 tmux 컨텍스트에 맞춰 새 모드를 자연스럽게 결정).
-5. **Flow-aware label은 Phase 1에 한정** — light에서 Phase 5/7 등은 full과 동일 의미이므로 기존 라벨 유지. Phase 1만 `설계+플랜`으로 분기.
-6. **Prompt skeleton bump은 Phase 1의 "## Open Questions" 한 섹션만 추가**. 순서는 `Implementation Plan` 앞에 위치 (독자가 plan을 읽기 전 unknowns을 맥락으로 흡수하도록).
-7. **stderr noise 정책** — `src/runners/claude-usage.ts::warn` 은 테스트 환경에서 침묵시킨다. 우선순위: **(a) vitest 파일 레벨에서 `process.stderr.write` spy 를 깔아 noise 억제, 혹은 (b) `claude-usage.ts` 가 `process.env.NODE_ENV === 'test'` 또는 전용 flag 를 감지해 warn 을 drop.** 구현 시 가장 국소적인 옵션을 선택. 생산 경로의 진단 정보는 보존한다.
+#### D1. P0 fix는 `tmuxSession` + `tmuxMode`까지 확장 (observations §P0-FOLLOWUP 반영)
+- **현 구현** (`src/commands/resume.ts:134-139`): stale branch에서 `tmuxControlPane / tmuxControlWindow / tmuxWindows`만 clear 후 recursion.
+- **문제** (reused 모드, 사용자 outer tmux 살아있음): recursive call에서 `state.tmuxSession`이 여전히 유효 → `tmuxAlive === true` → Case 2 재진입 → `state.tmuxControlPane === ''` (falsy) → else 브랜치 재진입 → `state.tmuxControlWindow === ''`라 `killWindow`도 skip → 이미 비어있는 필드 다시 clear → recursion → 무한루프.
+- **수정**: stale branch에서 **`state.tmuxSession = ''` + `state.tmuxMode = 'dedicated'`도 clear**. 이후 recursion에서 `src/commands/resume.ts:102`의 `tmuxAlive = state.tmuxSession !== '' && sessionExists(state.tmuxSession)` short-circuit이 false로 평가되어 Case 3로 낙착 → `isInsideTmux()` 재평가해 reused/dedicated 재-derive.
+- **대안 고려**: (a) `tmuxMode`를 그대로 두고 `tmuxSession`만 clear — `tmuxMode`가 오래된 값으로 남아도 Case 3에서 overwrite되므로 기능상 동등하나, 명시성을 위해 `'dedicated'`로 리셋해 "stale 상태" 의도를 표현. (b) recursion 대신 in-place Case 3 dispatch 리팩토링 — 스코프 확장이라 기각.
+
+#### D2. 테스트를 "reused 모드, outer tmux 유지" 시나리오로 재작성
+- Gate 7 리뷰어 의도는 명확: **outer tmux session이 살아있는 상태에서도** stale-branch가 무한루프에 빠지지 않고 recursive call이 reused Case 3(`createWindow`)로 수렴함을 검증.
+- `tmux` mock 시나리오:
+  - `sessionExists.mockReturnValue(true)` — outer 세션은 계속 살아있음. (recursive call에서 `state.tmuxSession === ''`로 short-circuit되어 `sessionExists` 호출이 skip되므로 `mockReturnValueOnce`를 쓸 필요 없음.)
+  - `paneExists.mockReturnValue(false)` — control pane stale.
+  - `isPidAlive.mockReturnValue(false)` — inner dead.
+  - `isInsideTmux.mockReturnValue(true)` — reused 모드 (Case 3 reused 분기 유도).
+  - `getCurrentSessionName.mockReturnValue('harness-reused')` — Case 3가 새 session 이름 derive.
+  - `createWindow.mockReturnValue('@new-ctrl')` / `getDefaultPaneId.mockReturnValue('%new-ctrl')`.
+- 어설션:
+  - `killWindow` 1회 호출 (stale branch의 reused-mode cleanup).
+  - 재진입 후 `createWindow` 호출 (Case 3 reused 경로).
+  - `createSession` **호출되지 않음** (기존 테스트의 dedicated 경로와 구분).
+  - `state.json`의 `tmuxControlPane === ''`, `tmuxControlWindow === ''`, `tmuxWindows === []`, `tmuxSession === 'harness-reused'` (Case 3가 getCurrentSessionName 결과로 재할당).
+  - `tmuxMode === 'reused'` (Case 3 재-derive 결과).
+  - `releaseLock` 호출 확인 (recursion 전 cleanup 검증).
+- **기존 dedicated-mode 테스트(`sessionExists → false` 경로)는 삭제**. 이유: (a) Gate 7 feedback이 실제 버그 시나리오(reused)를 강제함 (b) 동일 파일의 `'resumes with explicit runId (Case 3: no session)'` 테스트가 이미 dedicated Case 3 경로를 커버함 (c) redundant 테스트는 signal을 흐리고 test baseline을 부풀림.
+
+#### D3. Eval artifact 노이즈는 **상류(source) 억제** — annotation 대신 silence
+- `src/runners/claude-usage.ts:97-104`: project dir enumerate 실패 시 `warn`. 실패 사유가 `ENOENT`(디렉토리 자체 존재 안 함)이면 "이 cwd에서 claude 세션이 한 번도 실행된 적 없음"이라는 **정상 상태**. 테스트 환경 tmpdir에서는 기본값이다. 반면 `EACCES`/`EIO`/기타는 진짜 I/O error → warn 유지.
+- 수정: readdirSync catch에서 에러 `code === 'ENOENT'`이면 silent `return null`; 그 외는 기존 `warn` 유지. `claude-token-capture-design.md`의 "hard I/O error" 계약은 유지 (ENOENT는 hard I/O error가 아닌 "session 없음"으로 재해석).
+- **git diff --no-index 경고**에 대한 결정: 이 경고는 `tests/git.test.ts`가 "git 저장소 바깥 경로에 `git diff` 호출" 에러 경로를 의도적으로 실행한 결과다. 해당 테스트는 exit-code/stderr 자체를 assertion으로 사용하고 pipe 억제 없이 `execSync` 기본 동작을 신뢰한다. 이 노이즈를 억제하려면 테스트 assertion 구조를 건드려야 해 scope-creep 위험이 크다. **결론**: git 경고는 건드리지 않는다; eval report 품질은 claudeUsage 억제만으로 상당히 향상(dogfood 기준 5줄 → 0줄이 큰 덩어리)되고, git 경고 5~6줄은 signal-noise 비율 측면에서 수용 가능. Phase 6 eval report 생성 로직은 변경하지 않는다.
+
+#### D4. Full-flow 회귀 방지
+- `tmuxMode`, `tmuxSession` clear는 dedicated/reused 모두에 안전 (Case 3가 `isInsideTmux`로 재-derive). 기존 dedicated 테스트(`Case 2 → recursive Case 3 dedicated`) 회귀 없음 — `resumes with explicit runId (Case 3: no session)` 테스트로 커버.
+- `claude-usage.ts` 변경은 ENOENT에만 영향; full-flow 런타임 경로는 claude session이 존재하므로 ENOENT 발생 지점이 기본적으로 없음. 기존 `tests/runners/claude-usage.test.ts`에서 ENOENT 케이스를 테스트하는지 확인 후 필요시 어설션 업데이트.
+- `phase-1-light.md` / `src/ui.ts` / `validatePhaseArtifacts` 변경은 이미 merged된 상태 유지 (이번 revision은 추가/수정 없음).
 
 ## Requirements / Scope
 
-### In scope
-- `src/commands/resume.ts:127-142` — stale control-pane 정리 시 `tmuxControlPane`, `tmuxControlWindow`, `tmuxWindows`, **그리고 `tmuxSession`, `tmuxMode`** 를 clear + writeState 후 recursion. 이로써 reused-모드 infinite-loop 탈출.
-- `src/context/prompts/phase-1-light.md` — `## Open Questions` 필수 섹션을 skeleton에 추가 + "누락 시 Phase 1 실패" 경고 문구.
-- `src/phases/interactive.ts::validatePhaseArtifacts` (light + phase 1 브랜치, ≈L127-143) — `## Open Questions` regex 추가.
-- `src/resume.ts::completeInteractivePhaseFromFreshSentinel` — 동일 regex 추가 (ADR-13 symmetry).
-- `src/ui.ts::phaseLabel` + `renderControlPanel` + `renderModelSelection` + `promptModelConfig` — Phase 1 label을 `state.flow === 'light'`일 때 `"설계+플랜"`로 교체. Full flow는 `"Spec 작성"` 유지.
-- `src/commands/inner.ts` — `promptModelConfig`에 `state.flow` 전달 (signature 확장).
-- **테스트 하니스 stderr suppression** — claude-usage warn / git diff `--no-index` warning 이 발생하는 테스트 파일(들)에서 `process.stderr` spy 혹은 mock 을 깔아 noise 를 잠재운다. 대상 파일은 구현 시 repro로 특정 (유력 후보: `tests/runners/claude-usage.test.ts`, `tests/phases/runner-token-capture.test.ts`, 그리고 `git diff --no-index` 를 호출하는 통합 테스트).
-- **신규/보강 테스트 4개 이상** (P0×1, P2×2, P3×1). **P0 테스트는 reused-모드 경로로 재작성**: `sessionExists.mockImplementation((name) => name === '<real-session>')` 로 recursive call에서도 세션이 살아 있게 유지 + `isInsideTmux === true` + `createWindow` 호출 단언. 기존 테스트 중 light presets 로 label 을 단언하는 케이스는 `flow` 파라미터를 전달하도록 업데이트.
+### 기능 요구사항
+1. **R1 — resume.ts stale branch 확장**: `src/commands/resume.ts` Case 2 stale else 브랜치에서 recursion 전 `state.tmuxSession = ''` + `state.tmuxMode = 'dedicated'` 추가 clear. 기존 3개 필드(`tmuxControlPane`, `tmuxControlWindow`, `tmuxWindows`)는 그대로 유지.
+2. **R2 — reused-mode 회귀 테스트 재작성**: `tests/commands/resume-cmd.test.ts::Case 2 stale pane (reused-mode)` 테스트가 (a) outer tmux 유지 (b) `isInsideTmux → true` (c) `createWindow` 호출 (d) `createSession` 미호출 (e) state.json의 모든 control refs + tmuxSession 재할당 확인.
+3. **R3 — claudeUsage ENOENT silence**: `src/runners/claude-usage.ts`의 `readdirSync` catch에서 `err.code === 'ENOENT'`이면 warn 호출 생략하고 `return null`.
+4. **R4 — P0/P2/P3 기존 수정 보존**: 이미 merged된 `tmuxControlPane/Window/Windows` clear, `phase-1-light.md` Open Questions 섹션, `validatePhaseArtifacts` regex, `src/ui.ts`의 light 라벨 모두 유지.
 
-### Out of scope
-- Dedicated-mode 세션 kill 후의 후속 cleanup 확장. 현재 변경은 `tmuxSession='' + tmuxMode='dedicated'` clear 이므로 dedicated 에서도 무해 (Case 3 가 overwrite).
-- Full flow의 phase label flow-aware 확장 (Phase 3/5/7 label 재검토 등).
-- Wrapper skill `harness-phase-1-*.md` rewrite (이미 `## Open Questions` 강제. 본 작업은 **light** standalone prompt에만 평행 문구 추가).
-- Dogfood observations 파일(`observations.md`) 재작성.
-- Eval report format 변경 (stderr 섹션 annotation block 자동 삽입 등) — suppression으로 해결.
+### 비기능/스코프 요구사항
+- **NFR-1**: full flow 경로 회귀 없음. 기존 resume dedicated Case 3 테스트와 Phase 1/3 validator 테스트 통과.
+- **NFR-2**: 각 fix에 최소 1개의 타겟 테스트. (R1+R2 테스트 하나, R3 테스트 하나 추가.)
+- **NFR-3**: vitest 전체 suite **≥ 577 passed / 1 skipped** (task.md 요구). 현 baseline은 580 passed / 1 skipped (eval report 기준) — R2 재작성으로 net-zero, R3 추가로 +1 → 581 passed 예상.
+- **NFR-4**: `pnpm tsc --noEmit` 0 에러 / `pnpm build` 성공.
+- **NFR-5**: 커밋 메시지는 project convention (`fix(<scope>): <imperative>`) + Co-authored-by 금지.
 
-### Acceptance criteria
-- `pnpm tsc --noEmit` / `pnpm vitest run` / `pnpm build` 모두 green.
-- Vitest baseline 574 → **≥ 577 passed / 1 skipped** (각 P0/P2/P3마다 최소 1 신규 테스트; P2는 두 validator 대칭으로 2개).
-- `pnpm vitest run tests/commands/resume-cmd.test.ts` 안의 **신규 reused-모드 stale-pane 테스트**가 (i) state.json 의 `tmuxControlPane === ''`, `tmuxControlWindow === ''`, `tmuxWindows === []`, `tmuxSession === ''` (recursion 직전 시점) 을 기록했는지, (ii) recursion 이후 `createWindow` 가 호출됐는지 (createSession 은 호출되지 않음) 를 단언.
-- Light flow Phase 1 regression 테스트가 `## Open Questions` 누락 시 validate/resume-complete 둘 다 false 반환.
-- 컨트롤 패널 렌더링 테스트가 `state.flow === 'light'`일 때 Phase 1 row에 `"설계+플랜"` 포함, full일 때 `"Spec 작성"` 포함.
-- Full flow 경로의 기존 테스트 (≥574개)는 수정 없이 통과 — label 변경은 flow 분기 뒤에서만 발생.
-- **Eval 실행 시 stderr 가 clean** — `[harness.claudeUsage] project dir unreadable` / `warning: Not a git repository` 라인이 벤치 reporter 에 노출되지 않음. 구현자는 Phase 6 eval report 의 stderr 섹션이 비어 있거나 noise 가 제거됐는지 확인한다.
+### Out of Scope
+- observations.md의 다른 항목들: [P1-RESUME] validator side-effect, [P1-NEW] mtime reopen 친화 완화, [P1] gate-retry ceiling, [P3] preflight timeout, [P3] Phase-6 reset commit 노이즈. 각각 별도 PR/spec에서 처리.
+- git `--no-index` 테스트 경고 억제 (§D3 참조).
+- Phase 6 eval report 생성기(harness-verify.sh) 변경.
 
 ## Design
 
-### P0 — Resume stale-pane recursion fix (revised per Gate 7 P1)
+### 변경 파일 맵 (본 revision 한정)
 
-`src/commands/resume.ts:123-143` (Case 2, stale control pane 브랜치):
+| 파일 | 수정 종류 | 요지 |
+|---|---|---|
+| `src/commands/resume.ts` | diff-aware edit | stale branch에서 `tmuxSession`, `tmuxMode` 추가 clear |
+| `src/runners/claude-usage.ts` | diff-aware edit | `readdirSync` catch에서 ENOENT silence |
+| `tests/commands/resume-cmd.test.ts` | test rewrite | `Case 2 stale pane (reused-mode)`를 reused 모드-살아있음 시나리오로 재구성 |
+| `tests/runners/claude-usage.test.ts` | test addition | ENOENT silent / non-ENOENT warn 분기 커버 |
+
+(이전 Round에 merged된 `src/context/prompts/phase-1-light.md`, `src/ui.ts`, `src/phases/interactive.ts`, `src/resume.ts`, `tests/integration/light-flow.test.ts` 등 수정은 본 revision에서 건드리지 않는다.)
+
+### 구현 상세
+
+#### S1 (R1) — `src/commands/resume.ts` stale branch 확장
+
+현재 (commit `55c16ec` 적용 후):
 
 ```ts
-if (state.tmuxControlPane && paneExists(state.tmuxSession, state.tmuxControlPane)) {
-  // 유효 — 기존 경로 유지
-  ...
 } else {
+  // Control pane stale → cleanup by mode, then fall through to Case 3
   if (state.tmuxMode === 'dedicated') {
     killSession(state.tmuxSession);
   } else if (state.tmuxControlWindow) {
     killWindow(state.tmuxSession, state.tmuxControlWindow);
   }
-  // stale tmux 참조를 디스크에 persist 후 recursion.
-  // reused-모드 탈출을 위해 tmuxSession/tmuxMode 도 리셋 — 다음 호출은
-  // sessionExists('') === false → Case 3 로 낙하하고, 거기서 isInsideTmux()
-  // 가 true 면 createWindow(), false 면 createSession() 로 올바른 분기.
+  // Persist cleared control-pane references before recursion so the next
+  // call doesn't re-enter this stale branch (reused-mode infinite-loop fix)
+  state.tmuxControlPane = '';
+  state.tmuxControlWindow = '';
+  state.tmuxWindows = [];
+  writeState(runDir, state);
+  releaseLock(harnessDir, targetRunId);
+  // Re-enter resume which will hit Case 3
+  return resumeCommand(runId, options);
+}
+```
+
+Revision 후:
+
+```ts
+} else {
+  // Control pane stale → cleanup by mode, then fall through to Case 3
+  if (state.tmuxMode === 'dedicated') {
+    killSession(state.tmuxSession);
+  } else if (state.tmuxControlWindow) {
+    killWindow(state.tmuxSession, state.tmuxControlWindow);
+  }
+  // Persist cleared tmux references before recursion so Case 3 re-derives
+  // session + mode from isInsideTmux(). Without clearing session/mode the
+  // reused-mode recursive call would re-enter Case 2 and loop forever.
   state.tmuxControlPane = '';
   state.tmuxControlWindow = '';
   state.tmuxWindows = [];
   state.tmuxSession = '';
   state.tmuxMode = 'dedicated';
   writeState(runDir, state);
-
   releaseLock(harnessDir, targetRunId);
+  // Re-enter resume which will hit Case 3
   return resumeCommand(runId, options);
 }
 ```
 
-Rationale (updated):
+Trace (reused 모드 — bug scenario):
+1. 1st call: `state.tmuxSession='harness-X'`, `tmuxMode='reused'`, `tmuxControlPane='%stale'`, `tmuxControlWindow='@stale'`. `sessionExists('harness-X') → true`, `innerAlive=false` → Case 2. `paneExists → false` → stale else. `killWindow('harness-X', '@stale')`. state clear(모든 필드 + session=''/mode='dedicated'). recurse.
+2. 2nd call: `state.tmuxSession === ''` → short-circuit 평가 `tmuxAlive = false`. Case 3. `isInsideTmux() → true`, `getCurrentSessionName() → 'harness-X'`, `tmuxMode = 'reused'`, `createWindow → '@new'`, `getDefaultPaneId → '%new'`, `sendKeys`. 완료.
 
-- **reused 모드**: `killWindow` 가 control window 만 제거하고 사용자 세션은 살아 있다. 이전 구현은 `tmuxSession` 을 보존해 recursive call 에서 `tmuxAlive === true` → Case 2 재진입 → `tmuxControlPane === ''` 이라도 **다시 stale 분기** → infinite loop. `tmuxSession = ''` 으로 비우면 recursive call 에서 `sessionExists('') === false` → `tmuxAlive === false` → Case 3 분기로 떨어진다. Case 3 는 `isInsideTmux()` 로 현재 tmux 컨텍스트를 재평가하고, 사용자가 여전히 원래 세션 안에 있으면 `getCurrentSessionName()` 로 같은 세션을 재획득해 `createWindow('harness-ctrl', ...)` 로 새 control window 를 생성한다. `state.tmuxMode` 도 재계산되어 `'reused'` 로 정확히 복원.
-- **dedicated 모드**: `killSession` 이 세션 자체를 죽이므로 recursive call 에서 `sessionExists(state.tmuxSession) === false` → Case 3. `tmuxSession` 리셋은 불필요하지만 해롭지도 않다 (Case 3 가 새 `harness-<runId>` 이름으로 overwrite). 일관된 invariant 유지 차원에서 clear.
-- **tmuxMode = 'dedicated' 로 리셋**: Case 3 가 `insideTmux ? 'reused' : 'dedicated'` 로 즉시 재계산하므로 기본값은 중립적인 `'dedicated'`. 만약 Case 3 로 가지 못하는 엣지 (예: 즉시 예외) 가 있어도 default 가 dedicated 면 다음 호출에서 `killSession` 시도만 발생 (빈 문자열에 대한 `killSession('')` 은 tmux 가 안전 무시) → 재귀 종료. infinite-loop invariants 보존.
-- `tmuxOriginalWindow` 는 유지 (Case 3 reused 분기가 `getActiveWindowId` 로 재설정하지만, 사용자 meta 보존 의도상 보존해도 무해. 단, 현 Case 3 코드가 `insideTmux` 에서 무조건 overwrite 하므로 effect 는 없음).
+Trace (dedicated 모드):
+1. 1st call: `tmuxMode='dedicated'`. stale branch → `killSession('harness-X')` → outer session 죽음. state clear. recurse.
+2. 2nd call: `sessionExists('')` short-circuit false. Case 3. `isInsideTmux() → false` → `createSession` + 신규 session. 기존 거동과 동일 (회귀 없음).
 
-### P2 — `## Open Questions` 강제 (ADR-13 symmetric enforcement)
+#### S2 (R2) — 테스트 재작성
 
-**(a) Prompt skeleton** — `src/context/prompts/phase-1-light.md`:
-
-```diff
- # <title> — Design Spec (Light)
- ## Context & Decisions
- ## Requirements / Scope
- ## Design
-+## Open Questions              (필수 헤더, 정확히 이 텍스트 — 불확실·후속 조사 항목 기록. 없으면 "없음"으로 명시)
- ## Implementation Plan       (필수 헤더, 정확히 이 텍스트)
-   - Task 1: ...
-   - Task 2: ...
- ## Eval Checklist Summary    (checklist.json 요약; 실제 검증 JSON은 별도 파일)
-```
-
-경고 문구도 `## Implementation Plan` 패턴을 미러링 — "본 섹션이 누락되면 harness는 Phase 1을 실패로 간주한다."
-
-**(b) `interactive.ts` validator** — 기존 Implementation Plan regex 블록 옆에 평행 블록:
+`tests/commands/resume-cmd.test.ts` 기존 `Case 2 stale pane (reused-mode)` 테스트(203–244행)를 다음과 같이 대체한다 (시그니처 골격):
 
 ```ts
-if (!/^##\s+Open\s+Questions\s*$/m.test(body)) return false;
-if (!/^##\s+Implementation\s+Plan\s*$/m.test(body)) return false;
+it('Case 2 stale pane (reused-mode): outer session stays alive, recursion creates new control window', async () => {
+  const { harnessDir, runId, runDir } = setupRun(repo, {
+    tmuxSession: 'harness-reused',
+    tmuxControlPane: '%stale',
+    tmuxControlWindow: '@stale',
+    tmuxWindows: ['@stale'],
+    tmuxMode: 'reused',
+  });
+  setCurrentRun(harnessDir, runId);
+
+  const tmux = await import('../../src/tmux.js');
+  const lock = await import('../../src/lock.js');
+  const proc = await import('../../src/process.js');
+
+  // Outer tmux session remains alive throughout. In the recursive call the
+  // short-circuit `state.tmuxSession !== ''` skips sessionExists, so we
+  // don't need mockReturnValueOnce.
+  vi.mocked(tmux.sessionExists).mockReturnValue(true);
+  vi.mocked(tmux.paneExists).mockReturnValue(false);
+  vi.mocked(tmux.isInsideTmux).mockReturnValue(true);
+  vi.mocked(tmux.getCurrentSessionName).mockReturnValue('harness-reused');
+  vi.mocked(tmux.getActiveWindowId).mockReturnValue('@orig');
+  vi.mocked(tmux.createWindow).mockReturnValue('@new-ctrl');
+  vi.mocked(tmux.getDefaultPaneId).mockReturnValue('%new-ctrl');
+  vi.mocked(lock.readLock).mockReturnValue({ cliPid: 999, handoff: false, childPid: null, childPhase: null, runId, startedAt: null, childStartedAt: null });
+  vi.mocked(proc.isPidAlive).mockReturnValue(false);
+  vi.mocked(lock.pollForHandoffComplete).mockReturnValue(true);
+
+  // mockClear() 대상
+  vi.mocked(tmux.killWindow).mockClear();
+  vi.mocked(tmux.createSession).mockClear();
+  vi.mocked(tmux.createWindow).mockClear();
+  vi.mocked(lock.releaseLock).mockClear();
+
+  await resumeCommand(undefined, { root: repo.path });
+
+  // State: all control refs + tmuxSession cleared and then re-derived
+  const savedState = JSON.parse(readFileSync(join(runDir, 'state.json'), 'utf-8'));
+  expect(savedState.tmuxControlPane).toBe('');     // intermediate clear → then Case 3 sets controlWindow/windows, not controlPane
+  expect(savedState.tmuxMode).toBe('reused');      // re-derived in Case 3
+  expect(savedState.tmuxSession).toBe('harness-reused');  // re-derived in Case 3
+  expect(savedState.tmuxControlWindow).toBe('@new-ctrl'); // Case 3 reused path assigns
+  expect(savedState.tmuxWindows).toEqual(['@new-ctrl']);  // Case 3 reused path pushes
+
+  // Behavior: stale cleanup → recursion → reused Case 3 path
+  expect(vi.mocked(tmux.killWindow)).toHaveBeenCalledWith('harness-reused', '@stale');
+  expect(vi.mocked(lock.releaseLock)).toHaveBeenCalled();
+  expect(vi.mocked(tmux.createWindow)).toHaveBeenCalledWith('harness-reused', 'harness-ctrl', '');
+  expect(vi.mocked(tmux.createSession)).not.toHaveBeenCalled();
+});
 ```
 
-**(c) `resume.ts::completeInteractivePhaseFromFreshSentinel` validator** — 동일 regex. 대칭성이 무너지면 `harness resume --light` 경로만 우회 통과.
+(정확한 mock state + assertion 조합은 구현 단계에서 Case 3 코드 경로(`src/commands/resume.ts:156-189`)에 맞춰 fine-tune.)
 
-Rationale:
-- wrapper skill (full flow)과 standalone prompt (light flow)의 policy 동기화.
-- regex는 라인 시작/끝 앵커로 Markdown 헤더 정확 매칭 — inline string `## Open Questions`는 제외 (full flow의 Implementation Plan regex와 동일 스타일).
+기존 `Case 2 stale pane (reused-mode): clears tmuxControlPane/Window/Windows in state.json then reaches Case 3` 테스트는 **삭제**: §D2 근거.
 
-### P3 — Flow-aware Phase 1 label
+#### S3 (R3) — `src/runners/claude-usage.ts` ENOENT silence
 
-`src/ui.ts`:
+현재 (`src/runners/claude-usage.ts:97-104`):
 
 ```ts
-function phaseLabel(phase: number, flow: Flow = 'full'): string {
-  const labels: Record<number, string> = {
-    1: flow === 'light' ? '설계+플랜' : 'Spec 작성',
-    2: 'Spec Gate',
-    3: 'Plan 작성',
-    4: 'Plan Gate',
-    5: '구현',
-    6: '검증',
-    7: 'Eval Gate',
-  };
-  return labels[phase] ?? `Phase ${phase}`;
+try {
+  entries = fs.readdirSync(projectDir);
+} catch (err) {
+  warn(`project dir unreadable ${projectDir}: ${(err as Error).message}`);
+  return null;
 }
 ```
 
-- `renderControlPanel`: `phaseLabel(p, state.flow)`로 모든 호출 변경.
-- `renderModelSelection(phasePresets, editablePhases?, flow: Flow = 'full')`: 파라미터 추가. 내부 `phaseLabels`의 `'1'` 값을 flow-aware로 계산.
-- `promptModelConfig(currentPresets, inputManager, editablePhases?, flow?)`: 새 파라미터 뒤로 추가. `renderModelSelection`에 전파 + 내부 model-prompt `phaseLabels`도 flow-aware.
-- `src/commands/inner.ts`: `promptModelConfig(state.phasePresets, inputManager, remainingPhases, state.flow)`.
+Revision 후:
 
-Defaults ensure **full flow 경로는 호출자 수정 없이도 동일 동작** (flow 생략 시 `'full'`). 단 `promptModelConfig`/`renderModelSelection` 호출처는 의미상 flow를 전달해야 하는 곳(`inner.ts`, light 테스트)만 업데이트.
+```ts
+try {
+  entries = fs.readdirSync(projectDir);
+} catch (err) {
+  // ENOENT on project dir == "no claude session ever recorded for this cwd".
+  // This is the default state for test tmpdirs and some fresh cwds; don't
+  // pollute stderr. Other I/O errors (EACCES, EIO) still warn once per phase.
+  if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+    warn(`project dir unreadable ${projectDir}: ${(err as Error).message}`);
+  }
+  return null;
+}
+```
 
-### stderr noise suppression (Gate 7 P3)
+3-state 계약 (`docs/specs/2026-04-18-claude-token-capture-design.md::Error handling`) 상:
+- 성공 → tokens 객체.
+- 실패 (return null) 유지 — 호출자(`src/phases/runner.ts`)는 `claudeTokens: null`을 이벤트에 기록.
+- Warn: ENOENT silent / 그 외 유지.
 
-**원인**:
-- `[harness.claudeUsage] project dir unreadable /Users/daniel/.claude/projects/-tmp-cwd ENOENT` — `src/runners/claude-usage.ts:102` `warn()` 호출. `readClaudeSessionUsage` 가 tmp cwd(`/tmp/cwd`) 에 대한 `.claude/projects/-tmp-cwd` 를 찾지 못해 발생. 이 경로는 테스트 fixture(특히 integration/token-capture) 에서 정상적으로 비어 있다.
-- `warning: Not a git repository. Use --no-index …` — tmp cwd 에서 `git diff` 를 호출하는 곳. `git diff` 가 working tree 가 아닌 경로에서 실행될 때 발생.
+#### S4 (R3 test) — `tests/runners/claude-usage.test.ts` 보강
 
-**전략**:
-- **claude-usage warn 억제 (우선 옵션 A)**: 원인 테스트 파일(들)의 `beforeEach/describe` 블록에서 `vi.spyOn(process.stderr, 'write').mockImplementation(() => true)` 로 한정 scope 억제. 억제는 테스트 파일 내부에서만 발효하고, 다른 테스트는 기존처럼 stderr 를 볼 수 있다.
-- **claude-usage warn 억제 (대안 옵션 B)**: `src/runners/claude-usage.ts::warn` 이 `process.env.VITEST === 'true'` 또는 `process.env.HARNESS_SILENCE_USAGE_WARN === '1'` 감지 시 skip. Vitest 는 기본으로 `VITEST=true` 주입하므로 환경 감지만으로 충분. **이 대안을 최종 채택 이유**: 파일별 spy 를 깔면 테스트 수정 범위가 커지고, 미래에 claude-usage 를 새로 호출하는 테스트가 추가될 때마다 spy 를 잊을 리스크. 환경 감지는 1지점 수정으로 전역 커버. 생산 경로는 영향 없음 (`VITEST` 는 vitest 실행 시에만 set).
-- **git diff --no-index warning**: 원인 추적 필요 — `git` CLI 가 tmp cwd 에서 fallback 으로 호출됐을 때 stderr 를 토해낸 경우. `src/git.ts` 에서 `git diff` 호출 시 `stdio: ['ignore', 'pipe', 'ignore']` 또는 `try/catch` 로 stderr 삼키기 / 이미 삼키고 있으면 특정 테스트에서 직접 호출됐을 가능성. 구현자는 `grep -rn "git diff" src/ tests/` 로 호출 지점을 찾고, 테스트 컨텍스트에서 발생하는 지점에 한해 stderr 를 억제 (producton 경로는 diff 출력 필요하므로 건드리지 않음).
+추가 테스트 케이스:
 
-두 경고 모두 실제 회귀 지표가 아니므로 **suppression 이 보존 대비 비용 > 편익**. 구현자는 최소 변경으로 clean stderr 달성 후 Phase 6 eval 에서 확인.
+1. `readdirSync throws ENOENT → returns null and does not warn` — stderr capture 후 `"project dir unreadable"` 문자열 부재 확인.
+2. `readdirSync throws non-ENOENT (e.g., EACCES) → returns null and warns once` — stderr capture에서 warn 문자열 존재 확인.
 
-### Test design (revised per Gate 7 P1)
+기존 테스트가 ENOENT를 warn-포함으로 assertion하고 있으면 expectation을 "no warn"으로 업데이트.
 
-| # | 파일 | 케이스 | 단언 |
-|---|---|---|---|
-| T1 | `tests/commands/resume-cmd.test.ts` | **reused 모드**, 첫 호출 control-pane stale → recursion 후 Case 3 `createWindow` 경로 | `sessionExists.mockImplementation((name) => name === 'harness-test')` (recursive `''` 조회는 자연스럽게 false). `isInsideTmux.mockReturnValue(true)`. `getCurrentSessionName.mockReturnValue('harness-test')`. 후속 단언: (i) `state.json` 의 `tmuxControlPane === ''`, `tmuxControlWindow === ''`, `tmuxWindows === []`, `tmuxSession === ''` (recursion 직전 스냅샷을 별도 단언하려면 `writeState` spy 로 capture). (ii) recursion 뒤 `createWindow` 호출됨. (iii) `createSession` 호출 안 됨. (iv) releaseLock 이 recursion 이전에 한 번 호출됨. |
-| T2a | `tests/phases/interactive.test.ts` | light + phase 1, 본문에 `## Implementation Plan` 있지만 `## Open Questions` 없음 | `validatePhaseArtifacts` → `false` |
-| T2b | `tests/phases/interactive.test.ts` | light + phase 1, 두 섹션 모두 있음 | `true` (기존 accept 테스트를 Open Questions 포함하도록 강화) |
-| T2c | `tests/resume-light.test.ts` | `## Open Questions` 누락 시 `completeInteractivePhaseFromFreshSentinel` → `false` |
-| T3a | `tests/ui.test.ts` | `renderControlPanel` with `state.flow === 'light'` | transcript에 `Phase 1: 설계+플랜` 매치 |
-| T3b | `tests/ui.test.ts` | `renderControlPanel` with `state.flow === 'full'` | transcript에 `Phase 1: Spec 작성` 매치 (기존 거동 보존) |
-| — | `tests/ui.test.ts` — 기존 "flow-aware row visibility" 테스트 | light 세팅이므로 `Phase 1 \(설계\+플랜\)` 기대로 업데이트 (새 signature에 `'light'` 전달) |
-| — | 필요 시 `tests/runners/claude-usage.test.ts` 및 `git diff` 호출 테스트 | stderr 노이즈 제거 | 구현 옵션 B(env 감지) 시 별도 테스트 불요. 옵션 A(spy) 시 해당 파일 `beforeEach` 에 spy 추가. |
+### Risks & Mitigations
 
-총 신규 ≥3 (T1, T2a 또는 T2c, T3a) + 기존 2개 업데이트. baseline 574 → ≥577 달성. 현 Phase 5 dist 는 이미 580 pass 상태이므로 T1 재작성이 기존 T1 테스트를 교체하고 P0 구현 확장이 통과 테스트 수를 유지 또는 +1 한다.
+| Risk | Mitigation |
+|---|---|
+| reused 모드 테스트의 Case 3 재-derive가 mock 순서에 민감 | `sessionExists.mockReturnValue(true)` (전역) + short-circuit 믿고 `mockReturnValueOnce` 미사용. 모든 Case 3 필수 mock(`createWindow`, `getDefaultPaneId`, `getActiveWindowId`, `getCurrentSessionName`, `isInsideTmux`)을 명시적으로 stub. |
+| ENOENT silence가 실제 운영 환경의 "잘못된 경로 구성" 디버그를 방해 | 운영 환경에서 project dir이 ENOENT인 경우는 "claude 미실행" 상태와 동일하므로 silence가 맞다. 잘못된 경로 구성이면 `pinnedPath` 존재 여부 체크가 선행되어 로그가 나오도록 보장됨 (기존 경로 유지). |
+| 기존 ENOENT warn을 assertion하는 테스트 존재 여부 미확인 | 구현 단계에서 `tests/runners/claude-usage.test.ts`를 우선 읽고 필요시 기존 케이스 expectation 업데이트. |
+| Case 3 `state.tmuxWindows.push(ctrlWindowId)` 는 기존 배열에 append — clear한 빈 배열에 append된 결과가 `['@new-ctrl']`이 되는지 확인 필요 | `src/commands/resume.ts:186` `state.tmuxWindows.push(ctrlWindowId)` 확인 완료. 빈 배열 + push = 길이 1. |
 
 ## Open Questions
 
-1. **stderr suppression 방식 A vs B** — 본 Design 은 환경 감지(B)를 권고하나, 구현자가 해당 테스트 파일을 열어봤을 때 spy(A) 가 더 국소적이라 판단되면 A 채택 허용. 단 A 는 **테스트 파일이 추가될 때마다 spy 를 까는 규율** 이 필요하다는 tech-debt 를 기록. `git diff --no-index` 경고도 동일 원칙으로 처리. 구현 commit message 에 최종 선택과 근거를 명시.
-2. **`tmuxOriginalWindow` 보존 여부** — P0 stale 브랜치에서 `tmuxOriginalWindow` 도 clear 해야 하는가? 현재 Case 3 reused 분기가 `getActiveWindowId` 로 overwrite 하므로 실질 영향 없음. Design 은 **미터치**. 구현 시 테스트에서 `tmuxOriginalWindow` 를 assert 하지 않음으로써 미래 변경 여지 남김.
-3. **P3 `설계+플랜` 표기 후보** — `"설계+플랜"` vs `"Spec+Plan"` vs `"설계·계획"` 등. 본 Design 은 task description 의 예시 표기(`설계+플랜`)를 그대로 채택. 팀 용어 컨벤션에 맞춰 후속 조정 가능.
-4. **T1 구현 세부 — `writeState` spy 시점 분리** — T1 이 "recursion 직전의 스냅샷" 을 assert 하려면 `writeState` spy 로 호출 인자를 capture 해야 한다. 그러나 Case 3 로 떨어진 뒤에도 `writeState` 가 추가로 호출되므로 "첫 호출 (stale 브랜치)" 인자만 단언한다. 구현자는 `vi.mocked(...).mock.calls[0]` 패턴 혹은 state.json 의 최종 상태가 Case 3 overwrite 된 상태임을 감안해 assert 전략을 선택.
+1. **Q1**: `tests/runners/claude-usage.test.ts`가 현재 ENOENT warn을 assertion하고 있는지 — 구현 단계에서 먼저 읽어 expectation 업데이트 여부를 확정한다. 만약 assertion이 이미 없다면 보강 테스트 2개만 추가; 있다면 업데이트 + 2개 추가.
+2. **Q2**: `git diff --no-index` usage block을 발생시키는 구체 테스트 파일/라인 — 본 revision에서는 건드리지 않기로 했으나 (§D3), follow-up PR 시점에 출처(`tests/git.test.ts` 추정)와 억제 전략(pipe stderr, 아니면 test-level spy)을 결정해야 한다. 본 revision 스코프 외.
+3. **Q3**: Phase 6 eval report의 stderr 섹션이 "known-benign noise" annotation을 지원할 헤더를 갖고 있는가. 현재는 raw stderr truncation뿐. 필요시 `scripts/harness-verify.sh` 개선안으로 별도 spec. 본 revision은 상류 억제로 우회.
 
 ## Implementation Plan
 
-- **Task 1 — P0 resume stale-pane fix (expanded)**
-  - Edit `src/commands/resume.ts` stale-branch: clear `tmuxControlPane` / `tmuxControlWindow` / `tmuxWindows` **and** `tmuxSession` (`''`) **and** `tmuxMode` (`'dedicated'`), `writeState(runDir, state)` 후 `releaseLock` + `return resumeCommand(...)`.
-  - Rewrite existing test `Case 2 stale pane (reused-mode) …` in `tests/commands/resume-cmd.test.ts`: reused 모드 활성화 (`tmuxMode: 'reused'`, `isInsideTmux: true`, `getCurrentSessionName: 'harness-test'`). `sessionExists.mockImplementation((name) => name === 'harness-test')`. Assert (a) state.json cleared + `tmuxSession === ''` (recursion 직전 스냅샷), (b) `createWindow` called, (c) `createSession` not called, (d) `releaseLock` called before recursion.
-
-- **Task 2 — P2 `## Open Questions` symmetric enforcement**
-  - Update `src/context/prompts/phase-1-light.md` skeleton: insert `## Open Questions` row between `## Design` and `## Implementation Plan`, add parallel 경고 문구.
-  - Update `src/phases/interactive.ts::validatePhaseArtifacts` (light + phase 1 branch): add `/^##\s+Open\s+Questions\s*$/m` regex guard alongside Implementation Plan.
-  - Update `src/resume.ts::completeInteractivePhaseFromFreshSentinel`: same regex guard.
-  - Add/strengthen tests in `tests/phases/interactive.test.ts` (missing Open Questions → reject) and `tests/resume-light.test.ts` (missing Open Questions → reject). Existing "accepts combined doc" fixtures updated to include the header for continued green.
-
-- **Task 3 — P3 flow-aware Phase 1 label**
-  - Update `src/ui.ts::phaseLabel` signature to `(phase, flow = 'full')`, branch Phase 1 label.
-  - Update `renderControlPanel` to pass `state.flow`; update `renderModelSelection` signature `(phasePresets, editablePhases?, flow = 'full')`; update `promptModelConfig` signature to accept and forward flow.
-  - Update `src/commands/inner.ts` to pass `state.flow` into `promptModelConfig`.
-  - Add test `tests/ui.test.ts`: `renderControlPanel` with `flow: 'light'` shows `설계+플랜`; with `flow: 'full'` shows `Spec 작성` (regression guard).
-  - Update existing `renderModelSelection — flow-aware row visibility` test to pass `'light'` and expect `설계+플랜`.
-
-- **Task 4 — stderr noise suppression (Gate 7 P3)**
-  - 먼저 `pnpm vitest run 2>&1 | grep -E "harness.claudeUsage|Not a git repository"` 로 발생 테스트 파일(들) 식별.
-  - 옵션 B (권고): `src/runners/claude-usage.ts::warn` 에 `if (process.env.VITEST === 'true') return;` 가드 추가. 생산 로그 영향 없음.
-  - `git diff --no-index` 경고: 호출 지점을 `src/git.ts` 또는 테스트에서 찾아, vitest 컨텍스트에서 `stdio` 로 stderr 를 ignore 하거나 try/catch 로 silent 처리. 생산 경로(실제 repo diff)의 stderr 는 보존.
-  - 회귀 방지용 명시적 테스트는 불요 (eval 리포트 수동 확인으로 충분). 구현자가 원하면 `tests/runners/claude-usage.test.ts` 에 `VITEST` env 감지 시 warn 미호출 단언 1건 추가 가능.
-
-- **Task 5 — Verification**
-  - Run `pnpm tsc --noEmit` — 0 errors.
-  - Run `pnpm vitest run` — ≥577 passed / 1 skipped. stderr 에 `[harness.claudeUsage]` / `Not a git repository` 라인 0건.
-  - Run `pnpm build` — dist 생성, copy-assets가 변경된 `phase-1-light.md`를 복사 확인.
-
-- **Task 6 — Commit**
-  - Atomic commit `fix(light-flow): resume stale-pane loop + Open Questions enforcement + Phase 1 label + test stderr suppression` (또는 분할 commit — light-flow vs stderr suppression 두 commit 으로 쪼갤지 구현 시점에 판단).
-  - Body: dogfood observation 참조 (`6812980`, `34a3d3d`, `4a0f0a5`) + Gate 7 feedback 참조 (`.harness/2026-04-18-fix-three-light-flow/gate-7-feedback.md`).
+- **Task 1 — Extend P0 resume stale-branch clear**: `src/commands/resume.ts:127-143`의 else 브랜치에서 recursion 직전 `state.tmuxSession = ''`와 `state.tmuxMode = 'dedicated'`를 추가. 주석도 "reused-mode infinite-loop fix" → "re-derive session + mode in Case 3"으로 업데이트. (Diff-aware: 기존 3필드 clear 블록에 2줄 추가 + 주석 수정.)
+- **Task 2 — Rewrite reused-mode regression test**: `tests/commands/resume-cmd.test.ts`의 `Case 2 stale pane (reused-mode): clears tmuxControlPane/Window/Windows ...` (203–244행) 삭제 후, §S2 설계대로 `Case 2 stale pane (reused-mode): outer session stays alive, recursion creates new control window` 신설. `sessionExists` 전역 true, `isInsideTmux=true`, `getCurrentSessionName='harness-reused'`, `createWindow='@new-ctrl'` mock. Assertion: `killWindow` 호출, `createWindow` 호출, `createSession` 미호출, state.json 최종값(reused 재-derive) 확인, `releaseLock` 호출.
+- **Task 3 — Silence ENOENT in claudeUsage**: `src/runners/claude-usage.ts:97-104`의 readdirSync catch에서 `err.code === 'ENOENT'`일 때 warn 생략. 주석으로 근거 명시 (test tmpdir 기본 상태).
+- **Task 4 — ClaudeUsage ENOENT / non-ENOENT 테스트**: `tests/runners/claude-usage.test.ts`에 ENOENT silent case와 non-ENOENT warn case 두 개 추가 (또는 기존 ENOENT 케이스의 expectation을 "no warn"으로 업데이트하고 non-ENOENT 케이스 신설). stderr capture 방법은 기존 테스트 패턴 답습.
+- **Task 5 — Full verification**: `pnpm tsc --noEmit`, `pnpm vitest run`, `pnpm build` 3개 통과 확인. 테스트 baseline `≥577 passed / 1 skipped` 달성 확인 (현실적 예상: 581 passed).
+- **Task 6 — 커밋**: conventional message `fix(light-flow): reused-mode recursion + claude-usage ENOENT silence (gate-7 revision)` 또는 유사. Co-authored-by 금지.
 
 ## Eval Checklist Summary
 
-`.harness/2026-04-18-fix-three-light-flow/checklist.json`에 3개 체크 등록:
+세 개의 기본 검증 명령(`checklist.json`에 저장):
 
-| Name | Command | Purpose |
+| Check | Command | 목적 |
 |---|---|---|
-| `typecheck` | `pnpm tsc --noEmit` | 타입 회귀 방지. `phaseLabel`/`promptModelConfig`/`renderModelSelection` signature 변경 후 caller 들이 컴파일되는지 보증. |
-| `tests` | `pnpm vitest run` | 전체 suite green + 신규/보강 테스트 통과. baseline 574 → ≥577 passed / 1 skipped. **추가로 구현자는 stderr 에 `[harness.claudeUsage]` / `Not a git repository` 라인이 없음을 육안/grep 으로 확인** (Gate 7 P3). |
-| `build` | `pnpm build` | `scripts/copy-assets.mjs` 가 수정된 `phase-1-light.md` 를 dist 에 복사하고 전체 산출물이 빌드되는지 확인. |
+| typecheck | `pnpm tsc --noEmit` | 타입 오류 0 |
+| tests | `pnpm vitest run` | 전체 suite 통과 + `≥577 passed / 1 skipped` |
+| build | `pnpm build` | `dist/` 산출물 + assets copy 성공 |
 
-각 커맨드는 격리된 셸에서 실행 가능하며 의존성은 모두 `pnpm` env-aware 래퍼로 해소된다. Stderr cleanliness 는 체크리스트에 자동 검증 항목으로 넣지 않는다 (사후 grep 으로 확인) — 단, `pnpm vitest run` 이 exit 0 이어야 하므로 suppression 이 test 자체를 깨뜨리지 않음은 보장된다.
+실제 JSON은 `.harness/2026-04-18-fix-three-light-flow/checklist.json` 참조.

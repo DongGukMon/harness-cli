@@ -82,6 +82,38 @@ Effective cost ≈ $0.60–1.20 depending on pricing (vs ~$20+ if 8.7M were all 
 - [x] **#12 `phase_end.claudeTokens`**: Present on every interactive `phase_end` event (P1 × 3, P5 × 4). Values include `input / output / cacheRead / cacheCreate / total`. Absent on P6 events (script phase, no Claude) and absent on `gate_verdict` (Codex uses its own `tokensTotal` field).
 - [x] **#13 Codex HOME isolation (scope-rules mitigation via REVIEWER_CONTRACT)**: Reviewer did not drag personal `.codex/AGENTS.md` conventions into the review. Findings were consistently scoped to spec/diff/eval contents.
 
+## Round 2 (meta-fix run) — additional observations
+
+### [P1-NEW] P1 artifact validator mtime check rejects reopen runs that legitimately leave checklist unchanged
+
+**Reproduction**: Round 2 meta-fix run. After Gate 7 REJECT #0, Claude correctly rewrote `docs/specs/<runId>-design.md` + `.harness/<runId>/decisions.md` with gate-7 feedback incorporated. Claude correctly did NOT modify `.harness/<runId>/checklist.json` (tsc/vitest/build unchanged — nothing to adjust). Sentinel `phase-1.done` written with the correct reopen attemptId. BUT `validatePhaseArtifacts` rejected the phase because `checklist.json` mtime (1776522969359) < `phaseOpenedAt[1]` (1776523577000). Run `session_end: interrupted`. totalWallMs=25m 34s wasted.
+
+**Root cause**: `src/phases/interactive.ts:112` treats "mtime < phaseOpenedAt" as staleness indicator. Originally meant to detect carried-over artifacts from a prior run/phase. On REOPEN, if an artifact legitimately doesn't need revision (checklist is a common example — eval commands are rev-invariant), the validator falsely marks the phase failed.
+
+**Impact**: Any P7 REJECT that doesn't require checklist changes (vast majority) triggers this failure on P1 reopen. This compounds with [P0] because the resulting interrupt then triggers the resume loop.
+
+**Fix options**:
+1. **Relax to "artifact exists + non-empty"** for reopens. Drop mtime check for reopen scenarios (detectable via `phaseReopenFlags`). Non-reopen checks stay strict.
+2. **Require at least ONE of the artifacts to be fresh** rather than all. Weaker invariant but more permissive.
+3. **Harness touches all listed artifacts right after writing phase-N-init-prompt.md** to ensure their mtimes are ≥ phaseOpenedAt. Risk: defeats the original intent.
+4. **Document for Claude**: init prompt adds "touch checklist.json even if unchanged" instruction. Fragile.
+
+Recommend **option 1**: reopen + no-change is a first-class scenario. The sentinel check already validates Claude actually ran.
+
+**Files**: `src/phases/interactive.ts:94-146` (validatePhaseArtifacts Phase 1/3 branch), `src/resume.ts::completeInteractivePhaseFromFreshSentinel`. Must be symmetric (ADR-13).
+
+### [P0-FOLLOWUP] Original P0 resume-loop fix in commit 55c16ec is incomplete — Claude Gate-7-rev1 diagnosis self-corrects
+
+**Finding** (from Claude's Phase 1 rev1 design doc, triggered by Gate 7 P1 test-rigor comment): clearing only `tmuxControlPane` / `tmuxControlWindow` / `tmuxWindows` is insufficient for the reused-mode infinite loop. Reasoning:
+
+> reused 모드에서 사용자 세션이 계속 살아 있으면 recursive call에서도 `tmuxAlive === true` → Case 2 재진입 → `tmuxControlPane === ''` → 다시 stale 브랜치 → 무한 루프가 그대로 재현된다.
+
+Correct fix must also clear `state.tmuxSession = ''` and reset `state.tmuxMode = 'dedicated'` so the recursive call sees `sessionExists('') === false` → falls through to Case 3. Case 3 then re-evaluates `isInsideTmux()` and recomputes the correct mode (`reused` if still inside tmux).
+
+**Value of this observation**: Codex's REJECT on test rigor ("the test doesn't exercise reused-mode-still-alive path") led Claude to realize the test was written to match the incomplete fix, not the intended bug scenario. Classic example of test fidelity exposing an implementation gap.
+
+The final PR (whenever this meta-fix run approves) will include the corrected fix from rev1 design, not the 55c16ec partial fix. Observations.md text on [P0] stands, but PR patch scope is larger than originally recorded.
+
 ## New observations
 
 ### [P0] Resume after interrupted run hangs silently in reused-tmux mode (likely infinite recursion per static analysis)
