@@ -9,8 +9,8 @@ export interface ModelPreset {
 }
 
 export const MODEL_PRESETS: ModelPreset[] = [
-  { id: 'opus-max',     label: 'Claude Opus 4.6 / max',    runner: 'claude', model: 'claude-opus-4-6',   effort: 'max' },
-  { id: 'opus-high',    label: 'Claude Opus 4.6 / high',   runner: 'claude', model: 'claude-opus-4-6',   effort: 'high' },
+  { id: 'opus-max',     label: 'Claude Opus 4.7 / xHigh',  runner: 'claude', model: 'claude-opus-4-7',   effort: 'xHigh' },
+  { id: 'opus-high',    label: 'Claude Opus 4.7 / high',   runner: 'claude', model: 'claude-opus-4-7',   effort: 'high' },
   { id: 'sonnet-high',  label: 'Claude Sonnet 4.6 / high', runner: 'claude', model: 'claude-sonnet-4-6', effort: 'high' },
   { id: 'codex-high',   label: 'Codex / high',             runner: 'codex',  model: 'gpt-5.4',           effort: 'high' },
   { id: 'codex-medium', label: 'Codex / medium',           runner: 'codex',  model: 'gpt-5.4',           effort: 'medium' },

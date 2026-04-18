@@ -612,6 +612,6 @@ describe('runInteractivePhase — advisor reminder fires before sendKeysToPane',
 
     expect(command).toContain('--dangerously-skip-permissions');
     expect(command).toContain('--effort');
-    expect(command).toContain('max');
+    expect(command).toContain('xHigh');
   });
 });
