@@ -82,7 +82,34 @@ Effective cost ≈ $0.60–1.20 depending on pricing (vs ~$20+ if 8.7M were all 
 - [x] **#12 `phase_end.claudeTokens`**: Present on every interactive `phase_end` event (P1 × 3, P5 × 4). Values include `input / output / cacheRead / cacheCreate / total`. Absent on P6 events (script phase, no Claude) and absent on `gate_verdict` (Codex uses its own `tokensTotal` field).
 - [x] **#13 Codex HOME isolation (scope-rules mitigation via REVIEWER_CONTRACT)**: Reviewer did not drag personal `.codex/AGENTS.md` conventions into the review. Findings were consistently scoped to spec/diff/eval contents.
 
-## Round 2 (meta-fix run) — additional observations
+## Round 2 (meta-fix run) — summary
+
+Goal: use `hc-light start --light` (current dogfood-light dist) to fix the 3 bugs found in Round 1 + observe harness behavior on a second task shape (bug-fix vs greenfield).
+
+Prompt: see commit history — self-documenting task prompt pinning the three fixes with file/line refs.
+
+**Result: APPROVE on P7 retry #1** (vs Round 1's 3/3 ceiling).
+
+**Timing**: harness-reported `session_end.totalWallMs = 2,371,676 ms ≈ 39m 32s`. Breakdown:
+
+| Iter | Phase | Wall | Preset | Claude output tokens | Notes |
+|---|---|---|---|---|---|
+| 1 | P1 (design+plan) | 5m 27s | opus-max xHigh | 42,385 | Open Questions section produced proactively (Claude recognized self-referential task) |
+| 1 | P5 (impl) | 8m 4s | sonnet-high | 79,839 | Implemented 55c16ec — partial P0 fix |
+| 1 | P6 verify | 8.7s | script | — | tsc + vitest + build all pass |
+| 1 | P7 gate #0 | 1m 28s | codex-high | — (49k tokensTotal) | REJECT — test didn't exercise reused-mode path |
+| 2 | P1 reopen #1 | 9m 44s | opus-max xHigh | 79,702 | **FAILED — [P1-NEW] checklist.json mtime freshness bug** (observation below) |
+| — | manual recovery | ~3 min | — | — | touch checklist, clear stale tmux refs in state.json, new tmux session, resume |
+| 2' | P1 reopen #2 (resumed) | 6m 28s | opus-max xHigh | 86,598 | Re-did spec rev (leveraging prior doc) — 20f11e8 + c794e15 |
+| 2' | P5 reopen | 2m 43s | sonnet-high | 26,779 | 560c142 — full fix including `tmuxSession = ''` + claudeUsage VITEST guard |
+| 2' | P6 verify | 8.3s | script | — | all green |
+| 2' | P7 gate #1 | 1m 12s | codex-high | — (49k) | **APPROVE** (promptBytes=92175) |
+
+**Aggregate**: Claude output = 315k tokens (across P1 × 3 + P5 × 2). Codex gates = 98k. Total walls including recovery: ≈ 42 min. Above the 40-min realistic threshold but under the 45-min hard limit.
+
+**Full-flow comparison** (still unmeasured): Round 2's harness-wall of 39m 32s is within range of full flow's baseline. The light/full delta narrows significantly once retries kick in.
+
+## Round 2 — additional observations
 
 ### [P1-NEW] P1 artifact validator mtime check rejects reopen runs that legitimately leave checklist unchanged
 
