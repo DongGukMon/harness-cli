@@ -34,6 +34,7 @@ function makeState(): HarnessState {
     tmuxControlWindow: '', tmuxWorkspacePane: '', tmuxControlPane: '',
     loggingEnabled: false,
     phaseReopenSource: { '1': null, '3': null, '5': null },
+    codexNoIsolate: false,
   };
 }
 

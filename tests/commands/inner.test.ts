@@ -258,6 +258,7 @@ describe('bootstrapSessionLogger', () => {
       tmuxSession: '', tmuxMode: 'dedicated', tmuxWindows: [],
       tmuxControlWindow: '', tmuxWorkspacePane: '', tmuxControlPane: '',
       loggingEnabled: true,
+      codexNoIsolate: false,
     };
     return { ...base, ...overrides };
   }
@@ -338,6 +339,7 @@ describe('buildConfigCancelHandler — lazy bootstrap', () => {
       tmuxSession: '', tmuxMode: 'dedicated', tmuxWindows: [],
       tmuxControlWindow: '', tmuxWorkspacePane: '', tmuxControlPane: '',
       loggingEnabled: true,
+      codexNoIsolate: false,
     };
     return { ...base, ...overrides };
   }
@@ -439,5 +441,149 @@ describe('buildConfigCancelHandler — lazy bootstrap', () => {
     expect(meta.resumedAt.length).toBeGreaterThan(0);
 
     fs.rmSync(harnessDir, { recursive: true, force: true });
+  });
+
+  it('fresh start persists meta.codexHome=<runDir>/codex-home (BUG-C Issue #13)', () => {
+    const harnessDir = tempHarnessDir();
+    const sessionsRoot = path.join(harnessDir, 'sessions');
+    const runDir = path.join(harnessDir, 'runs', 'cc-iso-1');
+    fs.mkdirSync(runDir, { recursive: true });
+
+    const logger = new FileSessionLogger('cc-iso-1', harnessDir, { sessionsRoot });
+    const state = buildState({ runId: 'cc-iso-1', codexNoIsolate: false });
+    const inputManager = { stop: vi.fn() } as any;
+
+    const handler = buildConfigCancelHandler({
+      state, runDir, harnessDir, runId: 'cc-iso-1', isResume: false, logger, inputManager,
+    });
+    try { handler(); } catch (e) { /* __EXIT_TRAP__ */ }
+
+    const repoKey = computeRepoKey(harnessDir);
+    const meta = JSON.parse(fs.readFileSync(path.join(sessionsRoot, repoKey, 'cc-iso-1', 'meta.json'), 'utf-8'));
+    expect(meta.codexHome).toBe(path.join(runDir, 'codex-home'));
+
+    fs.rmSync(harnessDir, { recursive: true, force: true });
+  });
+
+  it('codexNoIsolate=true: meta.codexHome is absent (no-isolate escape hatch)', () => {
+    const harnessDir = tempHarnessDir();
+    const sessionsRoot = path.join(harnessDir, 'sessions');
+    const runDir = path.join(harnessDir, 'runs', 'cc-iso-2');
+    fs.mkdirSync(runDir, { recursive: true });
+
+    const logger = new FileSessionLogger('cc-iso-2', harnessDir, { sessionsRoot });
+    const state = buildState({ runId: 'cc-iso-2', codexNoIsolate: true });
+    const inputManager = { stop: vi.fn() } as any;
+
+    const handler = buildConfigCancelHandler({
+      state, runDir, harnessDir, runId: 'cc-iso-2', isResume: false, logger, inputManager,
+    });
+    try { handler(); } catch (e) { /* __EXIT_TRAP__ */ }
+
+    const repoKey = computeRepoKey(harnessDir);
+    const meta = JSON.parse(fs.readFileSync(path.join(sessionsRoot, repoKey, 'cc-iso-2', 'meta.json'), 'utf-8'));
+    expect('codexHome' in meta).toBe(false);
+
+    fs.rmSync(harnessDir, { recursive: true, force: true });
+  });
+
+  it('resume branch preserves codexHome through lazy-bootstrap (regression guard for call site #5)', () => {
+    const harnessDir = tempHarnessDir();
+    const sessionsRoot = path.join(harnessDir, 'sessions');
+    const runDir = path.join(harnessDir, 'runs', 'cc-iso-3');
+    fs.mkdirSync(runDir, { recursive: true });
+
+    // Logger hasBootstrapped()=false but isResume=true → updateMeta lazy-creates meta
+    const logger = new FileSessionLogger('cc-iso-3', harnessDir, { sessionsRoot });
+    expect(logger.hasBootstrapped()).toBe(false);
+    const state = buildState({ runId: 'cc-iso-3', codexNoIsolate: false });
+    const inputManager = { stop: vi.fn() } as any;
+
+    const handler = buildConfigCancelHandler({
+      state, runDir, harnessDir, runId: 'cc-iso-3', isResume: true, logger, inputManager,
+    });
+    try { handler(); } catch (e) { /* __EXIT_TRAP__ */ }
+
+    const repoKey = computeRepoKey(harnessDir);
+    const meta = JSON.parse(fs.readFileSync(path.join(sessionsRoot, repoKey, 'cc-iso-3', 'meta.json'), 'utf-8'));
+    expect(meta.codexHome).toBe(path.join(runDir, 'codex-home'));
+    expect(meta.bootstrapOnResume).toBe(true);
+
+    fs.rmSync(harnessDir, { recursive: true, force: true });
+  });
+});
+
+describe('bootstrapSessionLogger — codexHome integration (Issue #13)', () => {
+  function tempHarnessDir(): string {
+    return fs.mkdtempSync(path.join(os.tmpdir(), 'boot-iso-'));
+  }
+  function buildState(overrides: Partial<HarnessState> = {}): HarnessState {
+    const base: HarnessState = {
+      runId: 'rx', flow: 'full', carryoverFeedback: null,
+      currentPhase: 1, status: 'in_progress', autoMode: false,
+      task: 'test task', baseCommit: '', implRetryBase: '', codexPath: null,
+      externalCommitsDetected: false,
+      artifacts: { spec: 's', plan: 'p', decisionLog: 'd', checklist: 'c', evalReport: 'e' },
+      phases: { '1': 'pending', '2': 'pending', '3': 'pending', '4': 'pending', '5': 'pending', '6': 'pending', '7': 'pending' },
+      gateRetries: { '2': 0, '4': 0, '7': 0 },
+      verifyRetries: 0,
+      pauseReason: null, specCommit: null, planCommit: null, implCommit: null,
+      evalCommit: null, verifiedAtHead: null, pausedAtHead: null, pendingAction: null,
+      phaseOpenedAt: { '1': null, '3': null, '5': null },
+      phaseAttemptId: { '1': null, '3': null, '5': null },
+      phasePresets: {}, phaseReopenFlags: { '1': false, '3': false, '5': false },
+      phaseReopenSource: { '1': null, '3': null, '5': null },
+      phaseCodexSessions: { '2': null, '4': null, '7': null },
+      lastWorkspacePid: null, lastWorkspacePidStartTime: null,
+      tmuxSession: '', tmuxMode: 'dedicated', tmuxWindows: [],
+      tmuxControlWindow: '', tmuxWorkspacePane: '', tmuxControlPane: '',
+      loggingEnabled: true,
+      codexNoIsolate: false,
+    };
+    return { ...base, ...overrides };
+  }
+
+  it('fresh start: meta.codexHome equals <harnessDir>/<runId>/codex-home', async () => {
+    const harnessDir = tempHarnessDir();
+    const sessionsRoot = path.join(harnessDir, 'sessions');
+    const state = buildState();
+    await bootstrapSessionLogger('rx1', harnessDir, state, false, { sessionsRoot });
+    const repoKey = computeRepoKey(harnessDir);
+    const meta = JSON.parse(fs.readFileSync(path.join(sessionsRoot, repoKey, 'rx1', 'meta.json'), 'utf-8'));
+    expect(meta.codexHome).toBe(path.join(harnessDir, 'rx1', 'codex-home'));
+  });
+
+  it('resume (meta missing → lazy-bootstrap): codexHome is persisted', async () => {
+    const harnessDir = tempHarnessDir();
+    const sessionsRoot = path.join(harnessDir, 'sessions');
+    const state = buildState();
+    // isResume=true on a run with no prior meta → updateMeta bootstraps it.
+    await bootstrapSessionLogger('rx2', harnessDir, state, true, { sessionsRoot });
+    const repoKey = computeRepoKey(harnessDir);
+    const meta = JSON.parse(fs.readFileSync(path.join(sessionsRoot, repoKey, 'rx2', 'meta.json'), 'utf-8'));
+    expect(meta.codexHome).toBe(path.join(harnessDir, 'rx2', 'codex-home'));
+    expect(meta.bootstrapOnResume).toBe(true);
+  });
+
+  it('idempotent re-entry (non-resume + meta exists): codexHome preserved', async () => {
+    const harnessDir = tempHarnessDir();
+    const sessionsRoot = path.join(harnessDir, 'sessions');
+    const state = buildState();
+    await bootstrapSessionLogger('rx3', harnessDir, state, false, { sessionsRoot });
+    // Second non-resume call → idempotent branch (L278 updateMeta)
+    await bootstrapSessionLogger('rx3', harnessDir, state, false, { sessionsRoot });
+    const repoKey = computeRepoKey(harnessDir);
+    const meta = JSON.parse(fs.readFileSync(path.join(sessionsRoot, repoKey, 'rx3', 'meta.json'), 'utf-8'));
+    expect(meta.codexHome).toBe(path.join(harnessDir, 'rx3', 'codex-home'));
+  });
+
+  it('codexNoIsolate=true: meta.codexHome absent on fresh start', async () => {
+    const harnessDir = tempHarnessDir();
+    const sessionsRoot = path.join(harnessDir, 'sessions');
+    const state = buildState({ codexNoIsolate: true });
+    await bootstrapSessionLogger('rx4', harnessDir, state, false, { sessionsRoot });
+    const repoKey = computeRepoKey(harnessDir);
+    const meta = JSON.parse(fs.readFileSync(path.join(sessionsRoot, repoKey, 'rx4', 'meta.json'), 'utf-8'));
+    expect('codexHome' in meta).toBe(false);
   });
 });

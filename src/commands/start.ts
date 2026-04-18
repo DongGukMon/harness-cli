@@ -17,6 +17,7 @@ export interface StartOptions {
   root?: string;
   enableLogging?: boolean;
   light?: boolean;
+  codexNoIsolate?: boolean;
 }
 
 export async function startCommand(task: string | undefined, options: StartOptions = {}): Promise<void> {
@@ -110,7 +111,16 @@ export async function startCommand(task: string | undefined, options: StartOptio
       options.auto ?? false,
       options.enableLogging ?? false,
       options.light ? 'light' : 'full',
+      options.codexNoIsolate ?? false,
     );
+
+    if (options.codexNoIsolate) {
+      // BUG-C risk surface: user explicitly bypassed isolation.
+      process.stderr.write(
+        '⚠️  CODEX_HOME isolation disabled. Codex subprocess may load personal ' +
+        'conventions from ~/.codex/AGENTS.md (BUG-C risk).\n',
+      );
+    }
 
     // 13. Save task.md (needed before Phase 1 spawn)
     try {

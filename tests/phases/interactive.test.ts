@@ -13,6 +13,19 @@ import type { HarnessState } from '../../src/types.js';
 
 // ─── Module mocks for runInteractivePhase ordering test ─────────────────────
 
+vi.mock('../../src/runners/codex.js', () => ({
+  runCodexInteractive: vi.fn(async () => ({ status: 'completed', exitCode: 0 })),
+}));
+vi.mock('../../src/runners/codex-isolation.js', async () => {
+  const actual = await vi.importActual<typeof import('../../src/runners/codex-isolation.js')>(
+    '../../src/runners/codex-isolation.js',
+  );
+  return {
+    ...actual,
+    ensureCodexIsolation: vi.fn((runDir: string) => `${runDir}/codex-home`),
+  };
+});
+
 vi.mock('../../src/tmux.js', () => ({
   sendKeysToPane: vi.fn(),
   pollForPidFile: vi.fn().mockResolvedValue(12345),
@@ -633,5 +646,99 @@ describe('validatePhaseArtifacts — light + phase 1 extras (ADR-13)', () => {
     fs.writeFileSync(state.artifacts.decisionLog, '# D\n');
     fs.writeFileSync(state.artifacts.checklist, '{"checks":[]}');
     expect(validatePhaseArtifacts(1, state, tmp)).toBe(false);
+  });
+});
+
+// ─── runInteractivePhase — codex branch + CODEX_HOME isolation (Issue #13) ───
+
+describe('runInteractivePhase — codex-interactive branch invokes codex isolation', () => {
+  it('calls ensureCodexIsolation(runDir) and threads codexHomeFor(runDir) into runCodexInteractive (positive path)', async () => {
+    const { runInteractivePhase } = await import('../../src/phases/interactive.js');
+    const { runCodexInteractive } = await import('../../src/runners/codex.js');
+    const { ensureCodexIsolation } = await import('../../src/runners/codex-isolation.js');
+
+    const runDir = makeTmpDir();
+    const harnessDir = makeTmpDir();
+    const repoDir = createTestRepo();
+
+    const state = makeState({
+      tmuxSession: 'test-session',
+      tmuxWorkspacePane: '%1',
+      tmuxControlPane: '%0',
+      phasePresets: { ...createInitialState('r', 't', 'b', false).phasePresets, '1': 'codex-high' },
+      codexNoIsolate: false,
+    });
+
+    vi.mocked(ensureCodexIsolation).mockClear();
+    vi.mocked(runCodexInteractive).mockClear();
+
+    await runInteractivePhase(1, state, harnessDir, runDir, repoDir, 'attempt-1');
+
+    expect(vi.mocked(ensureCodexIsolation)).toHaveBeenCalledWith(runDir);
+    // runCodexInteractive signature: phase, state, preset, harnessDir, runDir, promptFile, cwd, codexHome
+    const call = vi.mocked(runCodexInteractive).mock.calls[0];
+    expect(call).toBeDefined();
+    expect(call[7]).toBe(`${runDir}/codex-home`);
+  });
+
+  it('codexNoIsolate=true: ensureCodexIsolation NOT called; runCodexInteractive receives codexHome=null', async () => {
+    const { runInteractivePhase } = await import('../../src/phases/interactive.js');
+    const { runCodexInteractive } = await import('../../src/runners/codex.js');
+    const { ensureCodexIsolation } = await import('../../src/runners/codex-isolation.js');
+
+    const runDir = makeTmpDir();
+    const harnessDir = makeTmpDir();
+    const repoDir = createTestRepo();
+
+    const state = makeState({
+      tmuxSession: 'test-session',
+      tmuxWorkspacePane: '%1',
+      tmuxControlPane: '%0',
+      phasePresets: { ...createInitialState('r', 't', 'b', false).phasePresets, '1': 'codex-high' },
+      codexNoIsolate: true,
+    });
+
+    vi.mocked(ensureCodexIsolation).mockClear();
+    vi.mocked(runCodexInteractive).mockClear();
+
+    await runInteractivePhase(1, state, harnessDir, runDir, repoDir, 'attempt-2');
+
+    expect(vi.mocked(ensureCodexIsolation)).not.toHaveBeenCalled();
+    const call = vi.mocked(runCodexInteractive).mock.calls[0];
+    expect(call[7]).toBeNull();
+  });
+
+  it('CodexIsolationError → phase fails with isolation error sidecar (no runner call)', async () => {
+    const { runInteractivePhase } = await import('../../src/phases/interactive.js');
+    const { runCodexInteractive } = await import('../../src/runners/codex.js');
+    const isolationMod = await import('../../src/runners/codex-isolation.js');
+    const { CodexIsolationError } = isolationMod;
+
+    const runDir = makeTmpDir();
+    const harnessDir = makeTmpDir();
+    const repoDir = createTestRepo();
+
+    const state = makeState({
+      tmuxSession: 'test-session',
+      tmuxWorkspacePane: '%1',
+      tmuxControlPane: '%0',
+      phasePresets: { ...createInitialState('r', 't', 'b', false).phasePresets, '1': 'codex-high' },
+      codexNoIsolate: false,
+    });
+
+    vi.mocked(runCodexInteractive).mockClear();
+    vi.mocked(isolationMod.ensureCodexIsolation).mockImplementationOnce(() => {
+      throw new CodexIsolationError('fake: auth.json missing');
+    });
+
+    const result = await runInteractivePhase(1, state, harnessDir, runDir, repoDir, 'attempt-3');
+
+    expect(result.status).toBe('failed');
+    // Runner NEVER called once bootstrap fails.
+    expect(vi.mocked(runCodexInteractive)).not.toHaveBeenCalled();
+    // Isolation failure captured as a sidecar for post-mortem debugging.
+    const errorSidecar = path.join(runDir, 'codex-1-error.md');
+    expect(fs.existsSync(errorSidecar)).toBe(true);
+    expect(fs.readFileSync(errorSidecar, 'utf-8')).toMatch(/fake.*auth\.json missing/);
   });
 });

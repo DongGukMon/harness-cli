@@ -11,7 +11,7 @@ export function computeRepoKey(harnessDir: string): string {
 export class NoopLogger implements SessionLogger {
   logEvent(_event: DistributiveOmit<LogEvent, 'v' | 'ts' | 'runId'>): void { /* no-op */ }
   writeMeta(_partial: Partial<SessionMeta> & { task: string }): void { /* no-op */ }
-  updateMeta(_update: { pushResumedAt?: number; task?: string }): void { /* no-op */ }
+  updateMeta(_update: { pushResumedAt?: number; task?: string; codexHome?: string }): void { /* no-op */ }
   finalizeSummary(_state: HarnessState): void { /* no-op */ }
   close(): void { /* no-op */ }
   hasBootstrapped(): boolean { return true; }
@@ -91,6 +91,7 @@ export class FileSessionLogger implements SessionLogger {
         harnessVersion: partial.harnessVersion ?? this.options.harnessVersion ?? '0.1.0',
         resumedAt: partial.resumedAt ?? [],
         ...(partial.bootstrapOnResume ? { bootstrapOnResume: true } : {}),
+        ...(partial.codexHome !== undefined ? { codexHome: partial.codexHome } : {}),
       };
       fs.writeFileSync(this.metaPath, JSON.stringify(meta, null, 2));
       this.bootstrapped = true;
@@ -101,7 +102,7 @@ export class FileSessionLogger implements SessionLogger {
     }
   }
 
-  updateMeta(update: { pushResumedAt?: number; task?: string }): void {
+  updateMeta(update: { pushResumedAt?: number; task?: string; codexHome?: string }): void {
     if (this.disabled) return;
     try {
       let meta: SessionMeta;
@@ -123,10 +124,12 @@ export class FileSessionLogger implements SessionLogger {
           harnessVersion: this.options.harnessVersion ?? '0.1.0',
           resumedAt: [],
           bootstrapOnResume: true,
+          ...(update.codexHome !== undefined ? { codexHome: update.codexHome } : {}),
         };
       }
       if (update.pushResumedAt !== undefined) meta.resumedAt = [...(meta.resumedAt ?? []), update.pushResumedAt];
       if (update.task !== undefined && !meta.task) meta.task = update.task;
+      if (update.codexHome !== undefined) meta.codexHome = update.codexHome;
       fs.writeFileSync(this.metaPath, JSON.stringify(meta, null, 2));
       this.bootstrapped = true;
       this.cachedStartedAt = meta.startedAt;

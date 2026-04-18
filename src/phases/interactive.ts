@@ -212,8 +212,32 @@ export async function runInteractivePhase(
     return { ...result, attemptId };
   } else {
     const { runCodexInteractive } = await import('../runners/codex.js');
+    const { ensureCodexIsolation, CodexIsolationError } =
+      await import('../runners/codex-isolation.js');
+
+    // Bootstrap per-run CODEX_HOME isolation unless user opted out.
+    // Failure → phase fails with a sidecar error; runner never spawns.
+    let codexHome: string | null = null;
+    if (!updatedState.codexNoIsolate) {
+      try {
+        codexHome = ensureCodexIsolation(runDir);
+      } catch (err) {
+        if (err instanceof CodexIsolationError) {
+          const errorPath = path.join(runDir, `codex-${phase}-error.md`);
+          try {
+            fs.writeFileSync(
+              errorPath,
+              `# Codex Phase ${phase} Error\n\nCODEX_HOME isolation bootstrap failed.\n\n${err.message}\n`,
+            );
+          } catch { /* best-effort */ }
+          return { status: 'failed', attemptId };
+        }
+        throw err;
+      }
+    }
+
     const result = await runCodexInteractive(
-      phase, updatedState, preset, harnessDir, runDir, promptFile, cwd,
+      phase, updatedState, preset, harnessDir, runDir, promptFile, cwd, codexHome,
     );
     if (result.status === 'failed') {
       return { status: 'failed', attemptId };

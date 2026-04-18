@@ -344,6 +344,51 @@ describe('FileSessionLogger.finalizeSummary', () => {
   });
 });
 
+describe('SessionMeta.codexHome integration (BUG-C isolation Issue #13)', () => {
+  it('writeMeta persists codexHome when provided', () => {
+    const harnessDir = makeTempHarnessDir();
+    const sessionsRoot = path.join(harnessDir, 'sessions-root');
+    const logger = new FileSessionLogger('run-iso-1', harnessDir, { sessionsRoot });
+    logger.writeMeta({ task: 't', codexHome: '/run/iso/codex-home' });
+    const repoKey = computeRepoKey(harnessDir);
+    const meta = JSON.parse(fs.readFileSync(path.join(sessionsRoot, repoKey, 'run-iso-1', 'meta.json'), 'utf-8'));
+    expect(meta.codexHome).toBe('/run/iso/codex-home');
+  });
+
+  it('writeMeta omits codexHome when undefined (no-isolate path)', () => {
+    const harnessDir = makeTempHarnessDir();
+    const sessionsRoot = path.join(harnessDir, 'sessions-root');
+    const logger = new FileSessionLogger('run-iso-2', harnessDir, { sessionsRoot });
+    logger.writeMeta({ task: 't' });
+    const repoKey = computeRepoKey(harnessDir);
+    const meta = JSON.parse(fs.readFileSync(path.join(sessionsRoot, repoKey, 'run-iso-2', 'meta.json'), 'utf-8'));
+    expect('codexHome' in meta).toBe(false);
+  });
+
+  it('updateMeta lazy-bootstrap (resume w/ missing meta.json) persists codexHome', () => {
+    const harnessDir = makeTempHarnessDir();
+    const sessionsRoot = path.join(harnessDir, 'sessions-root');
+    const logger = new FileSessionLogger('run-iso-3', harnessDir, { sessionsRoot });
+    logger.updateMeta({ pushResumedAt: Date.now(), task: 'recovered', codexHome: '/late/codex-home' });
+    const repoKey = computeRepoKey(harnessDir);
+    const meta = JSON.parse(fs.readFileSync(path.join(sessionsRoot, repoKey, 'run-iso-3', 'meta.json'), 'utf-8'));
+    expect(meta.codexHome).toBe('/late/codex-home');
+    expect(meta.bootstrapOnResume).toBe(true);
+  });
+
+  it('updateMeta merge branch (meta.json exists) writes codexHome', () => {
+    const harnessDir = makeTempHarnessDir();
+    const sessionsRoot = path.join(harnessDir, 'sessions-root');
+    const logger = new FileSessionLogger('run-iso-4', harnessDir, { sessionsRoot });
+    logger.writeMeta({ task: 'first' });
+    logger.updateMeta({ pushResumedAt: Date.now(), codexHome: '/merge/codex-home' });
+    const repoKey = computeRepoKey(harnessDir);
+    const meta = JSON.parse(fs.readFileSync(path.join(sessionsRoot, repoKey, 'run-iso-4', 'meta.json'), 'utf-8'));
+    expect(meta.codexHome).toBe('/merge/codex-home');
+    expect(meta.resumedAt.length).toBe(1);
+  });
+});
+
 describe('createSessionLogger factory', () => {
   it('returns NoopLogger when loggingEnabled=false', () => {
     const harnessDir = makeTempHarnessDir();

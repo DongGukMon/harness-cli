@@ -44,6 +44,20 @@ describe('phaseCodexSessions (spec §4.1 / §5)', () => {
     expect(migrated.phaseCodexSessions).toEqual({ '2': null, '4': null, '7': null });
   });
 
+  it('migrateState defaults codexNoIsolate=false when missing (BUG-C isolation)', () => {
+    const legacy = JSON.parse(JSON.stringify(makeState()));
+    delete legacy.codexNoIsolate;
+    const migrated = migrateState(legacy);
+    expect(migrated.codexNoIsolate).toBe(false);
+  });
+
+  it('migrateState preserves existing codexNoIsolate=true (user-opted escape hatch)', () => {
+    const legacy = JSON.parse(JSON.stringify(makeState()));
+    legacy.codexNoIsolate = true;
+    const migrated = migrateState(legacy);
+    expect(migrated.codexNoIsolate).toBe(true);
+  });
+
   it('migrateState discards malformed GateSessionInfo entries', () => {
     const base = makeState();
     (base as any).phaseCodexSessions = {

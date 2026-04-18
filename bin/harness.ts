@@ -23,7 +23,8 @@ program
   .option('--auto', 'autonomous mode (no user escalations)')
   .option('--enable-logging', 'enable session logging to ~/.harness/sessions')
   .option('--light', 'use the 4-phase light flow (P1 → P5 → P6 → P7)')
-  .action(async (task: string | undefined, opts: { requireClean?: boolean; auto?: boolean; enableLogging?: boolean; light?: boolean }) => {
+  .option('--codex-no-isolate', 'bypass CODEX_HOME isolation for codex subprocesses (not recommended)')
+  .action(async (task: string | undefined, opts: { requireClean?: boolean; auto?: boolean; enableLogging?: boolean; light?: boolean; codexNoIsolate?: boolean }) => {
     const globalOpts = program.opts();
     await startCommand(task, { ...opts, root: globalOpts.root });
   });
@@ -35,7 +36,8 @@ program
   .option('--auto', 'autonomous mode (no user escalations)')
   .option('--enable-logging', 'enable session logging to ~/.harness/sessions')
   .option('--light', 'use the 4-phase light flow (P1 → P5 → P6 → P7)')
-  .action(async (task: string | undefined, opts: { requireClean?: boolean; auto?: boolean; enableLogging?: boolean; light?: boolean }) => {
+  .option('--codex-no-isolate', 'bypass CODEX_HOME isolation for codex subprocesses (not recommended)')
+  .action(async (task: string | undefined, opts: { requireClean?: boolean; auto?: boolean; enableLogging?: boolean; light?: boolean; codexNoIsolate?: boolean }) => {
     const globalOpts = program.opts();
     await startCommand(task, { ...opts, root: globalOpts.root });
   });

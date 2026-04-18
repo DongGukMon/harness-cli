@@ -13,6 +13,7 @@ import { InputManager } from '../input.js';
 import { runRunnerAwarePreflight } from '../preflight.js';
 import { REQUIRED_PHASE_KEYS, getEffectiveReopenTarget, getRequiredPhaseKeys } from '../config.js';
 import { createSessionLogger } from '../logger.js';
+import { codexHomeFor } from '../runners/codex-isolation.js';
 import type { SessionLogger, HarnessState } from '../types.js';
 
 export interface InnerOptions {
@@ -243,13 +244,15 @@ export function buildConfigCancelHandler(args: ConfigCancelHandlerArgs): () => v
     };
     writeState(runDir, state);
 
+    const codexHome = state.codexNoIsolate ? undefined : codexHomeFor(runDir);
+
     // Lazy bootstrap session open event if not yet emitted
     if (!logger.hasEmittedSessionOpen()) {
       if (isResume) {
-        logger.updateMeta({ pushResumedAt: Date.now(), task: state.task });
+        logger.updateMeta({ pushResumedAt: Date.now(), task: state.task, codexHome });
         logger.logEvent({ event: 'session_resumed', fromPhase: state.currentPhase, stateStatus: 'paused' });
       } else {
-        logger.writeMeta({ task: state.task });
+        logger.writeMeta({ task: state.task, codexHome });
         logger.logEvent({ event: 'session_start', task: state.task, autoMode: state.autoMode, baseCommit: state.baseCommit, harnessVersion: '0.1.0' });
       }
     }
@@ -276,15 +279,17 @@ export async function bootstrapSessionLogger(
     baseCommit: state.baseCommit,
     sessionsRoot: options.sessionsRoot,
   });
+  const runDir = join(harnessDir, runId);
+  const codexHome = state.codexNoIsolate ? undefined : codexHomeFor(runDir);
   if (isResume) {
-    logger.updateMeta({ pushResumedAt: Date.now(), task: state.task });
+    logger.updateMeta({ pushResumedAt: Date.now(), task: state.task, codexHome });
     logger.logEvent({ event: 'session_resumed', fromPhase: state.currentPhase, stateStatus: state.status });
   } else if (logger.hasBootstrapped()) {
     // Idempotent case: meta.json already exists on disk (e.g., crash re-entry)
-    logger.updateMeta({ pushResumedAt: Date.now() });
+    logger.updateMeta({ pushResumedAt: Date.now(), codexHome });
     logger.logEvent({ event: 'session_resumed', fromPhase: state.currentPhase, stateStatus: state.status });
   } else {
-    logger.writeMeta({ task: state.task });
+    logger.writeMeta({ task: state.task, codexHome });
     logger.logEvent({ event: 'session_start', task: state.task, autoMode: state.autoMode, baseCommit: state.baseCommit, harnessVersion: '0.1.0' });
   }
   return logger;
