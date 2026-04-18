@@ -91,4 +91,20 @@ describe('jumpCommand', () => {
 
     expect(stderrSpy.mock.calls.map((c: any) => c[0]).join('')).toContain('phase 3');
   });
+
+  it('rejects jumping to a phase whose current status is "skipped"', async () => {
+    const harnessDir = join(repo.path, '.harness');
+    const runId = '2026-04-12-test';
+    const runDir = join(harnessDir, runId);
+    mkdirSync(runDir, { recursive: true });
+    const baseCommit = execSync('git rev-parse HEAD', { cwd: repo.path, encoding: 'utf-8' }).trim();
+    const state = createInitialState(runId, 'task', baseCommit, false, false, 'light');
+    state.currentPhase = 5;
+    writeState(runDir, state);
+    setCurrentRun(harnessDir, runId);
+
+    await expect(jumpCommand('2', { root: repo.path })).rejects.toThrow(/__exit__:1/);
+    const msgs = stderrSpy.mock.calls.map((c: any) => c[0]).join('');
+    expect(msgs).toMatch(/phase 2 is 'skipped'|cannot jump to a skipped phase/i);
+  });
 });

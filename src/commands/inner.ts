@@ -297,9 +297,11 @@ function consumePendingAction(runDir: string, state: HarnessState): void {
       state.phases[String(state.currentPhase)] = 'completed';
       state.currentPhase = state.currentPhase + 1;
     } else if (action.action === 'jump' && typeof action.phase === 'number') {
-      // Reset phases >= target and set currentPhase
+      // Reset phases >= target and set currentPhase. Preserve 'skipped'
+      // (light flow only) so P2/P3/P4 do not resurrect as 'pending'.
       for (let m = action.phase; m <= 7; m++) {
-        state.phases[String(m)] = 'pending';
+        const cur = state.phases[String(m)];
+        state.phases[String(m)] = cur === 'skipped' ? 'skipped' : 'pending';
       }
       state.currentPhase = action.phase;
       state.pendingAction = null;

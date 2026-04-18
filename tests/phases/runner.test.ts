@@ -119,6 +119,18 @@ function makeState(overrides: Partial<HarnessState> = {}): HarnessState {
   return { ...base, ...overrides };
 }
 
+function makeLightState(overrides: Partial<HarnessState> = {}): HarnessState {
+  const base = createInitialState(
+    'test-run',
+    '/tasks/test.md',
+    'base-sha',
+    false,
+    false,
+    'light',
+  );
+  return { ...base, ...overrides };
+}
+
 const HDIR = '/tmp/harness-dir';
 const CWD = '/tmp/cwd';
 
@@ -1680,5 +1692,141 @@ describe('handleVerifyFail — phaseReopenSource tracking', () => {
 
     await handleVerifyFail(feedbackPath, state, runDir, cwd, createNoOpInputManager(), new NoopLogger());
     expect(state.phaseReopenSource['5']).toBe(6);
+  });
+});
+
+describe('light flow — runPhaseLoop (spec §4 + ADR-1/ADR-4/ADR-14)', () => {
+  beforeEach(() => {
+    vi.mocked(runInteractivePhase).mockReset();
+    vi.mocked(runGatePhase).mockReset();
+    vi.mocked(runVerifyPhase).mockReset();
+  });
+
+  it('skips phases 2/3/4 and advances from phase 1 directly to phase 5', async () => {
+    const runDir = makeTmpDir();
+    const state = makeLightState({ currentPhase: 1 });
+    const logger = new NoopLogger();
+
+    vi.mocked(runInteractivePhase).mockImplementationOnce(async (_p: any, st: any, _h: any, _r: any, _c: any, aid: any) => {
+      st.phases['1'] = 'completed';
+      return { status: 'completed', attemptId: aid } as any;
+    });
+    vi.mocked(runInteractivePhase).mockImplementationOnce(async (_p: any, st: any, _h: any, _r: any, _c: any, aid: any) => {
+      st.phases['5'] = 'completed';
+      st.implCommit = 'impl';
+      return { status: 'completed', attemptId: aid } as any;
+    });
+    vi.mocked(runVerifyPhase).mockResolvedValueOnce({ type: 'pass' } as any);
+    vi.mocked(runGatePhase).mockResolvedValueOnce({
+      type: 'verdict', verdict: 'APPROVE', comments: '', rawOutput: '',
+      runner: 'codex', durationMs: 1, tokensTotal: 0, promptBytes: 0,
+      codexSessionId: 'x', recoveredFromSidecar: false,
+      resumedFrom: null, resumeFallback: false,
+    } as any);
+
+    await runPhaseLoop(state, HDIR, runDir, CWD, createNoOpInputManager(), logger, { value: false });
+
+    expect(state.phases['2']).toBe('skipped');
+    expect(state.phases['3']).toBe('skipped');
+    expect(state.phases['4']).toBe('skipped');
+    expect(state.status).toBe('completed');
+    // handleInteractivePhase must have been invoked for 1 and 5 only
+    const invokedPhases = vi.mocked(runInteractivePhase).mock.calls.map((c: any) => c[0]);
+    expect(invokedPhases).toEqual([1, 5]);
+  });
+
+  it('Gate-7 REJECT on light reopens phase 1 and sets carryoverFeedback', async () => {
+    const runDir = makeTmpDir();
+    const state = makeLightState({
+      currentPhase: 7,
+      phases: { '1': 'completed', '2': 'skipped', '3': 'skipped', '4': 'skipped',
+                '5': 'completed', '6': 'completed', '7': 'pending' },
+    });
+    const logger = new NoopLogger();
+
+    vi.mocked(runGatePhase).mockResolvedValueOnce({
+      type: 'verdict', verdict: 'REJECT', comments: 'design needs rework', rawOutput: '',
+      runner: 'codex', durationMs: 1, tokensTotal: 0, promptBytes: 0,
+      codexSessionId: 'x', recoveredFromSidecar: false,
+      resumedFrom: null, resumeFallback: false,
+    } as any);
+
+    await handleGatePhase(7, state, HDIR, runDir, CWD, createNoOpInputManager(), logger, { value: false });
+
+    expect(state.currentPhase).toBe(1);
+    expect(state.phases['1']).toBe('pending');
+    expect(state.phases['5']).toBe('pending');
+    expect(state.phases['6']).toBe('pending');
+    expect(state.phaseReopenFlags['1']).toBe(true);
+    expect(state.carryoverFeedback).not.toBeNull();
+    expect(state.carryoverFeedback?.deliverToPhase).toBe(5);
+    expect(state.carryoverFeedback?.sourceGate).toBe(7);
+  });
+
+  it('Gate-7 REJECT on full still reopens phase 5 (unchanged)', async () => {
+    const runDir = makeTmpDir();
+    const state = makeState({ currentPhase: 7 });
+    const logger = new NoopLogger();
+
+    vi.mocked(runGatePhase).mockResolvedValueOnce({
+      type: 'verdict', verdict: 'REJECT', comments: 'impl off-spec', rawOutput: '',
+      runner: 'codex', durationMs: 1, tokensTotal: 0, promptBytes: 0,
+      codexSessionId: 'x', recoveredFromSidecar: false,
+      resumedFrom: null, resumeFallback: false,
+    } as any);
+
+    await handleGatePhase(7, state, HDIR, runDir, CWD, createNoOpInputManager(), logger, { value: false });
+
+    expect(state.currentPhase).toBe(5);
+    expect(state.phases['5']).toBe('pending');
+    expect(state.carryoverFeedback).toBeNull();
+  });
+
+  it('Phase 5 completion clears carryoverFeedback', async () => {
+    const runDir = makeTmpDir();
+    const state = makeLightState({
+      currentPhase: 5,
+      carryoverFeedback: { sourceGate: 7, paths: ['f'], deliverToPhase: 5 },
+    });
+    const logger = new NoopLogger();
+
+    vi.mocked(runInteractivePhase).mockImplementationOnce(async (_p: any, st: any, _h: any, _r: any, _c: any, aid: any) => {
+      st.phases['5'] = 'completed';
+      st.implCommit = 'impl';
+      return { status: 'completed', attemptId: aid } as any;
+    });
+
+    await handleInteractivePhase(5, state, HDIR, runDir, CWD, logger);
+
+    expect(state.carryoverFeedback).toBeNull();
+    expect(state.currentPhase).toBe(6);
+  });
+
+  it('Gate-7 REJECT on light also clears phaseCodexSessions[7] + replay sidecars', async () => {
+    const runDir = makeTmpDir();
+    const state = makeLightState({
+      currentPhase: 7,
+      phases: { '1': 'completed', '2': 'skipped', '3': 'skipped', '4': 'skipped',
+                '5': 'completed', '6': 'completed', '7': 'pending' },
+    });
+    state.phaseCodexSessions['7'] = {
+      sessionId: 'stale-7', runner: 'codex', model: 'gpt-5.4', effort: 'high',
+      lastOutcome: 'reject',
+    };
+    fs.writeFileSync(path.join(runDir, 'gate-7-raw.txt'), 'stale');
+    fs.writeFileSync(path.join(runDir, 'gate-7-result.json'), '{}');
+
+    vi.mocked(runGatePhase).mockResolvedValueOnce({
+      type: 'verdict', verdict: 'REJECT', comments: 'rework', rawOutput: '',
+      runner: 'codex', durationMs: 1, tokensTotal: 0, promptBytes: 0,
+      codexSessionId: 'x', recoveredFromSidecar: false,
+      resumedFrom: null, resumeFallback: false,
+    } as any);
+
+    await handleGatePhase(7, state, HDIR, runDir, CWD, createNoOpInputManager(), new NoopLogger(), { value: false });
+
+    expect(state.phaseCodexSessions['7']).toBeNull();
+    expect(fs.existsSync(path.join(runDir, 'gate-7-raw.txt'))).toBe(false);
+    expect(fs.existsSync(path.join(runDir, 'gate-7-result.json'))).toBe(false);
   });
 });
