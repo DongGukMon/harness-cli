@@ -136,6 +136,75 @@ describe('inner.ts: consumePendingAction behavior', () => {
     const raw = JSON.parse(fs.readFileSync(path.join(runDir, 'state.json'), 'utf-8'));
     expect(raw.currentPhase).toBe(3);
   });
+
+  // §4.8 authoritative wiring (EC-16a) — part 1: source-level regression guard.
+  // If someone removes the `invalidatePhaseSessionsOnPresetChange(...)` call from
+  // `inner.ts` (or severs the prev-presets snapshot before `promptModelConfig`),
+  // this test fails — independent of the helper's own unit tests. This catches
+  // the "helper works but inner.ts no longer calls it" class of regression that
+  // helper-level replay tests miss.
+  it('§4.8 src/commands/inner.ts wires promptModelConfig → invalidatePhaseSessionsOnPresetChange in sequence', () => {
+    const srcPath = path.resolve(__dirname, '../../src/commands/inner.ts');
+    const src = fs.readFileSync(srcPath, 'utf-8');
+
+    // Must import the helper
+    expect(src).toMatch(/invalidatePhaseSessionsOnPresetChange.*from ['"]\.\.\/state\.js['"]/);
+
+    // Must snapshot prev, call promptModelConfig, then invalidate — in that order.
+    const snapIdx = src.search(/const prevPresets\s*=\s*\{\s*\.\.\.state\.phasePresets\s*\}/);
+    const promptIdx = src.search(/state\.phasePresets\s*=\s*await\s+promptModelConfig\(/);
+    const invalidateIdx = src.search(/invalidatePhaseSessionsOnPresetChange\(state,\s*prevPresets,/);
+    expect(snapIdx).toBeGreaterThan(-1);
+    expect(promptIdx).toBeGreaterThan(snapIdx);
+    expect(invalidateIdx).toBeGreaterThan(promptIdx);
+  });
+
+  // §4.8 authoritative wiring (EC-16a) — part 2: behavioral test that replays
+  // the exact three-line sequence from inner.ts and asserts the invalidation
+  // contract end-to-end (session nulled, sidecars deleted, feedback preserved).
+  it('§4.8 preset change via promptModelConfig nulls changed phase, deletes replay sidecars, preserves feedback', async () => {
+    const { invalidatePhaseSessionsOnPresetChange } = await import('../../src/state.js');
+
+    const runDir = path.join(tmpDir, 'preset-test');
+    fs.mkdirSync(runDir, { recursive: true });
+
+    const state: any = makeState({
+      currentPhase: 2,
+      phases: { '1': 'completed', '2': 'pending', '3': 'pending', '4': 'pending', '5': 'pending', '6': 'pending', '7': 'pending' },
+      phasePresets: { '1': 'opus-max', '2': 'codex-high', '3': 'sonnet-high', '4': 'codex-high', '5': 'sonnet-high', '7': 'codex-high' },
+      phaseReopenFlags: { '1': false, '3': false, '5': false },
+      phaseCodexSessions: {
+        '2': { sessionId: 'sess-aa', runner: 'codex', model: 'gpt-5.4', effort: 'high', lastOutcome: 'reject' },
+        '4': { sessionId: 'sess-bb', runner: 'codex', model: 'gpt-5.4', effort: 'high', lastOutcome: 'reject' },
+        '7': null,
+      },
+      phaseReopenSource: { '1': null, '3': null, '5': null },
+      lastWorkspacePid: null, lastWorkspacePidStartTime: null, loggingEnabled: false,
+    });
+
+    // Pre-state: replay sidecars + feedback files for phase 2 and 4
+    for (const p of [2, 4]) {
+      fs.writeFileSync(path.join(runDir, `gate-${p}-raw.txt`), 'raw');
+      fs.writeFileSync(path.join(runDir, `gate-${p}-result.json`), '{}');
+      fs.writeFileSync(path.join(runDir, `gate-${p}-feedback.md`), `feedback for ${p}`);
+    }
+
+    // Exact wiring pattern from src/commands/inner.ts
+    const prevPresets = { ...state.phasePresets };
+    state.phasePresets = { ...state.phasePresets, '2': 'sonnet-high' }; // phase 2 preset changed
+    invalidatePhaseSessionsOnPresetChange(state, prevPresets, runDir);
+
+    // (1) Changed phase (2) session nulled; unchanged phase (4) preserved
+    expect(state.phaseCodexSessions['2']).toBeNull();
+    expect(state.phaseCodexSessions['4']?.sessionId).toBe('sess-bb');
+    // (2) Phase 2 replay sidecars deleted, feedback preserved
+    expect(fs.existsSync(path.join(runDir, 'gate-2-raw.txt'))).toBe(false);
+    expect(fs.existsSync(path.join(runDir, 'gate-2-result.json'))).toBe(false);
+    expect(fs.existsSync(path.join(runDir, 'gate-2-feedback.md'))).toBe(true);
+    // (3) Phase 4 artifacts untouched
+    expect(fs.existsSync(path.join(runDir, 'gate-4-raw.txt'))).toBe(true);
+    expect(fs.existsSync(path.join(runDir, 'gate-4-feedback.md'))).toBe(true);
+  });
 });
 
 describe('inner.ts: tmux cleanup on completion', () => {
@@ -183,6 +252,7 @@ describe('bootstrapSessionLogger', () => {
       phaseAttemptId: { '1': null, '3': null, '5': null },
       phasePresets: {}, phaseReopenFlags: { '1': false, '3': false, '5': false },
       phaseReopenSource: { '1': null, '3': null, '5': null },
+      phaseCodexSessions: { '2': null, '4': null, '7': null },
       lastWorkspacePid: null, lastWorkspacePidStartTime: null,
       tmuxSession: '', tmuxMode: 'dedicated', tmuxWindows: [],
       tmuxControlWindow: '', tmuxWorkspacePane: '', tmuxControlPane: '',
@@ -261,6 +331,7 @@ describe('buildConfigCancelHandler — lazy bootstrap', () => {
       phaseAttemptId: { '1': null, '3': null, '5': null },
       phasePresets: {}, phaseReopenFlags: { '1': false, '3': false, '5': false },
       phaseReopenSource: { '1': null, '3': null, '5': null },
+      phaseCodexSessions: { '2': null, '4': null, '7': null },
       lastWorkspacePid: null, lastWorkspacePidStartTime: null,
       tmuxSession: '', tmuxMode: 'dedicated', tmuxWindows: [],
       tmuxControlWindow: '', tmuxWorkspacePane: '', tmuxControlPane: '',

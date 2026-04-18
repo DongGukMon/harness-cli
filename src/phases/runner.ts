@@ -349,6 +349,15 @@ export async function handleGatePhase(
   printInfo(`Codex 리뷰 진행 중... (최대 ${Math.round(GATE_TIMEOUT_MS / 1000)}초 소요)`);
   const result = await runGatePhase(phase, state, harnessDir, runDir, cwd, sidecarReplayAllowed);
 
+  // §4.10 Verdict redirect guard — applies to BOTH verdict and error paths.
+  // If SIGUSR1 jump/skip mutated state.currentPhase during the gate call, do
+  // not apply the verdict (would overwrite jump destination) or the error (same).
+  if (state.currentPhase !== phase) {
+    printInfo(`Phase ${phase} interrupted by control signal → phase ${state.currentPhase}`);
+    renderControlPanel(state);
+    return;
+  }
+
   if (result.type === 'verdict') {
     if (result.verdict === 'APPROVE') {
       // Emit gate_verdict (skip if legacy sidecar replay with runner undefined)
@@ -364,6 +373,8 @@ export async function handleGatePhase(
           promptBytes: result.promptBytes,
           codexSessionId: result.codexSessionId,
           recoveredFromSidecar: result.recoveredFromSidecar ?? false,
+          resumedFrom: result.resumedFrom,
+          resumeFallback: result.resumeFallback,
         });
       }
 
@@ -407,17 +418,14 @@ export async function handleGatePhase(
           promptBytes: result.promptBytes,
           codexSessionId: result.codexSessionId,
           recoveredFromSidecar: result.recoveredFromSidecar ?? false,
+          resumedFrom: result.resumedFrom,
+          resumeFallback: result.resumeFallback,
         });
       }
       await handleGateReject(phase, result.comments, retryIndex, state, harnessDir, runDir, cwd, inputManager, logger);
     }
   } else {
-    // Error — but check if SIGUSR1 redirected first
-    if (state.currentPhase !== phase) {
-      printInfo(`Phase ${phase} interrupted by control signal → phase ${state.currentPhase}`);
-      renderControlPanel(state);
-      return;
-    }
+    // Error path. Redirect guard was already applied above.
     // Emit gate_error (skip if legacy sidecar replay with runner undefined)
     if (result.runner) {
       logger.logEvent({
@@ -428,7 +436,11 @@ export async function handleGatePhase(
         error: result.error,
         exitCode: result.exitCode,
         durationMs: result.durationMs,
+        tokensTotal: result.tokensTotal,
+        codexSessionId: result.codexSessionId,
         recoveredFromSidecar: result.recoveredFromSidecar ?? false,
+        resumedFrom: result.resumedFrom,
+        resumeFallback: result.resumeFallback,
       });
     }
     await handleGateError(phase, result.error, state, runDir, cwd, inputManager, logger);

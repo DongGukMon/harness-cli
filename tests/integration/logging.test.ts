@@ -25,6 +25,7 @@ function buildState(overrides: Partial<HarnessState> = {}): HarnessState {
     phaseAttemptId: { '1': null, '3': null, '5': null },
     phasePresets: {}, phaseReopenFlags: { '1': false, '3': false, '5': false },
     phaseReopenSource: { '1': null, '3': null, '5': null },
+    phaseCodexSessions: { '2': null, '4': null, '7': null },
     lastWorkspacePid: null, lastWorkspacePidStartTime: null,
     tmuxSession: '', tmuxMode: 'dedicated', tmuxWindows: [],
     tmuxControlWindow: '', tmuxWorkspacePane: '', tmuxControlPane: '',

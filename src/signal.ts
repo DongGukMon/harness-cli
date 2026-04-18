@@ -4,7 +4,7 @@ import type { HarnessState } from './types.js';
 import { killProcessGroup, isPidAlive, getProcessStartTime } from './process.js';
 import { sendKeysToPane } from './tmux.js';
 import { getHead } from './git.js';
-import { writeState } from './state.js';
+import { writeState, invalidatePhaseSessionsOnJump } from './state.js';
 import { SIGTERM_WAIT_MS, GATE_PHASES, getPresetById } from './config.js';
 
 function isSameProcessInstance(pid: number, savedStartTime: number | null): boolean {
@@ -151,6 +151,8 @@ export function registerSignalHandlers(ctx: SignalContext): void {
         state.currentPhase = action.phase;
         state.pendingAction = null;
         state.pauseReason = null;
+        // §4.9 authoritative jump invalidation
+        invalidatePhaseSessionsOnJump(state, action.phase, runDir);
       }
 
       setState(state);

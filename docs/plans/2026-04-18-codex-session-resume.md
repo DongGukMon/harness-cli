@@ -49,9 +49,11 @@
 
 - [ ] **Step 1: fresh 호출 stdout에서 session id 추출 패턴 확인**
 
-Run (fresh session으로 최소 프롬프트):
+**중요**: pilot은 실제 repo에서 쓰는 Codex preset을 그대로 사용해야 한다. `src/config.ts`의 `codex-high`/`codex-medium`은 model=`gpt-5.4`, effort=`high`/`medium`으로 정의되어 있다 (참고: `src/config.ts:15-16`). 이 값들과 다른 preset으로 probe하면 open question의 답이 런타임과 어긋날 수 있다.
+
+Run (fresh session으로 최소 프롬프트, 실제 preset과 일치):
 ```bash
-echo "Say 'hello' and stop." | codex exec --model gpt-5-codex -c model_reasoning_effort="minimal" - 2>&1 | tee /tmp/codex-probe-fresh.txt
+echo "Say 'hello' and stop." | codex exec --model gpt-5.4 -c model_reasoning_effort="high" - 2>&1 | tee /tmp/codex-probe-fresh.txt
 ```
 `session id:` 라인을 grep해서 UUID 형식 확인:
 ```bash
@@ -59,31 +61,42 @@ grep -iE "session id:\s*[0-9a-f-]+" /tmp/codex-probe-fresh.txt
 ```
 Expected: 한 줄에 `session id: <uuid>` 형태로 출력.
 
+**중요 — exit code 캡처 규약**: 아래 커맨드들은 `| tee`로 파이프를 통과한다. `$?`는 shell에 따라 pipeline의 **마지막** 명령(tee) exit code만 반환하므로, `codex exec`의 실제 exit code를 잘못 읽을 수 있다. 반드시 아래 중 하나를 사용:
+- bash: `codex_ec="${PIPESTATUS[0]}"` (pipe 직후 즉시 읽기)
+- zsh: `codex_ec="${pipestatus[1]}"` (zsh는 1-based)
+- 또는 간단히 `set -o pipefail`을 세션 최상단에 두고 `$?` 읽기 (대신 pipefail은 tee 성공 여부도 고려하므로 정확한 "codex 자체의 exit code"가 필요하면 PIPESTATUS 권장)
+
 - [ ] **Step 2: 실존 session id로 resume 호출 시 응답과 session id 패턴 확인**
 
 위 Step 1에서 얻은 UUID를 `$SID`에 담고:
 ```bash
 echo "Say 'world' and stop." | codex exec resume "$SID" - 2>&1 | tee /tmp/codex-probe-resume.txt
+# bash
+codex_ec="${PIPESTATUS[0]}"; echo "codex exit code: $codex_ec"
+# zsh이면: codex_ec="${pipestatus[1]}"; echo "codex exit code: $codex_ec"
 grep -iE "session id:\s*[0-9a-f-]+" /tmp/codex-probe-resume.txt
 ```
-Expected: exit 0, stdout 또는 stderr에 같은 UUID 또는 새 UUID 찍힘. 결과를 §9 Q#2 (동일 id vs fork)에 반영.
+Expected: `codex_ec == 0`, stdout 또는 stderr에 같은 UUID 또는 새 UUID 찍힘. 결과를 §9 Q#2 (동일 id vs fork)에 반영.
 
 - [ ] **Step 3: 존재하지 않는 UUID로 resume 호출 시 에러 패턴 확인**
 
 ```bash
 echo "noop" | codex exec resume "00000000-0000-0000-0000-000000000000" - 2>&1 | tee /tmp/codex-probe-missing.txt
-echo "exit code: $?"
+# bash
+codex_ec="${PIPESTATUS[0]}"; echo "codex exit code: $codex_ec"
+# zsh: codex_ec="${pipestatus[1]}"
 ```
-Expected: non-zero exit. stderr에 "session not found" 또는 유사 패턴. 정확한 문자열을 §9 Q#1에 반영하여 Task 4 `session_missing` 정규식 확정.
+Expected: `codex_ec`가 non-zero. stderr(`/tmp/codex-probe-missing.txt`)에 "session not found" 또는 유사 패턴이 포함됨. 이 정확한 문자열과 exit code를 §9 Q#1에 반영하여 Task 4 `session_missing` 정규식을 확정한다. **여기서 $?로만 읽으면 tee의 exit 0을 받게 되어 "exit 0인데 에러"라는 잘못된 가정이 Task 4에 전파될 위험이 있다.**
 
 - [ ] **Step 4: 모델/effort 오버라이드 호환성 확인**
 
-Step 1을 `gpt-5-codex` + effort=low로 한 뒤, 같은 세션을 `gpt-5-codex` + effort=high로 resume:
+Step 1(`gpt-5.4` + effort=high)로 만든 세션을 `gpt-5.4` + effort=medium으로 resume해서 effort만 다를 때의 거동 확인:
 ```bash
-echo "Summarize in one sentence." | codex exec resume "$SID" --model gpt-5-codex -c model_reasoning_effort="high" - 2>&1 | tee /tmp/codex-probe-modelchange.txt
-echo "exit code: $?"
+echo "Summarize in one sentence." | codex exec resume "$SID" --model gpt-5.4 -c model_reasoning_effort="medium" - 2>&1 | tee /tmp/codex-probe-modelchange.txt
+# bash: codex_ec="${PIPESTATUS[0]}"; echo "codex exit code: $codex_ec"
+# zsh:  codex_ec="${pipestatus[1]}"; echo "codex exit code: $codex_ec"
 ```
-Expected: exit 0 또는 document된 error. §9 Q#3에 결과 기록. 현재 spec 정책상 preset 변경 시 세션을 invalidate하므로 이 case가 런타임에 도달하지 않지만 edge case 자료로 남긴다.
+Expected: `codex_ec == 0` 또는 document된 error. §9 Q#3에 결과 기록. 현재 spec 정책상 preset 변경 시 세션을 invalidate하므로 이 case가 런타임에 도달하지 않지만 edge case 자료로 남긴다. 두 effort(high ↔ medium) 모두 repo에서 실제로 선택 가능한 값이므로, 무효화 훅이 실패했을 때 fallback 거동을 판단하는 근거가 된다.
 
 - [ ] **Step 5: 결과를 spec §9에 추가 (세 Q 각각 "pilot 결과" 서브-bullet)**
 
@@ -305,9 +318,9 @@ function makeState(): HarnessState {
       '7': 'codex-high',
     },
     phaseCodexSessions: {
-      '2': makeSession('gpt-5-codex', 'high'),
-      '4': makeSession('gpt-5-codex', 'high'),
-      '7': makeSession('gpt-5-codex', 'high'),
+      '2': makeSession('gpt-5.4', 'high'),
+      '4': makeSession('gpt-5.4', 'high'),
+      '7': makeSession('gpt-5.4', 'high'),
     },
   } as unknown as HarnessState;
 }
@@ -505,7 +518,43 @@ it('migrateState discards malformed GateSessionInfo entries', () => {
   expect(migrated.phaseCodexSessions['2']).toBeNull(); // empty sessionId → null
   expect(migrated.phaseCodexSessions['7']).toBeNull(); // invalid lastOutcome → null
 });
+
+// §5 상호작용 요구사항: graceful 종료 경로에서 저장된 세션 lineage가 디스크 round-trip을
+// 통과해 `harness resume`에서 동일 값으로 복원되어야 한다.
+it('phaseCodexSessions survives writeState → readState round-trip (§5)', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'state-persist-'));
+  const state = createInitialState('run-xyz', { /* ...필수 필드 채우기... */ } as any);
+  state.phaseCodexSessions['2'] = {
+    sessionId: 'sess-gate2-uuid',
+    runner: 'codex',
+    model: 'gpt-5.4',
+    effort: 'high',
+    lastOutcome: 'reject',
+  };
+  state.phaseCodexSessions['7'] = {
+    sessionId: 'sess-gate7-uuid',
+    runner: 'codex',
+    model: 'gpt-5.4',
+    effort: 'high',
+    lastOutcome: 'approve',
+  };
+  writeState(dir, state);
+  const restored = readState(dir);
+  expect(restored.phaseCodexSessions['2']).toEqual(state.phaseCodexSessions['2']);
+  expect(restored.phaseCodexSessions['4']).toBeNull();
+  expect(restored.phaseCodexSessions['7']).toEqual(state.phaseCodexSessions['7']);
+});
+
+// §5 in-flight crash 시나리오: Codex가 sessionId를 stdout에 찍었지만 state 저장 전에
+// 크래시하면 phaseCodexSessions[phase]는 null이어야 하고, 다음 resume은 fresh 경로를 탄다.
+// 여기서는 state 레벨 invariant만 검증 (fresh spawn 선택은 runGatePhase 테스트 영역).
+it('fresh state has phaseCodexSessions=null for all gates (in-flight crash invariant)', () => {
+  const state = createInitialState('run-abc', { /* ...필수 필드 채우기... */ } as any);
+  expect(state.phaseCodexSessions).toEqual({ '2': null, '4': null, '7': null });
+});
 ```
+
+위 테스트는 기존 `writeState`/`readState`를 그대로 사용하므로 Task 1/2 구현만으로 통과한다. 이로써 §5의 "graceful 경로 persist"와 "in-flight crash → fresh fallback" 두 시나리오의 **상태 레이어 계약**이 회귀 방지된다.
 
 - [ ] **Step 9: 전체 state 테스트 통과 확인**
 
@@ -539,13 +588,18 @@ import { assembleGateResumePrompt } from '../../src/context/assembler.js';
 import type { HarnessState } from '../../src/types.js';
 
 function makeState(overrides: Partial<HarnessState> = {}): HarnessState {
-  // 최소 state — test에 필요한 필드만 채움
+  // 최소 state — test에 필요한 필드만 채움.
+  // 주의: `assembleGateResumePrompt`는 artifact 파일을 `path.join(cwd, filePath)`로 resolve한다.
+  // test에서 `cwd = 'tests/context/fixtures'`로 지정하므로, artifact 경로는 fixtures 디렉토리
+  // 내부의 **상대** 경로(= bare 파일명)여야 실제 파일을 찾는다. 'fixtures/spec.md'로 두면
+  // `tests/context/fixtures/fixtures/spec.md`를 찾다가 놓치고 "(file not found ...)" placeholder로
+  // fallthrough — 테스트가 실질 로딩을 검증하지 못한다.
   return {
     runId: 'r1',
     artifacts: {
-      spec: 'fixtures/spec.md',
-      plan: 'fixtures/plan.md',
-      evalReport: 'fixtures/eval.md',
+      spec: 'spec.md',
+      plan: 'plan.md',
+      evalReport: 'eval.md',
       decisionLog: '.harness/r1/decisions.md',
       checklist: '.harness/r1/checklist.json',
     },
@@ -568,6 +622,11 @@ describe('assembleGateResumePrompt — Variant A (reject)', () => {
       expect(res).toMatch(/Updated Artifacts \(Re-Review Requested\)/);
       expect(res).toMatch(/previous feedback/i);
       expect(res).toMatch(/P1: fix X/);
+      // Fixture 파일이 **실제로 로드**되었는지 검증 — placeholder fallback 회피:
+      // fixtures/spec.md는 Step 2에서 "# Spec\ncontent\n"으로 생성되므로, 프롬프트에 "content"가 있어야 한다.
+      // 경로 mismatch로 `(file not found ...)` placeholder가 뿌려지면 이 어설션이 실패한다.
+      expect(res).toMatch(/# Spec[\s\S]*content/);
+      expect(res).not.toMatch(/file not found/i);
       // REVIEWER_CONTRACT 전문은 포함 안 함
       expect(res).not.toMatch(/You are an independent technical reviewer/);
     }
@@ -826,11 +885,14 @@ interface RawExecInput {
 
 async function runCodexExecRaw(input: RawExecInput): Promise<RawExecResult> {
   const codexBin = resolveCodexBin();
+  // 주의: `codex exec resume`의 인자 순서는 `[SESSION_ID] [PROMPT]`가 positional (spec §2 CLI 계약).
+  // sessionId를 '--model' 같은 플래그 뒤에 두면 CLI가 flag value로 오인하거나 parser 에러가 날 수 있다.
+  // 반드시 'resume' 직후 sessionId → 플래그들 → prompt placeholder(`-`) 순서를 지킨다.
   const args = input.mode === 'resume'
-    ? ['exec', 'resume',
+    ? ['exec', 'resume', input.sessionId!,
        '--model', input.preset.model,
        '-c', `model_reasoning_effort="${input.preset.effort}"`,
-       input.sessionId!, '-']
+       '-']
     : ['exec',
        '--model', input.preset.model,
        '-c', `model_reasoning_effort="${input.preset.effort}"`,
@@ -1020,7 +1082,7 @@ function rawToError(
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { EventEmitter } from 'events';
 import { runCodexGate } from '../../src/runners/codex.js';
-import type { ModelPreset } from '../../src/config.js';
+import { GATE_TIMEOUT_MS, type ModelPreset } from '../../src/config.js';
 
 // child_process.spawn을 모킹해 args/stdout/stderr/exitCode를 제어
 vi.mock('child_process', async (importOriginal) => {
@@ -1030,6 +1092,8 @@ vi.mock('child_process', async (importOriginal) => {
 
 function makeMockChild(opts: {
   stdout?: string; stderr?: string; exitCode?: number; delayMs?: number;
+  /** true면 data emit은 하되 'close' 이벤트를 영원히 발생시키지 않음 — timeout 경로 테스트용 */
+  neverClose?: boolean;
 }): any {
   const emitter: any = new EventEmitter();
   emitter.stdin = { write: vi.fn(), end: vi.fn() };
@@ -1039,12 +1103,12 @@ function makeMockChild(opts: {
   setTimeout(() => {
     if (opts.stdout) emitter.stdout.emit('data', Buffer.from(opts.stdout));
     if (opts.stderr) emitter.stderr.emit('data', Buffer.from(opts.stderr));
-    emitter.emit('close', opts.exitCode ?? 0);
+    if (!opts.neverClose) emitter.emit('close', opts.exitCode ?? 0);
   }, opts.delayMs ?? 5);
   return emitter;
 }
 
-const preset: ModelPreset = { id: 'codex-high', runner: 'codex', model: 'gpt-5-codex', effort: 'high', label: 'codex-high' };
+const preset: ModelPreset = { id: 'codex-high', runner: 'codex', model: 'gpt-5.4', effort: 'high', label: 'codex-high' };
 
 const SUCCESS_STDOUT = `session id: abc-session-123\n## Verdict\nAPPROVE\n\n## Comments\n\n## Summary\nAll good.\ntokens used\n1234\n`;
 
@@ -1060,7 +1124,7 @@ describe('runCodexGate — fresh path', () => {
       expect(result.codexSessionId).toBe('abc-session-123');
       expect(result.resumedFrom).toBeNull();
       expect(result.resumeFallback).toBe(false);
-      expect(result.sourcePreset).toEqual({ model: 'gpt-5-codex', effort: 'high' });
+      expect(result.sourcePreset).toEqual({ model: 'gpt-5.4', effort: 'high' });
     }
     // 첫 호출 args에 'resume'이 **포함되지 않아야**
     const args = (cp.spawn as any).mock.calls[0][1] as string[];
@@ -1124,13 +1188,56 @@ describe('runCodexGate — session_missing fallback', () => {
     }
   });
 
-  it('does NOT fall back on timeout', async () => {
+  // 주의: `category`는 `src/runners/codex.ts` 내부 타입(§4.5)이며 외부 반환 타입에는 노출되지 않는다.
+  // 따라서 관찰 가능한 신호(error type, error message, resumeFallback flag, spawn 호출 수)만 assert한다.
+  it('does NOT fall back on timeout (관찰 가능한 신호로 검증, no second spawn)', async () => {
+    vi.useFakeTimers();
+    try {
+      const cp = await import('child_process');
+      (cp.spawn as any).mockImplementationOnce(() =>
+        // exit/close 이벤트를 영원히 보내지 않는 child
+        makeMockChild({ stdout: '', neverClose: true })
+      );
+      const pending = runCodexGate(
+        2, preset, 'resume prompt', '/tmp/h', '/tmp/c', 'some-session', () => 'fresh'
+      );
+      // GATE_TIMEOUT_MS 초과 시점까지 시계를 전진
+      await vi.advanceTimersByTimeAsync(GATE_TIMEOUT_MS + 1000);
+      const result = await pending;
+      expect(result.type).toBe('error');
+      if (result.type === 'error') {
+        expect(result.resumeFallback).toBe(false);
+        // §4.5 rawToResult: timeout 카테고리는 `Codex gate timed out after ${GATE_TIMEOUT_MS}ms` 메시지로 투영
+        expect(result.error).toMatch(/timed out/i);
+      }
+      // 두 번째 spawn이 호출되지 않음 (fallback 미발생)
+      expect((cp.spawn as any).mock.calls.length).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does NOT fall back on success_no_verdict (exit 0이지만 ## Verdict 헤더 없음)', async () => {
     const cp = await import('child_process');
     (cp.spawn as any).mockImplementationOnce(() =>
-      // exit를 안 보내서 timeout 발생 시뮬
-      makeMockChild({ stdout: '', delayMs: 10_000_000 })
+      makeMockChild({
+        stdout: `session id: live-session\ntokens used\n10\n\nReviewer replied but never emitted a Verdict header.\n`,
+        exitCode: 0,
+      })
     );
-    // GATE_TIMEOUT_MS를 줄여 테스트 가속화가 필요하면 별도 모킹. 여기서는 개념만 검증.
+    const result = await runCodexGate(
+      2, preset, 'resume prompt', '/tmp/h', '/tmp/c', 'live-session', () => 'fresh'
+    );
+    expect(result.type).toBe('error');
+    if (result.type === 'error') {
+      expect(result.resumeFallback).toBe(false);
+      // §4.5 rawToResult: success_no_verdict은 "Gate output missing ## Verdict header" 메시지로 투영
+      expect(result.error).toMatch(/missing ## Verdict header/i);
+      // sessionId는 stdout에서 추출되어 유지 (fallback은 아니지만 감사 목적)
+      expect(result.codexSessionId).toBe('live-session');
+    }
+    // 두 번째 spawn 없음 — success_no_verdict은 "리뷰 자체 문제"로 fallback 아님
+    expect((cp.spawn as any).mock.calls.length).toBe(1);
   });
 });
 
@@ -1183,7 +1290,20 @@ git commit -m "feat(runners/codex): add resume + session_missing fallback"
 - Modify: `src/phases/gate.ts`
 - Create: `tests/phases/gate-resume.test.ts`
 
-- [ ] **Step 1: `checkGateSidecars`에 `sourcePreset` hydration 추가**
+**TDD 순서 (테스트 먼저)**:
+
+- [ ] **Step 1 (TDD): 실패하는 gate-resume 테스트 파일 먼저 작성**
+
+아래 Step 8에 정의된 테스트 내용을 `tests/phases/gate-resume.test.ts`로 먼저 생성하고 실행.
+
+```bash
+pnpm -s vitest run tests/phases/gate-resume.test.ts
+```
+Expected: 다수 테스트가 implementation 없음으로 실패 (함수 미존재 또는 기존 구현 mismatch).
+
+이후 구현 단계로 진행.
+
+- [ ] **Step 2: `checkGateSidecars`에 `sourcePreset` hydration 추가**
 
 `src/phases/gate.ts`의 `checkGateSidecars` 함수 내 metadata 블록에 한 줄 추가:
 
@@ -1198,7 +1318,7 @@ git commit -m "feat(runners/codex): add resume + session_missing fallback"
   };
 ```
 
-- [ ] **Step 2: `runGatePhase`에서 sidecar replay compatibility gate 구현**
+- [ ] **Step 3: `runGatePhase`에서 sidecar replay compatibility gate 구현**
 
 `runGatePhase`의 Step 1 sidecar replay 블록을 교체:
 
@@ -1258,7 +1378,7 @@ git commit -m "feat(runners/codex): add resume + session_missing fallback"
 
 상단 import에 `getPresetById` 추가(아직 없다면).
 
-- [ ] **Step 3: `runGatePhase` 경로 분기 구현 (resume vs fresh)**
+- [ ] **Step 4: `runGatePhase` 경로 분기 구현 (resume vs fresh)**
 
 `runGatePhase`의 기존 Step 3-5(assemble prompt + dispatch)를 다음으로 교체:
 
@@ -1334,7 +1454,7 @@ git commit -m "feat(runners/codex): add resume + session_missing fallback"
 
 `GateSessionInfo` import 추가 필요 (`src/types.ts`에서).
 
-- [ ] **Step 4: Step 6(세션 저장) 추가**
+- [ ] **Step 5: Step 6(세션 저장) 추가**
 
 Dispatch 이후, sidecar 쓰기 전에:
 
@@ -1426,7 +1546,7 @@ function mockVerdict(overrides: Partial<GatePhaseResult> = {}): GatePhaseResult 
   return {
     type: 'verdict', verdict: 'REJECT', comments: 'P1', rawOutput: 'session id: sess-1\n## Verdict\nREJECT',
     runner: 'codex', codexSessionId: 'sess-1',
-    sourcePreset: { model: 'gpt-5-codex', effort: 'high' },
+    sourcePreset: { model: 'gpt-5.4', effort: 'high' },
     resumedFrom: null, resumeFallback: false,
     ...overrides,
   } as GatePhaseResult;
@@ -1440,7 +1560,7 @@ describe('runGatePhase — first call (fresh)', () => {
     expect(res.type).toBe('verdict');
     expect((runCodexGate as any).mock.calls[0][5]).toBeNull(); // resumeSessionId
     expect(state.phaseCodexSessions['2']).toEqual({
-      sessionId: 'sess-1', runner: 'codex', model: 'gpt-5-codex', effort: 'high', lastOutcome: 'reject',
+      sessionId: 'sess-1', runner: 'codex', model: 'gpt-5.4', effort: 'high', lastOutcome: 'reject',
     });
   });
 });
@@ -1449,7 +1569,7 @@ describe('runGatePhase — second call (resume)', () => {
   it('passes stored sessionId on compatible preset', async () => {
     const state = makeState();
     state.phaseCodexSessions['2'] = {
-      sessionId: 'sess-1', runner: 'codex', model: 'gpt-5-codex', effort: 'high', lastOutcome: 'reject',
+      sessionId: 'sess-1', runner: 'codex', model: 'gpt-5.4', effort: 'high', lastOutcome: 'reject',
     };
     (runCodexGate as any).mockResolvedValueOnce(
       mockVerdict({ verdict: 'APPROVE', resumedFrom: 'sess-1', codexSessionId: 'sess-1' })
@@ -1475,7 +1595,7 @@ describe('runGatePhase — resumeFallback clears stale id', () => {
   it('clears stale id when fallback fires with no new id', async () => {
     const state = makeState();
     state.phaseCodexSessions['2'] = {
-      sessionId: 'stale', runner: 'codex', model: 'gpt-5-codex', effort: 'high', lastOutcome: 'reject',
+      sessionId: 'stale', runner: 'codex', model: 'gpt-5.4', effort: 'high', lastOutcome: 'reject',
     };
     (runCodexGate as any).mockResolvedValueOnce({
       type: 'error', error: 'fallback failed', runner: 'codex',
@@ -1494,6 +1614,96 @@ describe('runGatePhase — stillActivePhase guard', () => {
       return mockVerdict({ codexSessionId: 'should-not-save' });
     });
     await runGatePhase(2, state, runDir, runDir, runDir);
+    expect(state.phaseCodexSessions['2']).toBeNull();
+  });
+});
+
+// §4.7 two-stage replay compatibility gate — 4 scenarios:
+// (1) compatible Codex sidecar → replay accepted + hydration into phaseCodexSessions
+// (2) mismatched sourcePreset → replay skipped, live path taken
+// (3) legacy sidecar (no metadata) → replay skipped (authoritative gate blocks unknown-lineage replay)
+// (4) Claude sidecar → runner-only compatibility accepted, but no hydration (Claude ≠ codex)
+describe('runGatePhase — sidecar replay compatibility gate (§4.7)', () => {
+  // Helper to write a fake sidecar pair consumed by checkGateSidecars.
+  function writeSidecar(
+    phase: 2 | 4 | 7,
+    result: { verdict?: 'APPROVE' | 'REJECT'; runner: 'claude' | 'codex';
+              codexSessionId?: string;
+              sourcePreset?: { model: string; effort: string } },
+  ) {
+    const raw = `session id: ${result.codexSessionId ?? 'sc-sid'}\n## Verdict\n${result.verdict ?? 'APPROVE'}\n`;
+    fs.writeFileSync(path.join(runDir, `gate-${phase}-raw.txt`), raw);
+    fs.writeFileSync(
+      path.join(runDir, `gate-${phase}-result.json`),
+      JSON.stringify({
+        exitCode: 0, timestamp: Date.now(),
+        runner: result.runner,
+        codexSessionId: result.codexSessionId,
+        sourcePreset: result.sourcePreset,
+      }),
+    );
+  }
+
+  it('(1) compatible Codex sidecar: replay accepted, hydrates phaseCodexSessions', async () => {
+    const state = makeState();
+    writeSidecar(2, {
+      verdict: 'REJECT', runner: 'codex', codexSessionId: 'side-sid',
+      sourcePreset: { model: 'gpt-5.4', effort: 'high' },
+    });
+    // state.phasePresets[2] = 'codex-high' per makeState; getPresetById resolves to gpt-5.4/high
+    const res = await runGatePhase(2, state, runDir, runDir, runDir);
+    // runCodexGate는 호출되지 않아야 함 (replay hit)
+    expect((runCodexGate as any).mock.calls.length).toBe(0);
+    expect(res.type).toBe('verdict');
+    // Hydration 확인
+    expect(state.phaseCodexSessions['2']).toEqual({
+      sessionId: 'side-sid', runner: 'codex', model: 'gpt-5.4', effort: 'high',
+      lastOutcome: 'reject',
+    });
+  });
+
+  it('(2) mismatched sourcePreset: replay skipped, live path taken', async () => {
+    const state = makeState();
+    writeSidecar(2, {
+      verdict: 'APPROVE', runner: 'codex', codexSessionId: 'mismatch-sid',
+      sourcePreset: { model: 'some-other-model', effort: 'high' },
+    });
+    (runCodexGate as any).mockResolvedValueOnce(mockVerdict({ codexSessionId: 'live-sid' }));
+    await runGatePhase(2, state, runDir, runDir, runDir);
+    // Live path 탔는지 확인
+    expect((runCodexGate as any).mock.calls.length).toBe(1);
+    // Hydration은 일어나지 않고, live 결과로 저장
+    expect(state.phaseCodexSessions['2']?.sessionId).toBe('live-sid');
+  });
+
+  it('(3) legacy sidecar (no runner/sourcePreset metadata): replay skipped', async () => {
+    const state = makeState();
+    // metadata 없는 legacy sidecar
+    fs.writeFileSync(path.join(runDir, 'gate-2-raw.txt'), 'session id: legacy\n## Verdict\nAPPROVE\n');
+    fs.writeFileSync(
+      path.join(runDir, 'gate-2-result.json'),
+      JSON.stringify({ exitCode: 0, timestamp: Date.now() }),
+    );
+    (runCodexGate as any).mockResolvedValueOnce(mockVerdict({ codexSessionId: 'live-sid' }));
+    await runGatePhase(2, state, runDir, runDir, runDir);
+    // replay skip → live spawn
+    expect((runCodexGate as any).mock.calls.length).toBe(1);
+    expect(state.phaseCodexSessions['2']?.sessionId).toBe('live-sid');
+  });
+
+  it('(4) Claude sidecar with matching runner: replay accepted, no codex hydration', async () => {
+    const state = makeState();
+    // Claude runner 로 교체
+    state.phasePresets['2'] = 'sonnet-high';
+    writeSidecar(2, {
+      verdict: 'APPROVE', runner: 'claude',
+      // Claude는 sourcePreset 검증 대상 아님
+    });
+    const res = await runGatePhase(2, state, runDir, runDir, runDir);
+    // runCodexGate 미호출 (Claude replay hit)
+    expect((runCodexGate as any).mock.calls.length).toBe(0);
+    expect(res.type).toBe('verdict');
+    // Claude replay는 phaseCodexSessions hydrate 대상 아님
     expect(state.phaseCodexSessions['2']).toBeNull();
   });
 });
@@ -1579,7 +1789,61 @@ logger.logEvent({
 
 `gate_error` 경로에도 동일 패턴 적용.
 
-- [ ] **Step 3: redirect guard 동작 확인 테스트 추가**
+- [ ] **Step 3a: 실제 logger의 `events.jsonl` 직렬화 검증 테스트 추가 (§4.6 end-to-end)**
+
+Mocked logger가 아니라 **실제 `src/logger.ts`의 `SessionLogger`**가 디스크에 쓴 JSON line에 `resumedFrom`/`resumeFallback` 필드가 정상 직렬화되는지 확인. `tests/logger.test.ts`에 추가(기존 파일이 있음 — 없으면 신설):
+
+```ts
+import { describe, it, expect } from 'vitest';
+import fs from 'fs';
+import path from 'path';
+import os from 'os';
+import { SessionLogger } from '../src/logger.js';
+
+describe('SessionLogger — §4.6 resume log fields', () => {
+  it('serializes resumedFrom and resumeFallback into events.jsonl', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-log-'));
+    const logger = new SessionLogger(dir, 'run-1');
+    logger.logEvent({
+      event: 'gate_verdict',
+      phase: 2,
+      retryIndex: 0,
+      runner: 'codex',
+      verdict: 'APPROVE',
+      codexSessionId: 'new-uuid',
+      resumedFrom: 'dead-uuid',
+      resumeFallback: true,
+    } as any);
+    logger.logEvent({
+      event: 'gate_error',
+      phase: 2,
+      retryIndex: 0,
+      runner: 'codex',
+      error: 'Codex gate timed out after 360000ms',
+      codexSessionId: 'partial-uuid',
+      resumedFrom: 'prev-uuid',
+      resumeFallback: false,
+    } as any);
+
+    const lines = fs
+      .readFileSync(path.join(dir, 'events.jsonl'), 'utf8')
+      .trim()
+      .split('\n')
+      .map((l) => JSON.parse(l));
+    const verdictLine = lines.find((l) => l.event === 'gate_verdict');
+    const errorLine = lines.find((l) => l.event === 'gate_error');
+
+    expect(verdictLine.resumedFrom).toBe('dead-uuid');
+    expect(verdictLine.resumeFallback).toBe(true);
+    expect(errorLine.resumedFrom).toBe('prev-uuid');
+    expect(errorLine.resumeFallback).toBe(false);
+  });
+});
+```
+
+이는 §4.6 "fresh / successful resume / fallback / error" 4-경로 중 directly serializable한 두 경로를 **실제 로거 + 파일시스템**으로 고정한다. Runner.test.ts의 mocked logger 테스트는 payload assembly를, 이 테스트는 serialization wire format을 담당해서 분리된 실패가 교차 검증된다.
+
+- [ ] **Step 3: redirect guard + §4.6 로그 필드 방출 테스트 추가**
 
 `tests/phases/runner.test.ts`에서 gate dispatch에 해당하는 describe 블록에 테스트 추가:
 
@@ -1598,9 +1862,73 @@ it('does not apply verdict when state.currentPhase changed during gate run', asy
   // phases['2']가 'completed'로 바뀌지 않아야
   expect(state.phases['2']).not.toBe('completed');
 });
+
+// §4.6: fresh spawn (resumedFrom=null, resumeFallback=false)
+it('emits gate_verdict with resumedFrom=null, resumeFallback=false on fresh spawn', async () => {
+  const state = makeState();
+  const emitted: any[] = [];
+  const logger = { logEvent: vi.fn((ev) => emitted.push(ev)) } as any;
+  (runGatePhase as any).mockImplementationOnce(async () => ({
+    type: 'verdict', verdict: 'APPROVE', comments: '', rawOutput: '', runner: 'codex',
+    codexSessionId: 'fresh-uuid', resumedFrom: null, resumeFallback: false,
+  }));
+  await runGateDispatch(2, state, runDir, cwd, logger);
+  const verdictEvent = emitted.find((e) => e.event === 'gate_verdict');
+  expect(verdictEvent).toBeDefined();
+  expect(verdictEvent.resumedFrom).toBeNull();
+  expect(verdictEvent.resumeFallback).toBe(false);
+  expect(verdictEvent.codexSessionId).toBe('fresh-uuid');
+});
+
+// §4.6: 성공적 resume (resumedFrom=<prev>, resumeFallback=false, codexSessionId === prev)
+it('emits gate_verdict with resumedFrom set + resumeFallback=false on successful resume', async () => {
+  const state = makeState();
+  const emitted: any[] = [];
+  const logger = { logEvent: vi.fn((ev) => emitted.push(ev)) } as any;
+  (runGatePhase as any).mockImplementationOnce(async () => ({
+    type: 'verdict', verdict: 'REJECT', comments: 'x', rawOutput: '', runner: 'codex',
+    codexSessionId: 'prev-sid', resumedFrom: 'prev-sid', resumeFallback: false,
+  }));
+  await runGateDispatch(2, state, runDir, cwd, logger);
+  const verdictEvent = emitted.find((e) => e.event === 'gate_verdict');
+  expect(verdictEvent.resumedFrom).toBe('prev-sid');
+  expect(verdictEvent.resumeFallback).toBe(false);
+});
+
+// §4.6: session_missing → fresh fallback (resumedFrom=<prev>, resumeFallback=true, 새 sessionId)
+it('emits gate_verdict with resumeFallback=true on session_missing fallback', async () => {
+  const state = makeState();
+  const emitted: any[] = [];
+  const logger = { logEvent: vi.fn((ev) => emitted.push(ev)) } as any;
+  (runGatePhase as any).mockImplementationOnce(async () => ({
+    type: 'verdict', verdict: 'APPROVE', comments: '', rawOutput: '', runner: 'codex',
+    codexSessionId: 'new-uuid', resumedFrom: 'dead-sid', resumeFallback: true,
+  }));
+  await runGateDispatch(2, state, runDir, cwd, logger);
+  const verdictEvent = emitted.find((e) => e.event === 'gate_verdict');
+  expect(verdictEvent.resumedFrom).toBe('dead-sid');
+  expect(verdictEvent.resumeFallback).toBe(true);
+  expect(verdictEvent.codexSessionId).toBe('new-uuid');
+});
+
+// §4.6: error 경로에서도 resume 메타데이터 방출
+it('emits gate_error with resumedFrom/resumeFallback on error path', async () => {
+  const state = makeState();
+  const emitted: any[] = [];
+  const logger = { logEvent: vi.fn((ev) => emitted.push(ev)) } as any;
+  (runGatePhase as any).mockImplementationOnce(async () => ({
+    type: 'error', error: 'Codex gate timed out after 360000ms', runner: 'codex',
+    codexSessionId: 'partial-sid', resumedFrom: 'prev-sid', resumeFallback: false,
+  }));
+  await runGateDispatch(2, state, runDir, cwd, logger);
+  const errorEvent = emitted.find((e) => e.event === 'gate_error');
+  expect(errorEvent).toBeDefined();
+  expect(errorEvent.resumedFrom).toBe('prev-sid');
+  expect(errorEvent.resumeFallback).toBe(false);
+});
 ```
 
-(테스트 파일 구조에 따라 import/setup 조정.)
+(테스트 파일 구조에 따라 import/setup 조정. `runGateDispatch`/`makeState`/`logger` 이름은 기존 파일 컨벤션에 맞춰 교체.)
 
 - [ ] **Step 4: 테스트 실행 + 기존 runner 테스트 회귀 확인**
 
@@ -1672,15 +2000,61 @@ pnpm -s vitest run tests/commands/inner.test.ts tests/signal.test.ts
 ```ts
 it('consumePendingAction invalidates sessions for jump to earlier phase', async () => {
   const state = makeState();
-  state.phaseCodexSessions['4'] = { sessionId: 'sess-4', runner: 'codex', model: 'gpt-5-codex', effort: 'high', lastOutcome: 'reject' };
-  state.phaseCodexSessions['7'] = { sessionId: 'sess-7', runner: 'codex', model: 'gpt-5-codex', effort: 'high', lastOutcome: 'reject' };
+  state.phaseCodexSessions['4'] = { sessionId: 'sess-4', runner: 'codex', model: 'gpt-5.4', effort: 'high', lastOutcome: 'reject' };
+  state.phaseCodexSessions['7'] = { sessionId: 'sess-7', runner: 'codex', model: 'gpt-5.4', effort: 'high', lastOutcome: 'reject' };
   state.pendingAction = { type: 'jump', targetPhase: 3 } as any; // 실제 shape 맞추기
   await consumePendingAction(state, runDir, /* ... */);
   expect(state.phaseCodexSessions['2']).not.toBeNull();
   expect(state.phaseCodexSessions['4']).toBeNull();
   expect(state.phaseCodexSessions['7']).toBeNull();
 });
+
+// §4.8 authoritative wiring in inner.ts — preset-change 경로가
+// `invalidatePhaseSessionsOnPresetChange`를 실제로 호출하는지 behavioral 검증.
+// 단순 helper 단위 테스트(Task 2)나 grep(EC-12)이 아니라 "promptModelConfig 이후 진짜로
+// 무효화가 발동하는가"를 증명해야 §4.8의 authoritative site 계약이 회귀 방지된다.
+it('preset change via promptModelConfig nulls session, deletes replay sidecars, preserves feedback', async () => {
+  const state = makeState();
+  // 사전 상태: phase 2/4/7에 Codex 세션 저장 + replay sidecar + feedback 파일
+  state.phaseCodexSessions['2'] = { sessionId: 'sess-2', runner: 'codex', model: 'gpt-5.4', effort: 'high', lastOutcome: 'reject' };
+  state.phaseCodexSessions['4'] = { sessionId: 'sess-4', runner: 'codex', model: 'gpt-5.4', effort: 'high', lastOutcome: 'reject' };
+  state.phasePresets = { '2': 'codex-high', '4': 'codex-high', '7': 'codex-high' };
+  for (const phase of [2, 4]) {
+    fs.writeFileSync(path.join(runDir, `gate-${phase}-raw.txt`), 'raw');
+    fs.writeFileSync(path.join(runDir, `gate-${phase}-result.json`), '{}');
+    fs.writeFileSync(path.join(runDir, `gate-${phase}-feedback.md`), 'feedback content');
+  }
+
+  // promptModelConfig가 preset을 다른 모델로 교체하도록 모킹 (phase 2만 변경)
+  vi.mock('../../src/ui.js', async (importOriginal) => {
+    const actual = await importOriginal<any>();
+    return {
+      ...actual,
+      promptModelConfig: vi.fn(async (_prev: any, _im: any) => ({
+        '2': 'sonnet-high', '4': 'codex-high', '7': 'codex-high',
+      })),
+    };
+  });
+
+  // inner.ts의 preset-change 진입점(실제 이름은 구현에 맞춰 조정 — 예: `reopenModelConfig`)을 호출
+  const innerModule = await import('../../src/commands/inner.js');
+  // ↓ 실제 API 이름으로 교체. 요지는 promptModelConfig → state.phasePresets 적용 경로를 밟는 것.
+  await innerModule.applyModelConfigChange(state, runDir, /* inputManager */ {} as any);
+
+  // (1) 바뀐 phase(2)만 세션 무효화
+  expect(state.phaseCodexSessions['2']).toBeNull();
+  // (2) phase 4는 preset 변화 없으니 유지
+  expect(state.phaseCodexSessions['4']?.sessionId).toBe('sess-4');
+  // (3) phase 2의 replay sidecar(raw/result)는 삭제, feedback은 보존
+  expect(fs.existsSync(path.join(runDir, 'gate-2-raw.txt'))).toBe(false);
+  expect(fs.existsSync(path.join(runDir, 'gate-2-result.json'))).toBe(false);
+  expect(fs.existsSync(path.join(runDir, 'gate-2-feedback.md'))).toBe(true);
+  // (4) phase 4 side는 손대지 않음
+  expect(fs.existsSync(path.join(runDir, 'gate-4-raw.txt'))).toBe(true);
+});
 ```
+
+> 주의: 위 테스트는 실제 `inner.ts` 구현의 진입점 이름(예: `applyModelConfigChange`, `reopenModelConfig`, 혹은 inline 경로)에 맞춰 호출부를 조정. mock된 `promptModelConfig`가 새 preset map을 반환하고, 그 직후 `invalidatePhaseSessionsOnPresetChange`가 실행되는 **authoritative wiring**이 검증된다.
 
 - [ ] **Step 5: Commit**
 
@@ -1725,13 +2099,13 @@ describe('End-to-end: reject loop uses resume', () => {
       .mockResolvedValueOnce({
         type: 'verdict', verdict: 'REJECT', comments: 'P1', rawOutput: 'session id: s1',
         runner: 'codex', codexSessionId: 's1',
-        sourcePreset: { model: 'gpt-5-codex', effort: 'high' },
+        sourcePreset: { model: 'gpt-5.4', effort: 'high' },
         resumedFrom: null, resumeFallback: false,
       } as GatePhaseResult)
       .mockResolvedValueOnce({
         type: 'verdict', verdict: 'APPROVE', comments: '', rawOutput: '',
         runner: 'codex', codexSessionId: 's1',
-        sourcePreset: { model: 'gpt-5-codex', effort: 'high' },
+        sourcePreset: { model: 'gpt-5.4', effort: 'high' },
         resumedFrom: 's1', resumeFallback: false,
       } as GatePhaseResult);
 
@@ -1748,12 +2122,12 @@ describe('End-to-end: session_missing triggers fallback and new session id saved
   it('fallback response updates state with new session id', async () => {
     const state = makeState();
     state.phaseCodexSessions['2'] = {
-      sessionId: 'dead', runner: 'codex', model: 'gpt-5-codex', effort: 'high', lastOutcome: 'reject',
+      sessionId: 'dead', runner: 'codex', model: 'gpt-5.4', effort: 'high', lastOutcome: 'reject',
     };
     (runCodexGate as any).mockResolvedValueOnce({
       type: 'verdict', verdict: 'APPROVE', comments: '', rawOutput: '',
       runner: 'codex', codexSessionId: 'new-sess',
-      sourcePreset: { model: 'gpt-5-codex', effort: 'high' },
+      sourcePreset: { model: 'gpt-5.4', effort: 'high' },
       resumedFrom: 'dead', resumeFallback: true,
     } as GatePhaseResult);
     await runGatePhase(2, state, runDir, runDir, runDir);
@@ -1761,11 +2135,37 @@ describe('End-to-end: session_missing triggers fallback and new session id saved
   });
 });
 
+// §5 "Gate 2 호출 완료 후 state persist → crash → `harness resume`" 시나리오:
+// state가 디스크 round-trip을 거친 뒤 runGatePhase가 저장된 sessionId로 resume 경로를 탄다.
+describe('End-to-end: crash/resume — persisted session drives resume path (§5)', () => {
+  it('after writeState → readState, next runGatePhase call resumes with saved id', async () => {
+    const { writeState, readState } = await import('../../src/state.js');
+    const state = makeState();
+    state.phaseCodexSessions['2'] = {
+      sessionId: 'persisted-sess', runner: 'codex', model: 'gpt-5.4', effort: 'high',
+      lastOutcome: 'reject',
+    };
+    writeState(runDir, state);
+    const restored = readState(runDir);
+    expect(restored.phaseCodexSessions['2']?.sessionId).toBe('persisted-sess');
+
+    (runCodexGate as any).mockResolvedValueOnce({
+      type: 'verdict', verdict: 'APPROVE', comments: '', rawOutput: '',
+      runner: 'codex', codexSessionId: 'persisted-sess',
+      sourcePreset: { model: 'gpt-5.4', effort: 'high' },
+      resumedFrom: 'persisted-sess', resumeFallback: false,
+    } as GatePhaseResult);
+    await runGatePhase(2, restored, runDir, runDir, runDir);
+    // 6번째 인자(resumeSessionId)가 복원된 id여야 함
+    expect((runCodexGate as any).mock.calls[0][5]).toBe('persisted-sess');
+  });
+});
+
 describe('End-to-end: preset change invalidates session + sidecars', () => {
   it('subsequent gate call uses fresh path after preset change', async () => {
     const state = makeState();
     state.phaseCodexSessions['2'] = {
-      sessionId: 's1', runner: 'codex', model: 'gpt-5-codex', effort: 'high', lastOutcome: 'reject',
+      sessionId: 's1', runner: 'codex', model: 'gpt-5.4', effort: 'high', lastOutcome: 'reject',
     };
     // create fake sidecars + feedback
     fs.writeFileSync(path.join(runDir, 'gate-2-raw.txt'), 'x');
@@ -1783,7 +2183,7 @@ describe('End-to-end: preset change invalidates session + sidecars', () => {
     (runCodexGate as any).mockResolvedValueOnce({
       type: 'verdict', verdict: 'APPROVE', comments: '', rawOutput: '',
       runner: 'codex', codexSessionId: 'new',
-      sourcePreset: { model: 'gpt-5-codex', effort: 'medium' },
+      sourcePreset: { model: 'gpt-5.4', effort: 'medium' },
       resumedFrom: null, resumeFallback: false,
     } as GatePhaseResult);
     await runGatePhase(2, state, runDir, runDir, runDir);
@@ -1794,8 +2194,8 @@ describe('End-to-end: preset change invalidates session + sidecars', () => {
 describe('End-to-end: jump invalidates downstream sessions', () => {
   it('jump to phase 3 invalidates gate 4 and 7 sessions', async () => {
     const state = makeState();
-    state.phaseCodexSessions['4'] = { sessionId: 's4', runner: 'codex', model: 'gpt-5-codex', effort: 'high', lastOutcome: 'reject' };
-    state.phaseCodexSessions['7'] = { sessionId: 's7', runner: 'codex', model: 'gpt-5-codex', effort: 'high', lastOutcome: 'reject' };
+    state.phaseCodexSessions['4'] = { sessionId: 's4', runner: 'codex', model: 'gpt-5.4', effort: 'high', lastOutcome: 'reject' };
+    state.phaseCodexSessions['7'] = { sessionId: 's7', runner: 'codex', model: 'gpt-5.4', effort: 'high', lastOutcome: 'reject' };
     invalidatePhaseSessionsOnJump(state, 3, runDir);
     expect(state.phaseCodexSessions['4']).toBeNull();
     expect(state.phaseCodexSessions['7']).toBeNull();
@@ -1858,6 +2258,39 @@ git add -u && git commit -m "chore: lint fixes for codex session resume"
 
 ---
 
+## Deferred Followups (round-4 P2s — 구현 중 우선순위 낮음으로 처리)
+
+Plan gate round-4에서 올라온 P2 지적사항은 Phase 5 구현 도중 발견되면 즉시 반영, 아니면 Phase 6/7에서 별도 팔로업으로 관리한다. 통과 기준을 넘는 blocking 이슈는 아니지만 정확성 보강을 위한 작업.
+
+- [ ] **TODO-1 (P2, §7 migration)**: `--enable-logging` 없이도 resume이 동작하는 loose coupling 검증
+  - 목적: Spec §7 "로깅 비활성 run에서도 resume 최적화가 동작"을 EC로 고정
+  - 작업: `createSessionLogger(false, ...)` → `NoopLogger`를 주입해 `runGatePhase`를 fresh + resume 두 번 돌리는 통합 테스트 추가. `phaseCodexSessions['2']`가 정상 업데이트되는지 확인.
+  - 위치: `tests/integration/codex-session-resume.test.ts`에 새 describe "logging disabled path"
+  - EC 신설: EC-20 (미할당) — logging-off path 통합 테스트 통과
+
+- [ ] **TODO-2 (P2, Task 6 Step 3a API alignment)**: logger 테스트의 API를 현 코드베이스에 맞추기
+  - 현상: Step 3a가 `new SessionLogger(dir, 'run-1')` + `path.join(dir, 'events.jsonl')`을 사용하지만, 실제 `src/logger.ts`는 `createSessionLogger(enabled, runId, harnessDir, options)` → `FileSessionLogger`를 export하고, events.jsonl은 `sessionsRoot/<repoKey>/<runId>/events.jsonl` 위치에 생성된다 (`tests/logger.test.ts` 참고).
+  - 작업: Step 3a 샘플 코드를 `createSessionLogger(true, 'run-1', harnessDir, { sessionsRoot: dir })` 또는 `new FileSessionLogger('run-1', harnessDir, { sessionsRoot: dir })`로 교체하고 `computeRepoKey`로 실제 경로 계산.
+  - 위치: Task 6 Step 3a 샘플 코드 수정
+  - 참고: 구현자는 `tests/logger.test.ts`의 기존 패턴을 따를 것.
+
+위 2 개는 Phase 5 착수 전 사전 수정 대상이지만, 구현 중 해당 지점에 도달할 때 같이 처리하는 편이 마찰이 적다. Phase 7 eval gate에서 Codex가 다시 지적하면 그 시점에 강제 반영.
+
+### Eval gate round-6 deferred (user override 2026-04-18)
+
+사용자가 "option B: P1-1만 fix, EC-16a는 defer하고 merge 준비"로 지시 (2026-04-18). eval gate round-6의 남은 P1 하나는 다음 작업으로 이관.
+
+- [ ] **TODO-3 (P1 → deferred by user override)**: EC-16a authoritative inner.ts flow test
+  - 현상: 현 테스트는 source-level 순서 grep + helper-level 재연(replay). Codex는 `runInnerCommand`(또는 equivalent) 진입부터 `promptModelConfig` 호출 → `state.phasePresets` 대입 → `invalidatePhaseSessionsOnPresetChange` 호출까지 **실제 인라인 플로우 실행**을 요구.
+  - 비용 이유로 defer: 해당 경로는 tmux 세션, `InputManager`, `SessionLogger` 등을 초기화하며 heavy mock이 필요. 기존 커버리지(source grep + helper behavioral + 6 integration scenarios)가 실무적 회귀 보호는 충분하다는 판단.
+  - 반영 트리거: Phase 7 재실행 또는 후속 PR에서 `tests/integration/inner-preset-change.test.ts` 작성 시 함께 해결.
+
+- [x] **TODO-4 (P2 resolved in same commit)**: sessionId trim-non-empty guard at persist + hydration sites
+  - Round-3/5/6에서 P2로 반복 등장 → round-6 P1-1 fix와 함께 해소.
+  - 변경: `src/phases/gate.ts` hydration gate(§4.7 B) + persist site(§4.4 Step 7) 모두 `typeof id === 'string' && id.trim().length > 0` 검증. 회귀 테스트 `§4.1 rejects whitespace-only codexSessionId at persist site` 추가.
+
+---
+
 ## Eval Checklist
 
 각 항목은 실행 가능한 커맨드와 pass 조건을 갖는다. `harness-verify.sh`가 이 체크리스트를 소비한다.
@@ -1867,7 +2300,7 @@ git add -u && git commit -m "chore: lint fixes for codex session resume"
 - [ ] **EC-1**: `pnpm -s tsc --noEmit` exit 0
   - Pass: stdout 비어있음 + exit 0
 - [ ] **EC-2**: `pnpm -s vitest run tests/state-invalidation.test.ts` all passed
-  - Pass: summary `Tests  6 passed (6)` 이상
+  - Pass: summary에 fail 0 (Tests ≥5 passed — 현 구현은 5 시나리오: preset-change 3종 + jump 2종)
 - [ ] **EC-3**: `pnpm -s vitest run tests/context/assembler-resume.test.ts` all passed
   - Pass: summary에 fail 0
 - [ ] **EC-4**: `pnpm -s vitest run tests/runners/codex-resume.test.ts` all passed
@@ -1880,8 +2313,10 @@ git add -u && git commit -m "chore: lint fixes for codex session resume"
   - Pass: total tests 이전 수 이상 + fail 0
 - [ ] **EC-8**: `pnpm -s lint` exit 0
   - Pass: stdout에 error 0
-- [ ] **EC-9**: Spec 링크 검증 — plan 상단 "관련 문서" spec 경로 존재
-  - Check: `test -f docs/specs/2026-04-18-codex-session-resume-design.md`
+- [ ] **EC-9**: Task 0 pilot 결과가 spec §9에 모두 기록됨
+  - Command: `grep -c "pilot 결과 (2026-04-18)" docs/specs/2026-04-18-codex-session-resume-design.md`
+  - Pass: 출력값 ≥ 3 (§9의 세 open question Q#1/Q#2/Q#3 각각에 pilot 결과 서브-bullet이 존재). 실패하면 Task 0이 skip된 것으로 간주하고 gate eval에서 반영.
+  - 부가 확인: `test -f docs/specs/2026-04-18-codex-session-resume-design.md` (링크 경로)
 - [ ] **EC-10**: State migration 호환성 — legacy state.json이 깨지지 않음
   - Command: `pnpm -s vitest run tests/state.test.ts -t "migrateState"` all passed
 - [ ] **EC-11**: `grep -r "phaseCodexSessions" src/ | wc -l`가 4 이상
@@ -1890,6 +2325,20 @@ git add -u && git commit -m "chore: lint fixes for codex session resume"
   - Pass: state.ts (정의 2) + inner.ts (2 호출) + signal.ts (1 호출) = 5+
 - [ ] **EC-13**: resume-sensitive 코드 경로 존재 확인
   - Check: `grep -l "resume" src/runners/codex.ts`와 `grep -l "buildFreshPromptOnFallback" src/phases/gate.ts` 각각 hit
+- [ ] **EC-14**: `pnpm -s vitest run tests/state.test.ts -t "phaseCodexSessions survives"` all passed
+  - Pass: §5 graceful-resume persistence round-trip + in-flight crash invariant 테스트 통과 (fail 0)
+- [ ] **EC-15**: `pnpm -s vitest run tests/integration/codex-session-resume.test.ts -t "persisted session drives resume"` all passed
+  - Pass: §5 `harness resume` end-to-end path가 저장된 sessionId로 resume 경로를 탐
+- [ ] **EC-16**: `pnpm -s vitest run tests/commands/inner.test.ts tests/signal.test.ts` all passed
+  - Pass: §4.8/§4.9 authoritative mutation sites(inner.ts, signal.ts)의 behavioral test가 통과 — 단순 presence grep을 넘어 "preset 변경/jump 후 세션·sidecar가 실제로 무효화되는지" 회귀 방지
+- [ ] **EC-16a**: `pnpm -s vitest run tests/commands/inner.test.ts -t "preset change via promptModelConfig"` all passed
+  - Pass: §4.8 authoritative wiring 전용 behavioral test — `promptModelConfig` 이후 바뀐 phase의 세션 null화, replay sidecar 삭제, feedback 파일 보존이 실제로 일어남을 증명
+- [ ] **EC-17**: `pnpm -s vitest run tests/phases/runner.test.ts -t "resumedFrom|resumeFallback"` all passed
+  - Pass: §4.6 로그 필드(`resumedFrom`, `resumeFallback`)가 fresh/successful-resume/fallback/error 네 경로에서 runner dispatch payload에 정확히 포함됨을 회귀 방지. fail 0
+- [ ] **EC-18**: `pnpm -s vitest run tests/logger.test.ts -t "resume log fields"` all passed
+  - Pass: 실제 `SessionLogger`가 `events.jsonl`로 직렬화한 JSON line에 `resumedFrom`/`resumeFallback` 필드가 존재 (mocked logger 경로를 넘어 wire format 보장). fail 0
+- [ ] **EC-19**: `pnpm -s vitest run tests/phases/gate-resume.test.ts -t "sidecar replay compatibility gate"` all passed
+  - Pass: §4.7 replay compat gate의 4 시나리오(compatible codex hydrate / mismatched sourcePreset skip / legacy metadata skip / claude runner replay) 전부 통과
 
 ### Spec traceability (spec 요구사항 → 구현 태스크 매핑)
 
@@ -1900,11 +2349,12 @@ git add -u && git commit -m "chore: lint fixes for codex session resume"
 | §4.3 Resume 프롬프트 Variant A/B | `assembleGateResumePrompt` | Task 3 | EC-3 |
 | §4.4 Control flow | resume dispatch, stillActivePhase | Task 5 | EC-5, EC-6 |
 | §4.5 Fallback | session_missing 감지 + closure | Task 4, 5 | EC-4, EC-6 |
-| §4.6 Logging | resumedFrom/resumeFallback 필드 | Task 1, 6 | EC-1, EC-7 |
-| §4.7 Sidecar replay compat gate | replay-level + hydration-level | Task 5 | EC-5 |
-| §4.8 Preset 변경 invalidation | helper + mutation sites | Task 2, 7 | EC-2, EC-12 |
-| §4.9 Jump invalidation | helper + SIGUSR1 + consumePendingAction | Task 2, 7 | EC-2, EC-12 |
+| §4.6 Logging | resumedFrom/resumeFallback 필드 + 이벤트 방출 + wire format 직렬화 | Task 1, 6 | EC-1, EC-7, **EC-17**, **EC-18** |
+| §4.7 Sidecar replay compat gate | replay-level + hydration-level (4 scenarios: codex-compat/mismatch/legacy/claude) | Task 5 | EC-5, **EC-19** |
+| §4.8 Preset 변경 invalidation | helper + inner.ts mutation site (behavioral test) | Task 2, 7 | EC-2, **EC-16**, EC-12 |
+| §4.9 Jump invalidation | helper + SIGUSR1 + consumePendingAction (behavioral test) | Task 2, 7 | EC-2, **EC-16**, EC-12 |
 | §4.10 Verdict redirect guard | runner.ts 공통 guard | Task 6 | EC-7 |
+| §5 Harness resume / 크래시 복구 | state round-trip persist, in-flight crash invariant, persisted-id resume dispatch | Task 1, 2, 8 | **EC-14, EC-15** |
 | §9 Open questions | pilot 결과 spec 기록 | Task 0 | EC-9 |
 
 ### Subjective criteria (리뷰어 판단)

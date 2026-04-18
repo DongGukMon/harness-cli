@@ -21,6 +21,14 @@ export interface Artifacts {
   evalReport: string;
 }
 
+export interface GateSessionInfo {
+  sessionId: string;
+  runner: 'claude' | 'codex';
+  model: string;
+  effort: string;
+  lastOutcome: 'approve' | 'reject' | 'error';
+}
+
 export interface HarnessState {
   runId: string;
   currentPhase: number; // 1-7 or 8 (terminal sentinel)
@@ -47,6 +55,8 @@ export interface HarnessState {
   phaseAttemptId: Record<string, string | null>; // keys "1","3","5" — UUID v4
   phasePresets: Record<string, string>;         // keys "1"-"7" (excl 6), values = preset ID
   phaseReopenFlags: Record<string, boolean>;    // keys "1","3","5"
+  // Per-phase Codex session resume (§4.1 of spec)
+  phaseCodexSessions: Record<'2' | '4' | '7', GateSessionInfo | null>;
   lastWorkspacePid: number | null;
   lastWorkspacePidStartTime: number | null;
   tmuxSession: string;
@@ -84,6 +94,8 @@ export interface GateResult {
   durationMs?: number;
   tokensTotal?: number;
   codexSessionId?: string;
+  // Preset lineage at write time — used by sidecar replay compatibility gate (§4.7)
+  sourcePreset?: { model: string; effort: string };
 }
 
 export interface VerifyResult {
@@ -106,6 +118,11 @@ export interface GateOutcome {
   tokensTotal?: number;
   codexSessionId?: string;
   recoveredFromSidecar?: boolean;
+  // Preset lineage at write time (§4.7 replay hydration)
+  sourcePreset?: { model: string; effort: string };
+  // Session resume metadata (§4.6)
+  resumedFrom?: string | null;
+  resumeFallback?: boolean;
 }
 
 export interface GateError {
@@ -120,6 +137,11 @@ export interface GateError {
   tokensTotal?: number;
   codexSessionId?: string;
   recoveredFromSidecar?: boolean;
+  // Preset lineage at write time (§4.7 replay hydration)
+  sourcePreset?: { model: string; effort: string };
+  // Session resume metadata (§4.6)
+  resumedFrom?: string | null;
+  resumeFallback?: boolean;
 }
 
 export type GatePhaseResult = GateOutcome | GateError;
@@ -162,6 +184,8 @@ export type LogEvent =
       promptBytes?: number;
       codexSessionId?: string;
       recoveredFromSidecar?: boolean;
+      resumedFrom?: string | null;
+      resumeFallback?: boolean;
     })
   | (LogEventBase & {
       event: 'gate_error';
@@ -171,7 +195,11 @@ export type LogEvent =
       error: string;
       exitCode?: number;
       durationMs?: number;
+      tokensTotal?: number;
+      codexSessionId?: string;
       recoveredFromSidecar?: boolean;
+      resumedFrom?: string | null;
+      resumeFallback?: boolean;
     })
   | (LogEventBase & { event: 'gate_retry'; phase: number; retryIndex: number; retryCount: number; retryLimit: number; feedbackPath: string; feedbackBytes: number; feedbackPreview: string })
   | (LogEventBase & { event: 'escalation'; phase: number; reason: 'gate-retry-limit' | 'gate-error' | 'verify-limit' | 'verify-error'; userChoice?: 'C' | 'S' | 'Q' | 'R' })
