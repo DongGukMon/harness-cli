@@ -206,7 +206,7 @@ describe('preparePhase — phaseAttemptId generation', () => {
     );
   });
 
-  it('generates a different attemptId on each call (no reuse)', () => {
+  it('preserves pre-set phaseAttemptId on subsequent calls (respects caller-assigned ID)', () => {
     const runDir = makeTmpDir();
     const harnessDir = makeTmpDir();
     const cwd = makeTmpDir();
@@ -214,10 +214,12 @@ describe('preparePhase — phaseAttemptId generation', () => {
     const state = makeState();
     preparePhase(1, state, harnessDir, runDir, cwd);
     const firstId = state.phaseAttemptId['1'];
+    // Second call: phaseAttemptId already set, so preparePhase preserves it
     preparePhase(1, state, harnessDir, runDir, cwd);
     const secondId = state.phaseAttemptId['1'];
 
-    expect(firstId).not.toBe(secondId);
+    expect(firstId).toBeDefined();
+    expect(firstId).toBe(secondId); // preserved, not regenerated
   });
 
   it('preserves phaseAttemptId for other phases when setting Phase 3', () => {
@@ -577,7 +579,7 @@ describe('runInteractivePhase — advisor reminder fires before sendKeysToPane',
     vi.mocked(sendKeysToPane).mockClear();
 
     // Run; it will resolve as 'failed' (no sentinel, PID dies immediately) — that's fine
-    await runInteractivePhase(1, state, harnessDir, runDir, repoDir);
+    await runInteractivePhase(1, state, harnessDir, runDir, repoDir, 'test-attempt-id');
 
     const reminderOrder = vi.mocked(printAdvisorReminder).mock.invocationCallOrder[0];
     // sendKeysToPane is called twice: C-c pre-clear, then the actual command
@@ -600,7 +602,7 @@ describe('runInteractivePhase — advisor reminder fires before sendKeysToPane',
 
     vi.mocked(sendKeysToPane).mockClear();
 
-    await runInteractivePhase(1, state, harnessDir, runDir, repoDir);
+    await runInteractivePhase(1, state, harnessDir, runDir, repoDir, 'test-attempt-id');
 
     // The second call is the actual Claude command (first call is C-c pre-clear)
     const calls = vi.mocked(sendKeysToPane).mock.calls;

@@ -15,6 +15,7 @@ export interface StartOptions {
   requireClean?: boolean;
   auto?: boolean;
   root?: string;
+  enableLogging?: boolean;
 }
 
 export async function startCommand(task: string | undefined, options: StartOptions = {}): Promise<void> {
@@ -101,7 +102,7 @@ export async function startCommand(task: string | undefined, options: StartOptio
     }
 
     // 12. Create initial state
-    const state = createInitialState(runId, normalizedTask, baseCommit, options.auto ?? false);
+    const state = createInitialState(runId, normalizedTask, baseCommit, options.auto ?? false, options.enableLogging ?? false);
 
     // 13. Save task.md (needed before Phase 1 spawn)
     try {

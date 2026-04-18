@@ -2,8 +2,13 @@ import { describe, it, expect, afterEach, vi } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { parseVerdict, checkGateSidecars, buildGateResult } from '../../src/phases/gate.js';
+import { parseVerdict, checkGateSidecars, buildGateResult, runGatePhase } from '../../src/phases/gate.js';
 import type { GateResult } from '../../src/types.js';
+
+// ─── module mocks (hoisted) ──────────────────────────────────────────────────
+vi.mock('../../src/runners/codex.js', () => ({ runCodexGate: vi.fn() }));
+vi.mock('../../src/runners/claude.js', () => ({ runClaudeGate: vi.fn() }));
+vi.mock('../../src/context/assembler.js', () => ({ assembleGatePrompt: vi.fn() }));
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
@@ -310,5 +315,134 @@ APPROVE
     if (result.type === 'error') {
       expect(result.error).toMatch(/verdict/i);
     }
+  });
+});
+
+// ─── checkGateSidecars — legacy vs extended sidecar ──────────────────────────
+
+describe('checkGateSidecars — legacy vs extended sidecar', () => {
+  it('still replays legacy sidecar (no runner field); metadata fields are undefined', () => {
+    const runDir = makeTmpDir();
+    fs.writeFileSync(
+      path.join(runDir, 'gate-2-result.json'),
+      JSON.stringify({ exitCode: 0, timestamp: 1700000000 }),
+    );
+    fs.writeFileSync(path.join(runDir, 'gate-2-raw.txt'), '## Verdict\nAPPROVE\n');
+
+    const result = checkGateSidecars(runDir, 2);
+    expect(result).not.toBeNull();
+    expect(result?.type).toBe('verdict');
+    expect((result as any).runner).toBeUndefined();
+    expect((result as any).promptBytes).toBeUndefined();
+    expect((result as any).durationMs).toBeUndefined();
+    expect((result as any).tokensTotal).toBeUndefined();
+  });
+
+  it('hydrates metadata from extended sidecar', () => {
+    const runDir = makeTmpDir();
+    const ext = {
+      exitCode: 0,
+      timestamp: 1700000000,
+      runner: 'codex',
+      promptBytes: 1000,
+      durationMs: 30000,
+      tokensTotal: 45000,
+    };
+    fs.writeFileSync(path.join(runDir, 'gate-2-result.json'), JSON.stringify(ext));
+    fs.writeFileSync(path.join(runDir, 'gate-2-raw.txt'), '## Verdict\nAPPROVE\n');
+
+    const result = checkGateSidecars(runDir, 2);
+    expect(result?.type).toBe('verdict');
+    expect((result as any).runner).toBe('codex');
+    expect((result as any).tokensTotal).toBe(45000);
+    expect((result as any).promptBytes).toBe(1000);
+    expect((result as any).durationMs).toBe(30000);
+  });
+
+  it('hydrates metadata on error sidecar replay (non-zero exitCode)', () => {
+    const runDir = makeTmpDir();
+    const ext = {
+      exitCode: 1,
+      timestamp: 1700000000,
+      runner: 'claude',
+      promptBytes: 500,
+      durationMs: 5000,
+    };
+    fs.writeFileSync(path.join(runDir, 'gate-4-result.json'), JSON.stringify(ext));
+    fs.writeFileSync(path.join(runDir, 'gate-4-raw.txt'), 'error output');
+
+    const result = checkGateSidecars(runDir, 4);
+    expect(result?.type).toBe('error');
+    expect((result as any).runner).toBe('claude');
+    expect((result as any).promptBytes).toBe(500);
+    expect((result as any).exitCode).toBe(1);
+  });
+});
+
+// ─── runGatePhase — one-shot sidecar replay ───────────────────────────────────
+
+describe('runGatePhase — one-shot sidecar replay', () => {
+  it('first call with allowSidecarReplay.value=true replays sidecar and consumes flag', async () => {
+    const { assembleGatePrompt } = await import('../../src/context/assembler.js');
+    // assembleGatePrompt mock not needed for replay path (sidecar exists before assembler is called)
+
+    const runDir = makeTmpDir();
+    fs.writeFileSync(
+      path.join(runDir, 'gate-2-result.json'),
+      JSON.stringify({
+        exitCode: 0,
+        timestamp: Date.now(),
+        runner: 'codex',
+        promptBytes: 1000,
+        durationMs: 10000,
+      }),
+    );
+    fs.writeFileSync(path.join(runDir, 'gate-2-raw.txt'), '## Verdict\nAPPROVE\n');
+
+    const state = {
+      phasePresets: { '2': 'codex-high' },
+      gateRetries: { '2': 0 },
+    } as any;
+
+    const flag = { value: true };
+    const result = await runGatePhase(2, state, '/fake-harness', runDir, '/cwd', flag);
+
+    expect(flag.value).toBe(false); // consumed
+    expect((result as any).recoveredFromSidecar).toBe(true);
+    expect(result.type).toBe('verdict');
+    void assembleGatePrompt; // silence unused import warning
+  });
+
+  it('with flag.value=false: skips replay, runs runner (no infinite retry on REJECT sidecar)', async () => {
+    const { assembleGatePrompt: mockAssembler } = await import('../../src/context/assembler.js');
+    const { runCodexGate: mockCodex } = await import('../../src/runners/codex.js');
+
+    vi.mocked(mockAssembler).mockReturnValue('mock prompt text');
+    vi.mocked(mockCodex).mockResolvedValue({
+      type: 'verdict',
+      verdict: 'APPROVE',
+      comments: '',
+      rawOutput: '## Verdict\nAPPROVE\n',
+    } as any);
+
+    const runDir = makeTmpDir();
+    // Even though sidecar exists (and would replay), flag=false skips it
+    fs.writeFileSync(
+      path.join(runDir, 'gate-2-result.json'),
+      JSON.stringify({ exitCode: 0, timestamp: Date.now(), runner: 'codex', promptBytes: 1000, durationMs: 10000 }),
+    );
+    fs.writeFileSync(path.join(runDir, 'gate-2-raw.txt'), '## Verdict\nAPPROVE\n');
+
+    const state = {
+      phasePresets: { '2': 'codex-high' },
+      gateRetries: { '2': 0 },
+    } as any;
+
+    const flag = { value: false };
+    const result = await runGatePhase(2, state, '/fake-harness', runDir, '/cwd', flag);
+
+    expect(vi.mocked(mockCodex)).toHaveBeenCalledTimes(1);
+    expect((result as any).recoveredFromSidecar).toBeFalsy();
+    expect(result.type).toBe('verdict');
   });
 });

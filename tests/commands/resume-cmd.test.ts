@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { execSync } from 'child_process';
-import { mkdirSync, writeFileSync } from 'fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { createTestRepo } from '../helpers/test-repo.js';
 import { resumeCommand } from '../../src/commands/resume.js';
@@ -198,5 +198,33 @@ describe('resumeCommand', () => {
     expect(vi.mocked(lock.pollForHandoffComplete)).toHaveBeenCalled();
     expect(vi.mocked(terminal.openTerminalWindow)).toHaveBeenCalledWith('harness-test');
     expect(vi.mocked(tmux.createSession)).not.toHaveBeenCalled();
+  });
+
+  describe('resumeCommand — loggingEnabled inheritance', () => {
+    it('resume preserves state.loggingEnabled=true from original start', async () => {
+      const { harnessDir, runId, runDir } = setupRun(repo, { loggingEnabled: true });
+      setCurrentRun(harnessDir, runId);
+
+      const tmux = await import('../../src/tmux.js');
+      vi.mocked(tmux.sessionExists).mockReturnValue(false);
+
+      await resumeCommand(runId, { root: repo.path });
+
+      const state = JSON.parse(readFileSync(join(runDir, 'state.json'), 'utf-8'));
+      expect(state.loggingEnabled).toBe(true);
+    });
+
+    it('resume defaults to false when state has loggingEnabled=false', async () => {
+      const { harnessDir, runId, runDir } = setupRun(repo, { loggingEnabled: false });
+      setCurrentRun(harnessDir, runId);
+
+      const tmux = await import('../../src/tmux.js');
+      vi.mocked(tmux.sessionExists).mockReturnValue(false);
+
+      await resumeCommand(runId, { root: repo.path });
+
+      const state = JSON.parse(readFileSync(join(runDir, 'state.json'), 'utf-8'));
+      expect(state.loggingEnabled).toBe(false);
+    });
   });
 });

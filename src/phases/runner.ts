@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
-import type { HarnessState, PendingAction, PhaseNumber, InteractivePhase, GatePhase } from '../types.js';
+import { randomUUID } from 'crypto';
+import type { HarnessState, PendingAction, PhaseNumber, InteractivePhase, GatePhase, SessionLogger } from '../types.js';
 import type { InputManager } from '../input.js';
 import {
   GATE_RETRY_LIMIT,
@@ -13,7 +14,7 @@ import { writeState } from '../state.js';
 import { getHead } from '../git.js';
 import { normalizeArtifactCommit } from '../artifact.js';
 import { runInteractivePhase } from './interactive.js';
-import { runGatePhase, checkGateSidecars } from './gate.js';
+import { runGatePhase } from './gate.js';
 import { runVerifyPhase } from './verify.js';
 import {
   promptChoice,
@@ -162,18 +163,20 @@ export async function runPhaseLoop(
   runDir: string,
   cwd: string,
   inputManager: InputManager,
+  logger: SessionLogger,
+  sidecarReplayAllowed: { value: boolean },
 ): Promise<void> {
   while (state.currentPhase < TERMINAL_PHASE) {
     const phase = state.currentPhase;
     renderControlPanel(state);
 
     if (isInteractivePhase(phase)) {
-      await handleInteractivePhase(phase, state, harnessDir, runDir, cwd);
+      await handleInteractivePhase(phase, state, harnessDir, runDir, cwd, logger);
       // If state changed to paused or phase failed, check if we should stop
       if (state.status === 'paused') return;
       if (state.phases[String(phase)] === 'failed') return;
     } else if (isGatePhase(phase)) {
-      await handleGatePhase(phase as GatePhase, state, harnessDir, runDir, cwd, inputManager);
+      await handleGatePhase(phase as GatePhase, state, harnessDir, runDir, cwd, inputManager, logger, sidecarReplayAllowed);
       if (state.status === 'paused') return;
       if (state.currentPhase === TERMINAL_PHASE) {
         // Completed
@@ -182,9 +185,11 @@ export async function runPhaseLoop(
         return;
       }
     } else if (isVerifyPhase(phase)) {
-      await handleVerifyPhase(state, harnessDir, runDir, cwd, inputManager);
+      await handleVerifyPhase(state, harnessDir, runDir, cwd, inputManager, logger);
       if (state.status === 'paused') return;
     }
+
+    logger.finalizeSummary(state);
   }
 
   // currentPhase === TERMINAL_PHASE
@@ -194,87 +199,174 @@ export async function runPhaseLoop(
 
 // ─── Interactive phase handler ─────────────────────────────────────────────────
 
-async function handleInteractivePhase(
+export async function handleInteractivePhase(
   phase: InteractivePhase,
   state: HarnessState,
   harnessDir: string,
   runDir: string,
-  cwd: string
+  cwd: string,
+  logger: SessionLogger,
 ): Promise<void> {
   state.phases[String(phase)] = 'in_progress';
   writeState(runDir, state);
 
-  const result = await runInteractivePhase(phase, state, harnessDir, runDir, cwd);
+  const attemptId = randomUUID();
+  const phaseStartTs = Date.now();
 
-  if (result.status === 'completed') {
-    // Normalize artifact commits for Phase 1/3. Failure → error (not completed).
-    if (phase === 1 || phase === 3) {
-      try {
-        normalizeInteractiveArtifacts(phase, state, cwd);
-      } catch (err) {
-        printError(`Phase ${phase} artifact commit failed: ${(err as Error).message}`);
-        state.phases[String(phase)] = 'error';
-        savePausedAtHead(state, cwd);
-        writeState(runDir, state);
-        return;
-      }
-    }
+  const isReopen = state.phaseReopenFlags[String(phase)] ?? false;
+  const reopenFromGate = isReopen ? (state.phaseReopenSource[String(phase)] ?? undefined) : undefined;
 
-    // Update commit anchors (only AFTER commit succeeds)
-    try {
-      const head = getHead(cwd);
-      if (phase === 1) state.specCommit = head;
-      if (phase === 3) state.planCommit = head;
-      if (phase === 5) state.implCommit = head;
-    } catch {
-      // getHead unavailable — leave anchor as-is
-    }
+  logger.logEvent({ event: 'phase_start', phase, attemptId, reopenFromGate });
 
-    // Clear pendingAction now that phase succeeded
-    state.pendingAction = null;
-    state.phases[String(phase)] = 'completed';
-
-    // Advance to next phase
-    const next = nextPhase(phase);
-    state.currentPhase = next;
-
-    renderControlPanel(state);
+  // Clear the logging-only reopen source (keep phaseReopenFlags for runInteractivePhase)
+  if (state.phaseReopenSource[String(phase)] !== null) {
+    state.phaseReopenSource[String(phase)] = null;
     writeState(runDir, state);
-  } else {
-    // Check if SIGUSR1 already redirected to a different phase
+  }
+
+  try {
+    const result = await runInteractivePhase(phase, state, harnessDir, runDir, cwd, attemptId);
+
+    // Check for control-signal redirect BEFORE branching on result.status.
+    // SIGUSR1 skip/jump can mutate state.currentPhase mid-run regardless of
+    // whether runInteractivePhase itself returns completed or failed.
     if (state.currentPhase !== phase) {
-      // Signal handler changed currentPhase — don't overwrite, just continue loop
       printInfo(`Phase ${phase} interrupted by control signal → phase ${state.currentPhase}`);
       renderControlPanel(state);
-      return; // Return to runPhaseLoop which will pick up the new currentPhase
+      logger.logEvent({
+        event: 'phase_end',
+        phase,
+        attemptId,
+        status: 'failed',
+        durationMs: Date.now() - phaseStartTs,
+        details: { reason: 'redirected' },
+      });
+      return;
     }
-    // Normal failure
-    state.phases[String(phase)] = 'failed';
-    savePausedAtHead(state, cwd);
-    printError(`Phase ${phase} failed`);
-    writeState(runDir, state);
+
+    if (result.status === 'completed') {
+      // Normalize artifact commits for Phase 1/3. Failure → error (not completed).
+      if (phase === 1 || phase === 3) {
+        try {
+          normalizeInteractiveArtifacts(phase, state, cwd);
+        } catch (err) {
+          printError(`Phase ${phase} artifact commit failed: ${(err as Error).message}`);
+          state.phases[String(phase)] = 'error';
+          savePausedAtHead(state, cwd);
+          writeState(runDir, state);
+          logger.logEvent({
+            event: 'phase_end',
+            phase,
+            attemptId,
+            status: 'failed',
+            durationMs: Date.now() - phaseStartTs,
+          });
+          return;
+        }
+      }
+
+      // Update commit anchors (only AFTER commit succeeds)
+      try {
+        const head = getHead(cwd);
+        if (phase === 1) state.specCommit = head;
+        if (phase === 3) state.planCommit = head;
+        if (phase === 5) state.implCommit = head;
+      } catch {
+        // getHead unavailable — leave anchor as-is
+      }
+
+      // Clear pendingAction now that phase succeeded
+      state.pendingAction = null;
+      state.phases[String(phase)] = 'completed';
+
+      // Advance to next phase
+      const next = nextPhase(phase);
+      state.currentPhase = next;
+
+      renderControlPanel(state);
+      writeState(runDir, state);
+
+      logger.logEvent({
+        event: 'phase_end',
+        phase,
+        attemptId,
+        status: 'completed',
+        durationMs: Date.now() - phaseStartTs,
+      });
+
+      // Anomaly: phase 5 completed but reopen flag still set
+      if (phase === 5 && state.phaseReopenFlags['5'] === true) {
+        logger.logEvent({
+          event: 'state_anomaly',
+          kind: 'phase_reopen_flag_stuck',
+          details: { phase: 5 },
+        });
+      }
+    } else {
+      // Normal failure (redirect case already handled above)
+      state.phases[String(phase)] = 'failed';
+      savePausedAtHead(state, cwd);
+      printError(`Phase ${phase} failed`);
+      writeState(runDir, state);
+      logger.logEvent({
+        event: 'phase_end',
+        phase,
+        attemptId,
+        status: 'failed',
+        durationMs: Date.now() - phaseStartTs,
+      });
+    }
+  } catch (err) {
+    logger.logEvent({
+      event: 'phase_end',
+      phase,
+      attemptId,
+      status: 'failed',
+      durationMs: Date.now() - phaseStartTs,
+    });
+    throw err;
   }
 }
 
 // ─── Gate phase handler ────────────────────────────────────────────────────────
 
-async function handleGatePhase(
+export async function handleGatePhase(
   phase: GatePhase,
   state: HarnessState,
   harnessDir: string,
   runDir: string,
   cwd: string,
   inputManager: InputManager,
+  logger: SessionLogger,
+  sidecarReplayAllowed: { value: boolean },
 ): Promise<void> {
   state.phases[String(phase)] = 'in_progress';
   writeState(runDir, state);
 
-  void checkGateSidecars; // imported for potential direct use elsewhere
+  // Capture retryIndex BEFORE any mutation (spec §5.3)
+  const retryIndex = state.gateRetries[String(phase)] ?? 0;
+
   printInfo(`Codex 리뷰 진행 중... (최대 ${Math.round(GATE_TIMEOUT_MS / 1000)}초 소요)`);
-  const result = await runGatePhase(phase, state, harnessDir, runDir, cwd);
+  const result = await runGatePhase(phase, state, harnessDir, runDir, cwd, sidecarReplayAllowed);
 
   if (result.type === 'verdict') {
     if (result.verdict === 'APPROVE') {
+      // Emit gate_verdict (skip if legacy sidecar replay with runner undefined)
+      if (result.runner) {
+        logger.logEvent({
+          event: 'gate_verdict',
+          phase,
+          retryIndex,
+          runner: result.runner,
+          verdict: 'APPROVE',
+          durationMs: result.durationMs,
+          tokensTotal: result.tokensTotal,
+          promptBytes: result.promptBytes,
+          codexSessionId: result.codexSessionId,
+          recoveredFromSidecar: result.recoveredFromSidecar ?? false,
+        });
+      }
+
       state.phases[String(phase)] = 'completed';
 
       // Post-success sidecar cleanup
@@ -292,9 +384,32 @@ async function handleGatePhase(
         renderControlPanel(state);
         writeState(runDir, state);
       }
+
+      // State anomaly check: pendingAction should be null after APPROVE
+      if (state.pendingAction !== null) {
+        logger.logEvent({
+          event: 'state_anomaly',
+          kind: 'pending_action_stale_after_approve',
+          details: { phase, pendingActionType: (state.pendingAction as PendingAction).type },
+        });
+      }
     } else {
-      // REJECT
-      await handleGateReject(phase, result.comments, state, harnessDir, runDir, cwd, inputManager);
+      // REJECT — emit gate_verdict before dispatching
+      if (result.runner) {
+        logger.logEvent({
+          event: 'gate_verdict',
+          phase,
+          retryIndex,
+          runner: result.runner,
+          verdict: 'REJECT',
+          durationMs: result.durationMs,
+          tokensTotal: result.tokensTotal,
+          promptBytes: result.promptBytes,
+          codexSessionId: result.codexSessionId,
+          recoveredFromSidecar: result.recoveredFromSidecar ?? false,
+        });
+      }
+      await handleGateReject(phase, result.comments, retryIndex, state, harnessDir, runDir, cwd, inputManager, logger);
     }
   } else {
     // Error — but check if SIGUSR1 redirected first
@@ -303,23 +418,38 @@ async function handleGatePhase(
       renderControlPanel(state);
       return;
     }
-    await handleGateError(phase, result.error, state, runDir, cwd, inputManager);
+    // Emit gate_error (skip if legacy sidecar replay with runner undefined)
+    if (result.runner) {
+      logger.logEvent({
+        event: 'gate_error',
+        phase,
+        retryIndex,
+        runner: result.runner,
+        error: result.error,
+        exitCode: result.exitCode,
+        durationMs: result.durationMs,
+        recoveredFromSidecar: result.recoveredFromSidecar ?? false,
+      });
+    }
+    await handleGateError(phase, result.error, state, runDir, cwd, inputManager, logger);
   }
 }
 
-async function handleGateReject(
+export async function handleGateReject(
   phase: GatePhase,
   comments: string,
+  retryIndex: number,
   state: HarnessState,
   _harnessDir: string,
   runDir: string,
   cwd: string,
   inputManager: InputManager,
+  logger: SessionLogger,
 ): Promise<void> {
   state.phases[String(phase)] = 'pending';
 
-  // Increment retry counter
-  state.gateRetries[String(phase)] = (state.gateRetries[String(phase)] ?? 0) + 1;
+  // Increment retry counter AFTER capturing retryIndex (pre-mutation)
+  state.gateRetries[String(phase)] = retryIndex + 1;
 
   // Phase 7 special: reset verifyRetries
   if (phase === 7) {
@@ -336,14 +466,29 @@ async function handleGateReject(
 
   if (retryCount < GATE_RETRY_LIMIT || state.autoMode) {
     if (retryCount >= GATE_RETRY_LIMIT && state.autoMode) {
-      // Auto-mode force pass
-      await forcePassGate(phase, state, runDir, cwd);
+      // Auto-mode force pass (no gate_retry event — force_pass covers this path)
+      await forcePassGate(phase, state, runDir, cwd, 'auto', logger);
       return;
     }
 
     // Save feedback and reopen. For Phase 7 reject → Phase 5, include any existing
     // verify-feedback.md so Claude sees BOTH the eval gate feedback and prior verify failures.
     const feedbackPath = saveGateFeedback(runDir, phase, comments);
+    const feedbackBytes = fs.statSync(feedbackPath).size;
+    const feedbackPreview = comments.slice(0, 200);
+
+    // Emit gate_retry BEFORE state mutation (retryIndex is the just-failed attempt)
+    logger.logEvent({
+      event: 'gate_retry',
+      phase,
+      retryIndex,
+      retryCount: retryIndex + 1,
+      retryLimit: GATE_RETRY_LIMIT,
+      feedbackPath,
+      feedbackBytes,
+      feedbackPreview,
+    });
+
     const feedbackPaths: string[] = [feedbackPath];
     if (phase === 7) {
       const verifyFeedback = path.join(runDir, 'verify-feedback.md');
@@ -362,11 +507,12 @@ async function handleGateReject(
     state.pendingAction = pendingAction;
     state.phases[String(targetInteractive)] = 'pending';
     state.phaseReopenFlags[String(targetInteractive)] = true;
+    state.phaseReopenSource[String(targetInteractive)] = phase; // track triggering gate
     state.currentPhase = targetInteractive;
     writeState(runDir, state);
   } else {
     // Escalation
-    await handleGateEscalation(phase, comments, state, runDir, cwd, inputManager);
+    await handleGateEscalation(phase, comments, state, runDir, cwd, inputManager, logger);
   }
 }
 
@@ -377,6 +523,7 @@ export async function handleGateEscalation(
   runDir: string,
   cwd: string,
   inputManager: InputManager,
+  logger: SessionLogger,
 ): Promise<void> {
   printWarning(`Gate ${phase} retry limit reached (${GATE_RETRY_LIMIT})`);
 
@@ -389,6 +536,14 @@ export async function handleGateEscalation(
     ],
     inputManager,
   );
+
+  // Emit escalation event after userChoice is resolved (exactly 1 per path)
+  logger.logEvent({
+    event: 'escalation',
+    phase,
+    reason: 'gate-retry-limit',
+    userChoice: choice as 'C' | 'S' | 'Q',
+  });
 
   if (choice === 'C') {
     // Reset retries, reopen
@@ -405,11 +560,12 @@ export async function handleGateEscalation(
     };
     state.phases[String(targetInteractive)] = 'pending';
     state.phaseReopenFlags[String(targetInteractive)] = true;
+    state.phaseReopenSource[String(targetInteractive)] = phase; // track triggering gate
     state.currentPhase = targetInteractive;
     writeState(runDir, state);
   } else if (choice === 'S') {
-    // Force-pass (skip)
-    await forcePassGate(phase, state, runDir, cwd);
+    // Force-pass (skip) — user choice
+    await forcePassGate(phase, state, runDir, cwd, 'user', logger);
   } else {
     // Quit
     const targetInteractive = previousInteractivePhase(phase);
@@ -427,14 +583,19 @@ export async function handleGateEscalation(
   }
 }
 
-async function forcePassGate(
+export async function forcePassGate(
   phase: GatePhase,
   state: HarnessState,
   runDir: string,
-  cwd: string
+  cwd: string,
+  by: 'auto' | 'user',
+  logger: SessionLogger,
 ): Promise<void> {
   state.pendingAction = { type: 'skip_phase', targetPhase: phase as PhaseNumber, sourcePhase: null, feedbackPaths: [] };
   writeState(runDir, state);
+
+  // Emit force_pass as the sole terminal event for this path
+  logger.logEvent({ event: 'force_pass', phase, by });
 
   // Side effects: cleanup, advance
   deleteGateSidecars(runDir, phase);
@@ -454,13 +615,14 @@ async function forcePassGate(
   void cwd;
 }
 
-async function handleGateError(
+export async function handleGateError(
   phase: GatePhase,
   error: string,
   state: HarnessState,
   runDir: string,
   cwd: string,
   inputManager: InputManager,
+  logger: SessionLogger,
 ): Promise<void> {
   printError(`Gate ${phase} error: ${error}`);
 
@@ -474,13 +636,21 @@ async function handleGateError(
     inputManager,
   );
 
+  // Emit escalation event after userChoice is resolved (exactly 1 per path)
+  logger.logEvent({
+    event: 'escalation',
+    phase,
+    reason: 'gate-error',
+    userChoice: choice as 'R' | 'S' | 'Q',
+  });
+
   if (choice === 'R') {
     // Retry: leave phase as-is, the loop will re-enter handleGatePhase
     state.phases[String(phase)] = 'pending';
     writeState(runDir, state);
     // currentPhase stays the same — loop retries
   } else if (choice === 'S') {
-    await forcePassGate(phase, state, runDir, cwd);
+    await forcePassGate(phase, state, runDir, cwd, 'user', logger);
   } else {
     // Quit
     state.phases[String(phase)] = 'error';
@@ -499,17 +669,44 @@ async function handleGateError(
 
 // ─── Verify phase handler ──────────────────────────────────────────────────────
 
-async function handleVerifyPhase(
+export async function handleVerifyPhase(
   state: HarnessState,
   harnessDir: string,
   runDir: string,
   cwd: string,
   inputManager: InputManager,
+  logger: SessionLogger,
 ): Promise<void> {
+  const retryIndex = state.verifyRetries; // pre-mutation capture
+  const phaseStartTs = Date.now();
+
+  logger.logEvent({ event: 'phase_start', phase: 6, retryIndex });
+
   // Note: runVerifyPhase internally sets phase to 'in_progress' and calls writeState
-  const outcome = await runVerifyPhase(state, harnessDir, runDir, cwd);
+  let outcome: Awaited<ReturnType<typeof runVerifyPhase>>;
+  try {
+    outcome = await runVerifyPhase(state, harnessDir, runDir, cwd);
+  } catch (err) {
+    // throw path: emit phase_end + route to handleVerifyError (no rethrow)
+    logger.logEvent({
+      event: 'phase_end',
+      phase: 6,
+      status: 'failed',
+      durationMs: Date.now() - phaseStartTs,
+      details: { reason: 'verify_throw' },
+    });
+    state.phases['6'] = 'error';
+    writeState(runDir, state);
+    await handleVerifyError(undefined, state, harnessDir, runDir, cwd, inputManager, logger);
+    return; // no rethrow
+  }
+
+  const durationMs = Date.now() - phaseStartTs;
 
   if (outcome.type === 'pass') {
+    // Emit verify_result before commit attempt (runVerifyPhase did pass)
+    logger.logEvent({ event: 'verify_result', passed: true, retryIndex, durationMs });
+
     // Commit the eval report artifact (spec requires committed eval report before Phase 7)
     const evalReportPath = path.join(cwd, state.artifacts.evalReport);
     try {
@@ -525,6 +722,13 @@ async function handleVerifyPhase(
       state.pendingAction = null; // error state itself is recovery trigger
       savePausedAtHead(state, cwd);
       writeState(runDir, state);
+      logger.logEvent({
+        event: 'phase_end',
+        phase: 6,
+        status: 'failed',
+        durationMs: Date.now() - phaseStartTs,
+        details: { reason: 'eval_commit_failed' },
+      });
       return;
     }
 
@@ -548,26 +752,39 @@ async function handleVerifyPhase(
       fs.unlinkSync(path.join(runDir, 'verify-feedback.md'));
     } catch { /* best-effort: may not exist */ }
 
+    logger.logEvent({ event: 'phase_end', phase: 6, status: 'completed', durationMs });
     renderControlPanel(state);
   } else if (outcome.type === 'fail') {
-    await handleVerifyFail(outcome.feedbackPath, state, runDir, cwd, inputManager);
+    logger.logEvent({ event: 'verify_result', passed: false, retryIndex, durationMs });
+    logger.logEvent({ event: 'phase_end', phase: 6, status: 'failed', durationMs });
+    await handleVerifyFail(outcome.feedbackPath, state, runDir, cwd, inputManager, logger);
   } else {
     // error — but check if SIGUSR1 redirected first
     if (state.currentPhase !== 6) {
       printInfo(`Phase 6 interrupted by control signal → phase ${state.currentPhase}`);
+      logger.logEvent({
+        event: 'phase_end',
+        phase: 6,
+        status: 'failed',
+        durationMs,
+        details: { reason: 'redirected' },
+      });
       renderControlPanel(state);
       return;
     }
-    await handleVerifyError(outcome.errorPath, state, harnessDir, runDir, cwd, inputManager);
+    // error (non-throw): NO verify_result per spec — only phase_end
+    logger.logEvent({ event: 'phase_end', phase: 6, status: 'failed', durationMs });
+    await handleVerifyError(outcome.errorPath, state, harnessDir, runDir, cwd, inputManager, logger);
   }
 }
 
-async function handleVerifyFail(
+export async function handleVerifyFail(
   feedbackPath: string,
   state: HarnessState,
   runDir: string,
   cwd: string,
   inputManager: InputManager,
+  logger: SessionLogger,
 ): Promise<void> {
   state.verifyRetries += 1;
   const retryCount = state.verifyRetries;
@@ -577,7 +794,7 @@ async function handleVerifyFail(
   if (retryCount < VERIFY_RETRY_LIMIT || state.autoMode) {
     if (retryCount >= VERIFY_RETRY_LIMIT && state.autoMode) {
       // Auto-mode: skip verify
-      await forcePassVerify(state, runDir, cwd);
+      await forcePassVerify(state, runDir, cwd, 'auto', logger);
       return;
     }
 
@@ -593,6 +810,7 @@ async function handleVerifyFail(
     state.phases['5'] = 'pending';
     state.phases['6'] = 'pending';
     state.phaseReopenFlags['5'] = true;
+    state.phaseReopenSource['5'] = 6; // verify phase triggered reopen
     state.currentPhase = 5;
     writeState(runDir, state);
 
@@ -605,7 +823,7 @@ async function handleVerifyFail(
     } catch { /* ignore */ }
   } else {
     // Escalation
-    await handleVerifyEscalation(feedbackPath, state, runDir, cwd, inputManager);
+    await handleVerifyEscalation(feedbackPath, state, runDir, cwd, inputManager, logger);
   }
 }
 
@@ -615,6 +833,7 @@ export async function handleVerifyEscalation(
   runDir: string,
   cwd: string,
   inputManager: InputManager,
+  logger: SessionLogger,
 ): Promise<void> {
   printWarning(`Verify retry limit reached (${VERIFY_RETRY_LIMIT})`);
 
@@ -628,6 +847,14 @@ export async function handleVerifyEscalation(
     inputManager,
   );
 
+  // Emit escalation event after userChoice is resolved (exactly 1 per path)
+  logger.logEvent({
+    event: 'escalation',
+    phase: 6,
+    reason: 'verify-limit',
+    userChoice: choice as 'C' | 'S' | 'Q',
+  });
+
   if (choice === 'C') {
     state.verifyRetries = 0;
     state.pendingAction = {
@@ -639,6 +866,7 @@ export async function handleVerifyEscalation(
     state.phases['5'] = 'pending';
     state.phases['6'] = 'pending';
     state.phaseReopenFlags['5'] = true;
+    state.phaseReopenSource['5'] = 6; // verify escalation triggered reopen
     state.currentPhase = 5;
     writeState(runDir, state);
 
@@ -650,7 +878,7 @@ export async function handleVerifyEscalation(
       fs.unlinkSync(evalAbsPath);
     } catch { /* ignore */ }
   } else if (choice === 'S') {
-    await forcePassVerify(state, runDir, cwd);
+    await forcePassVerify(state, runDir, cwd, 'user', logger);
   } else {
     // Quit — verify-escalation uses show_escalation (per spec: only gate/verify error quit use show_verify_error)
     state.pendingAction = {
@@ -666,14 +894,19 @@ export async function handleVerifyEscalation(
   }
 }
 
-async function forcePassVerify(
+export async function forcePassVerify(
   state: HarnessState,
   runDir: string,
-  cwd: string
+  cwd: string,
+  by: 'auto' | 'user',
+  logger: SessionLogger,
 ): Promise<void> {
   // Atomic write with skip_phase pendingAction before side effects
   state.pendingAction = { type: 'skip_phase', targetPhase: 6, sourcePhase: null, feedbackPaths: [] };
   writeState(runDir, state);
+
+  // Emit force_pass as the sole terminal event for this path
+  logger.logEvent({ event: 'force_pass', phase: 6, by });
 
   // Write synthetic eval report
   writeSyntheticEvalReport(state.artifacts.evalReport, state.runId, cwd);
@@ -720,6 +953,7 @@ export async function handleVerifyError(
   runDir: string,
   cwd: string,
   inputManager: InputManager,
+  logger: SessionLogger,
 ): Promise<void> {
   const errorInfo = errorPath ? ` (see ${errorPath})` : '';
   printError(`Verify error${errorInfo}`);
@@ -732,6 +966,14 @@ export async function handleVerifyError(
     ],
     inputManager,
   );
+
+  // Emit escalation event after userChoice is resolved (exactly 1 per path)
+  logger.logEvent({
+    event: 'escalation',
+    phase: 6,
+    reason: 'verify-error',
+    userChoice: choice as 'R' | 'Q',
+  });
 
   if (choice === 'R') {
     // Retry: reset phase status, loop re-enters

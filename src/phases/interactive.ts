@@ -50,7 +50,9 @@ export function preparePhase(
     }
   }
 
-  state.phaseAttemptId = { ...state.phaseAttemptId, [String(phase)]: randomUUID() };
+  if (!state.phaseAttemptId[String(phase)]) {
+    state.phaseAttemptId = { ...state.phaseAttemptId, [String(phase)]: randomUUID() };
+  }
   state.phaseOpenedAt = {
     ...state.phaseOpenedAt,
     [String(phase)]: Math.floor(Date.now() / 1000) * 1000,
@@ -167,8 +169,13 @@ export async function runInteractivePhase(
   state: HarnessState,
   harnessDir: string,
   runDir: string,
-  cwd: string
-): Promise<InteractiveResult> {
+  cwd: string,
+  attemptId: string,
+): Promise<InteractiveResult & { attemptId: string }> {
+  // Pre-set attemptId before preparePhase so it can respect the caller-assigned ID
+  state.phaseAttemptId[String(phase)] = attemptId;
+  writeState(runDir, state);
+
   const isReopen = state.phaseReopenFlags[String(phase)] ?? false;
   const updatedState = preparePhase(phase, state, harnessDir, runDir, cwd, isReopen);
 
@@ -176,7 +183,7 @@ export async function runInteractivePhase(
   const presetId = updatedState.phasePresets[String(phase)];
   const preset = getPresetById(presetId);
   if (!preset) {
-    return { status: 'failed' };
+    return { status: 'failed', attemptId };
   }
 
   // Assemble prompt and write to file
@@ -193,10 +200,11 @@ export async function runInteractivePhase(
       phase, updatedState, preset, harnessDir, runDir, promptFile,
     );
     const sentinelPath = path.join(runDir, `phase-${phase}.done`);
-    const attemptId = updatedState.phaseAttemptId[String(phase)] ?? '';
-    return await waitForPhaseCompletion(
-      sentinelPath, attemptId, claudePid, phase, updatedState, cwd, runDir
+    const resolvedAttemptId = updatedState.phaseAttemptId[String(phase)] ?? attemptId;
+    const result = await waitForPhaseCompletion(
+      sentinelPath, resolvedAttemptId, claudePid, phase, updatedState, cwd, runDir
     );
+    return { ...result, attemptId };
   } else {
     // Codex runner
     const { runCodexInteractive } = await import('../runners/codex.js');
@@ -204,11 +212,11 @@ export async function runInteractivePhase(
       phase, updatedState, preset, harnessDir, runDir, promptFile, cwd,
     );
     if (result.status === 'failed') {
-      return { status: 'failed' };
+      return { status: 'failed', attemptId };
     }
     // Validate artifacts after Codex completes
     const valid = validatePhaseArtifacts(phase, updatedState, cwd);
-    return { status: valid ? 'completed' : 'failed' };
+    return { status: valid ? 'completed' : 'failed', attemptId };
   }
 }
 

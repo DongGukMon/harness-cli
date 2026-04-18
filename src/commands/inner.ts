@@ -12,7 +12,8 @@ import { renderWelcome, promptModelConfig } from '../ui.js';
 import { InputManager } from '../input.js';
 import { runRunnerAwarePreflight } from '../preflight.js';
 import { REQUIRED_PHASE_KEYS, getEffectiveReopenTarget } from '../config.js';
-import type { HarnessState } from '../types.js';
+import { createSessionLogger } from '../logger.js';
+import type { SessionLogger, HarnessState } from '../types.js';
 
 export interface InnerOptions {
   root?: string;
@@ -136,22 +137,15 @@ export async function innerCommand(runId: string, options: InnerOptions = {}): P
   // typed state.pendingAction (reopen_phase, etc.) will be replayed inside the phase loop
   // via existing logic in runner.ts.
 
+  // Step 5.6: Create logger (before InputManager so onConfigCancel can close over it)
+  const isResume = options.resume === true;
+  const logger = await bootstrapSessionLogger(runId, harnessDir, state, isResume, { cwd });
+  const sidecarReplayAllowed = { value: isResume };
+  let sessionEndStatus: 'completed' | 'paused' | 'interrupted' = 'interrupted';
+
   // Step 5.6: Create InputManager
   const inputManager = new InputManager();
-  inputManager.onConfigCancel = () => {
-    state.status = 'paused';
-    state.pauseReason = 'config-cancel';
-    state.pendingAction = {
-      type: 'reopen_config',
-      targetPhase: state.currentPhase as any,
-      sourcePhase: null,
-      feedbackPaths: [],
-    };
-    writeState(runDir, state);
-    releaseLock(harnessDir, runId);
-    inputManager.stop();
-    process.exit(0);
-  };
+  inputManager.onConfigCancel = buildConfigCancelHandler({ state, runDir, harnessDir, runId, isResume, logger, inputManager });
   inputManager.start('configuring');
 
   // Step 5.7: Compute remaining phases (including pendingAction reopen target)
@@ -192,8 +186,14 @@ export async function innerCommand(runId: string, options: InnerOptions = {}): P
 
   // 6. Run phase loop
   try {
-    await runPhaseLoop(state, harnessDir, runDir, cwd, inputManager);
+    await runPhaseLoop(state, harnessDir, runDir, cwd, inputManager, logger, sidecarReplayAllowed);
+    if (state.status === 'completed') sessionEndStatus = 'completed';
+    else if (state.status === 'paused') sessionEndStatus = 'paused';
+    else sessionEndStatus = 'interrupted';
   } finally {
+    logger.logEvent({ event: 'session_end', status: sessionEndStatus, totalWallMs: Date.now() - logger.getStartedAt() });
+    logger.finalizeSummary(state);
+    logger.close();
     inputManager.stop();
     releaseLock(harnessDir, runId);
   }
@@ -210,6 +210,76 @@ export async function innerCommand(runId: string, options: InnerOptions = {}): P
       selectWindow(state.tmuxSession, state.tmuxOriginalWindow);
     }
   }
+}
+
+export interface ConfigCancelHandlerArgs {
+  state: HarnessState;
+  runDir: string;
+  harnessDir: string;
+  runId: string;
+  isResume: boolean;
+  logger: SessionLogger;
+  inputManager: InputManager;
+}
+
+export function buildConfigCancelHandler(args: ConfigCancelHandlerArgs): () => void {
+  const { state, runDir, harnessDir, runId, isResume, logger, inputManager } = args;
+  return () => {
+    state.status = 'paused';
+    state.pauseReason = 'config-cancel';
+    state.pendingAction = {
+      type: 'reopen_config',
+      targetPhase: state.currentPhase as any,
+      sourcePhase: null,
+      feedbackPaths: [],
+    };
+    writeState(runDir, state);
+
+    // Lazy bootstrap session open event if not yet emitted
+    if (!logger.hasEmittedSessionOpen()) {
+      if (isResume) {
+        logger.updateMeta({ pushResumedAt: Date.now(), task: state.task });
+        logger.logEvent({ event: 'session_resumed', fromPhase: state.currentPhase, stateStatus: 'paused' });
+      } else {
+        logger.writeMeta({ task: state.task });
+        logger.logEvent({ event: 'session_start', task: state.task, autoMode: state.autoMode, baseCommit: state.baseCommit, harnessVersion: '0.1.0' });
+      }
+    }
+    logger.logEvent({ event: 'session_end', status: 'paused', totalWallMs: Date.now() - logger.getStartedAt() });
+    logger.finalizeSummary(state);
+    logger.close();
+
+    releaseLock(harnessDir, runId);
+    inputManager.stop();
+    process.exit(0);
+  };
+}
+
+export async function bootstrapSessionLogger(
+  runId: string,
+  harnessDir: string,
+  state: HarnessState,
+  isResume: boolean,
+  options: { sessionsRoot?: string; cwd?: string } = {},
+): Promise<SessionLogger> {
+  const logger = createSessionLogger(runId, harnessDir, state.loggingEnabled, {
+    cwd: options.cwd ?? process.cwd(),
+    autoMode: state.autoMode,
+    baseCommit: state.baseCommit,
+    sessionsRoot: options.sessionsRoot,
+  });
+  if (isResume) {
+    logger.updateMeta({ pushResumedAt: Date.now(), task: state.task });
+    logger.logEvent({ event: 'session_resumed', fromPhase: state.currentPhase, stateStatus: state.status });
+  } else if (logger.hasBootstrapped()) {
+    // Idempotent case: meta.json already exists on disk (e.g., crash re-entry)
+    logger.updateMeta({ pushResumedAt: Date.now() });
+    logger.logEvent({ event: 'session_resumed', fromPhase: state.currentPhase, stateStatus: state.status });
+  } else {
+    logger.writeMeta({ task: state.task });
+    logger.logEvent({ event: 'session_start', task: state.task, autoMode: state.autoMode, baseCommit: state.baseCommit, harnessVersion: '0.1.0' });
+  }
+  return logger;
 }
 
 function consumePendingAction(runDir: string, state: HarnessState): void {

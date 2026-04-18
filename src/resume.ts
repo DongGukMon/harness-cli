@@ -13,6 +13,7 @@ import {
   handleVerifyError,
 } from './phases/runner.js';
 import { InputManager } from './input.js';
+import { NoopLogger } from './logger.js';
 import type { HarnessState, PhaseNumber } from './types.js';
 
 /** Create a no-op InputManager for use in resumeRun (deferred refactor: inputManager passed by inner.ts in future). */
@@ -64,7 +65,7 @@ export async function resumeRun(
     return;
   }
 
-  await runPhaseLoop(state, harnessDir, runDir, cwd, createNoOpInputManager());
+  await runPhaseLoop(state, harnessDir, runDir, cwd, createNoOpInputManager(), new NoopLogger(), { value: false });
 }
 
 /**
@@ -657,7 +658,7 @@ async function replayPendingAction(
             state.currentPhase = action.targetPhase + 1;
             writeState(runDir, state);
             // Continue phase loop from the next phase
-            await runPhaseLoop(state, harnessDir, runDir, cwd, createNoOpInputManager());
+            await runPhaseLoop(state, harnessDir, runDir, cwd, createNoOpInputManager(), new NoopLogger(), { value: false });
             return;
           } else {
             // Artifact validation failed — treat sentinel as stale
@@ -722,14 +723,14 @@ async function replayPendingAction(
 
       if (wasVerifyEscalation) {
         const feedbackPath = action.feedbackPaths[0] ?? join(runDir, 'verify-feedback.md');
-        await handleVerifyEscalation(feedbackPath, state, runDir, cwd, createNoOpInputManager());
+        await handleVerifyEscalation(feedbackPath, state, runDir, cwd, createNoOpInputManager(), new NoopLogger());
       } else {
         // Gate escalation: targetPhase is the rejected gate (2/4/7)
         const gatePhase = action.targetPhase as 2 | 4 | 7;
-        await handleGateEscalation(gatePhase, comments, state, runDir, cwd, createNoOpInputManager());
+        await handleGateEscalation(gatePhase, comments, state, runDir, cwd, createNoOpInputManager(), new NoopLogger());
       }
       if ((state.status as string) === 'paused') return;
-      await runPhaseLoop(state, harnessDir, runDir, cwd, createNoOpInputManager());
+      await runPhaseLoop(state, harnessDir, runDir, cwd, createNoOpInputManager(), new NoopLogger(), { value: false });
       return;
     }
     case 'show_verify_error': {
@@ -738,9 +739,9 @@ async function replayPendingAction(
       writeState(runDir, state);
 
       const errorPath = action.feedbackPaths[0] ?? undefined;
-      await handleVerifyError(errorPath, state, harnessDir, runDir, cwd, createNoOpInputManager());
+      await handleVerifyError(errorPath, state, harnessDir, runDir, cwd, createNoOpInputManager(), new NoopLogger());
       if ((state.status as string) === 'paused') return;
-      await runPhaseLoop(state, harnessDir, runDir, cwd, createNoOpInputManager());
+      await runPhaseLoop(state, harnessDir, runDir, cwd, createNoOpInputManager(), new NoopLogger(), { value: false });
       return;
     }
     case 'reopen_config': {
@@ -754,5 +755,5 @@ async function replayPendingAction(
   }
 
   // After pendingAction handling, continue phase loop
-  await runPhaseLoop(state, harnessDir, runDir, cwd, createNoOpInputManager());
+  await runPhaseLoop(state, harnessDir, runDir, cwd, createNoOpInputManager(), new NoopLogger(), { value: false });
 }

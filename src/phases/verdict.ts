@@ -38,6 +38,15 @@ export function parseVerdict(
   return { verdict, comments };
 }
 
+export function extractCodexMetadata(stdout: string): { tokensTotal?: number; codexSessionId?: string } {
+  const out: { tokensTotal?: number; codexSessionId?: string } = {};
+  const m = stdout.match(/^tokens used\s*\n([\d,]+)/m);
+  if (m) out.tokensTotal = parseInt(m[1].replace(/,/g, ''), 10);
+  const s = stdout.match(/session id:\s*([0-9a-f-]+)/i);
+  if (s) out.codexSessionId = s[1];
+  return out;
+}
+
 /**
  * Build GatePhaseResult from subprocess exit data.
  */
