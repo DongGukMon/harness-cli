@@ -387,6 +387,7 @@ describe('runGatePhase — one-shot sidecar replay', () => {
     // assembleGatePrompt mock not needed for replay path (sidecar exists before assembler is called)
 
     const runDir = makeTmpDir();
+    // §4.7: sidecar must include sourcePreset matching current preset for codex replay compat
     fs.writeFileSync(
       path.join(runDir, 'gate-2-result.json'),
       JSON.stringify({
@@ -395,6 +396,7 @@ describe('runGatePhase — one-shot sidecar replay', () => {
         runner: 'codex',
         promptBytes: 1000,
         durationMs: 10000,
+        sourcePreset: { model: 'gpt-5.4', effort: 'high' },
       }),
     );
     fs.writeFileSync(path.join(runDir, 'gate-2-raw.txt'), '## Verdict\nAPPROVE\n');
@@ -402,6 +404,8 @@ describe('runGatePhase — one-shot sidecar replay', () => {
     const state = {
       phasePresets: { '2': 'codex-high' },
       gateRetries: { '2': 0 },
+      phaseCodexSessions: { '2': null, '4': null, '7': null },
+      currentPhase: 2,
     } as any;
 
     const flag = { value: true };
@@ -436,6 +440,8 @@ describe('runGatePhase — one-shot sidecar replay', () => {
     const state = {
       phasePresets: { '2': 'codex-high' },
       gateRetries: { '2': 0 },
+      phaseCodexSessions: { '2': null, '4': null, '7': null },
+      currentPhase: 2,
     } as any;
 
     const flag = { value: false };
