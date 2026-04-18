@@ -203,10 +203,13 @@ Concrete integration points:
 - `src/logger.ts` — **both** `FileSessionLogger.writeMeta` and `FileSessionLogger.updateMeta` build the `meta: SessionMeta` object from a fixed field list; neither spreads `partial`. A new `codexHome?` field would be silently dropped unless wired explicitly. Required changes:
   - `writeMeta`: add `...(partial.codexHome !== undefined ? { codexHome: partial.codexHome } : {})` to the constructed meta literal.
   - `updateMeta`: accept `codexHome` in the `update` param type; on the lazy-bootstrap branch (resume with missing meta.json), include it in the constructed meta; on the merge branch (meta.json exists), set `meta.codexHome = update.codexHome` when provided. Matches `task` handling semantics.
-- `src/commands/inner.ts` — **two** call sites must be updated:
-  1. `bootstrapSessionLogger` (L281): `logger.writeMeta({ task: state.task })` → `logger.writeMeta({ task: state.task, codexHome: state.codexNoIsolate ? undefined : codexHomeFor(runDir) })`.
-  2. `buildConfigCancelHandler` (L246): same change (this path fires after config cancel — same meta shape required).
-- Use `codexHomeFor` (pure function — no FS side effect) so meta reflects the planned path even before the first gate runs.
+- `src/commands/inner.ts` — **all five** meta-writing call sites must thread `codexHome`. Using the helper `const codexHome = state.codexNoIsolate ? undefined : codexHomeFor(runDir);` at function entry:
+  1. `bootstrapSessionLogger` L281 (fresh-start branch, `writeMeta`): `{ task: state.task }` → `{ task: state.task, codexHome }`.
+  2. `bootstrapSessionLogger` L274 (resume branch, `updateMeta`): `{ pushResumedAt: Date.now(), task: state.task }` → `{ pushResumedAt: Date.now(), task: state.task, codexHome }`.
+  3. `bootstrapSessionLogger` L278 (idempotent re-entry branch, `updateMeta`): `{ pushResumedAt: Date.now() }` → `{ pushResumedAt: Date.now(), codexHome }`.
+  4. `buildConfigCancelHandler` L246 (fresh-start branch, `writeMeta`): same change as #1.
+  5. `buildConfigCancelHandler` L243 (resume branch, `updateMeta`): same change as #2.
+- Use `codexHomeFor` (pure function — no FS side effect) so meta reflects the planned path even before the first codex-phase invocation.
 
 This is pure observability — post-mortem debugging ("where did that session rollout file go?") without bloating `events.jsonl`.
 
@@ -358,18 +361,22 @@ TDD rhythm: where a test is listed before its implementation, write the failing 
    - `bin/harness.ts`: add `--codex-no-isolate` option on `start` and `run` subcommands.
    - `src/commands/start.ts`: `StartOptions.codexNoIsolate?: boolean`, threaded into `createInitialState`. On `true`, emit stderr warning: `⚠️  CODEX_HOME isolation disabled. Codex subprocess may load personal conventions (BUG-C risk).`
    - Extend `tests/commands/run.test.ts` with two cases: flag sets `state.codexNoIsolate = true` AND emits the warning line; absence of flag leaves it `false`.
-9. **Logger/SessionMeta integration** (per §4.7 — three file edits + two call-site updates):
+9. **Logger/SessionMeta integration** (per §4.7 — three file edits + five call-site updates):
    - `src/types.ts`: add `codexHome?: string` to `SessionMeta`.
    - `src/logger.ts` — `FileSessionLogger.writeMeta`: extend the constructed `meta: SessionMeta` literal with `...(partial.codexHome !== undefined ? { codexHome: partial.codexHome } : {})`. Mirror pattern used today for `bootstrapOnResume`.
    - `src/logger.ts` — `FileSessionLogger.updateMeta`: extend the `update` param type to include `codexHome?: string`. In the lazy-bootstrap branch, include it in the freshly constructed meta. In the merge branch, set `meta.codexHome = update.codexHome` when provided.
-   - `src/commands/inner.ts` — **two** call-site updates (both pass `codexHome: state.codexNoIsolate ? undefined : codexHomeFor(runDir)`):
-     1. `bootstrapSessionLogger`, the `logger.writeMeta({ task: state.task })` call (around L281).
-     2. `buildConfigCancelHandler`, the `logger.writeMeta({ task: state.task })` call (around L246).
+   - `src/commands/inner.ts` — **five** call-site updates. At the top of each function compute `const codexHome = state.codexNoIsolate ? undefined : codexHomeFor(runDir);`, then thread to every meta write:
+     1. `bootstrapSessionLogger` L281: `writeMeta({ task: state.task, codexHome })`.
+     2. `bootstrapSessionLogger` L274 (resume): `updateMeta({ pushResumedAt: Date.now(), task: state.task, codexHome })`.
+     3. `bootstrapSessionLogger` L278 (idempotent re-entry): `updateMeta({ pushResumedAt: Date.now(), codexHome })`.
+     4. `buildConfigCancelHandler` L246: `writeMeta({ task: state.task, codexHome })`.
+     5. `buildConfigCancelHandler` L243 (resume): `updateMeta({ pushResumedAt: Date.now(), task: state.task, codexHome })`.
    - Tests (extending `tests/integration/logging.test.ts` or `tests/logger.test.ts`):
      - `meta.json` includes `codexHome` path after normal bootstrap.
      - `meta.json` does NOT include `codexHome` when `--codex-no-isolate`.
-     - Lazy-bootstrap path: `updateMeta` on a run with missing `meta.json` persists `codexHome` (resume scenario).
-     - Config-cancel path: re-`writeMeta` preserves `codexHome` (regression guard for the second call site).
+     - Lazy-bootstrap (resume with missing `meta.json`) via `bootstrapSessionLogger` path persists `codexHome`.
+     - Idempotent re-entry via `bootstrapSessionLogger` L278 path preserves/writes `codexHome`.
+     - Config-cancel path (both fresh-start and resume branches) writes/preserves `codexHome`.
 10. **Typecheck + full vitest run + build**. Fix any breakage surfaced by the fixture sweep.
 11. **Manual smoke** (§7.4). Capture evidence per §8 Evidence block. Save to PR body.
 12. **PR**.
