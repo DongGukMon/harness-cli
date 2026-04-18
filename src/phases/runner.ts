@@ -341,11 +341,30 @@ export async function handleGatePhase(
   state.phases[String(phase)] = 'in_progress';
   writeState(runDir, state);
 
+  // Capture retryIndex BEFORE any mutation (spec §5.3)
+  const retryIndex = state.gateRetries[String(phase)] ?? 0;
+
   printInfo(`Codex 리뷰 진행 중... (최대 ${Math.round(GATE_TIMEOUT_MS / 1000)}초 소요)`);
   const result = await runGatePhase(phase, state, harnessDir, runDir, cwd, sidecarReplayAllowed);
 
   if (result.type === 'verdict') {
     if (result.verdict === 'APPROVE') {
+      // Emit gate_verdict (skip if legacy sidecar replay with runner undefined)
+      if (result.runner) {
+        logger.logEvent({
+          event: 'gate_verdict',
+          phase,
+          retryIndex,
+          runner: result.runner,
+          verdict: 'APPROVE',
+          durationMs: result.durationMs,
+          tokensTotal: result.tokensTotal,
+          promptBytes: result.promptBytes,
+          codexSessionId: result.codexSessionId,
+          recoveredFromSidecar: result.recoveredFromSidecar ?? false,
+        });
+      }
+
       state.phases[String(phase)] = 'completed';
 
       // Post-success sidecar cleanup
@@ -363,9 +382,32 @@ export async function handleGatePhase(
         renderControlPanel(state);
         writeState(runDir, state);
       }
+
+      // State anomaly check: pendingAction should be null after APPROVE
+      if (state.pendingAction !== null) {
+        logger.logEvent({
+          event: 'state_anomaly',
+          kind: 'pending_action_stale_after_approve',
+          details: { phase, pendingActionType: (state.pendingAction as PendingAction).type },
+        });
+      }
     } else {
-      // REJECT
-      await handleGateReject(phase, result.comments, state, harnessDir, runDir, cwd, inputManager, logger);
+      // REJECT — emit gate_verdict before dispatching
+      if (result.runner) {
+        logger.logEvent({
+          event: 'gate_verdict',
+          phase,
+          retryIndex,
+          runner: result.runner,
+          verdict: 'REJECT',
+          durationMs: result.durationMs,
+          tokensTotal: result.tokensTotal,
+          promptBytes: result.promptBytes,
+          codexSessionId: result.codexSessionId,
+          recoveredFromSidecar: result.recoveredFromSidecar ?? false,
+        });
+      }
+      await handleGateReject(phase, result.comments, retryIndex, state, harnessDir, runDir, cwd, inputManager, logger);
     }
   } else {
     // Error — but check if SIGUSR1 redirected first
@@ -374,6 +416,19 @@ export async function handleGatePhase(
       renderControlPanel(state);
       return;
     }
+    // Emit gate_error (skip if legacy sidecar replay with runner undefined)
+    if (result.runner) {
+      logger.logEvent({
+        event: 'gate_error',
+        phase,
+        retryIndex,
+        runner: result.runner,
+        error: result.error,
+        exitCode: result.exitCode,
+        durationMs: result.durationMs,
+        recoveredFromSidecar: result.recoveredFromSidecar ?? false,
+      });
+    }
     await handleGateError(phase, result.error, state, runDir, cwd, inputManager, logger);
   }
 }
@@ -381,6 +436,7 @@ export async function handleGatePhase(
 export async function handleGateReject(
   phase: GatePhase,
   comments: string,
+  retryIndex: number,
   state: HarnessState,
   _harnessDir: string,
   runDir: string,
@@ -390,8 +446,8 @@ export async function handleGateReject(
 ): Promise<void> {
   state.phases[String(phase)] = 'pending';
 
-  // Increment retry counter
-  state.gateRetries[String(phase)] = (state.gateRetries[String(phase)] ?? 0) + 1;
+  // Increment retry counter AFTER capturing retryIndex (pre-mutation)
+  state.gateRetries[String(phase)] = retryIndex + 1;
 
   // Phase 7 special: reset verifyRetries
   if (phase === 7) {
@@ -408,14 +464,29 @@ export async function handleGateReject(
 
   if (retryCount < GATE_RETRY_LIMIT || state.autoMode) {
     if (retryCount >= GATE_RETRY_LIMIT && state.autoMode) {
-      // Auto-mode force pass
-      await forcePassGate(phase, state, runDir, cwd, logger);
+      // Auto-mode force pass (no gate_retry event — force_pass covers this path)
+      await forcePassGate(phase, state, runDir, cwd, 'auto', logger);
       return;
     }
 
     // Save feedback and reopen. For Phase 7 reject → Phase 5, include any existing
     // verify-feedback.md so Claude sees BOTH the eval gate feedback and prior verify failures.
     const feedbackPath = saveGateFeedback(runDir, phase, comments);
+    const feedbackBytes = fs.statSync(feedbackPath).size;
+    const feedbackPreview = comments.slice(0, 200);
+
+    // Emit gate_retry BEFORE state mutation (retryIndex is the just-failed attempt)
+    logger.logEvent({
+      event: 'gate_retry',
+      phase,
+      retryIndex,
+      retryCount: retryIndex + 1,
+      retryLimit: GATE_RETRY_LIMIT,
+      feedbackPath,
+      feedbackBytes,
+      feedbackPreview,
+    });
+
     const feedbackPaths: string[] = [feedbackPath];
     if (phase === 7) {
       const verifyFeedback = path.join(runDir, 'verify-feedback.md');
@@ -434,6 +505,7 @@ export async function handleGateReject(
     state.pendingAction = pendingAction;
     state.phases[String(targetInteractive)] = 'pending';
     state.phaseReopenFlags[String(targetInteractive)] = true;
+    state.phaseReopenSource[String(targetInteractive)] = phase; // track triggering gate
     state.currentPhase = targetInteractive;
     writeState(runDir, state);
   } else {
@@ -463,6 +535,14 @@ export async function handleGateEscalation(
     inputManager,
   );
 
+  // Emit escalation event after userChoice is resolved (exactly 1 per path)
+  logger.logEvent({
+    event: 'escalation',
+    phase,
+    reason: 'gate-retry-limit',
+    userChoice: choice as 'C' | 'S' | 'Q',
+  });
+
   if (choice === 'C') {
     // Reset retries, reopen
     state.gateRetries[String(phase)] = 0;
@@ -478,11 +558,12 @@ export async function handleGateEscalation(
     };
     state.phases[String(targetInteractive)] = 'pending';
     state.phaseReopenFlags[String(targetInteractive)] = true;
+    state.phaseReopenSource[String(targetInteractive)] = phase; // track triggering gate
     state.currentPhase = targetInteractive;
     writeState(runDir, state);
   } else if (choice === 'S') {
-    // Force-pass (skip)
-    await forcePassGate(phase, state, runDir, cwd, logger);
+    // Force-pass (skip) — user choice
+    await forcePassGate(phase, state, runDir, cwd, 'user', logger);
   } else {
     // Quit
     const targetInteractive = previousInteractivePhase(phase);
@@ -505,10 +586,14 @@ export async function forcePassGate(
   state: HarnessState,
   runDir: string,
   cwd: string,
+  by: 'auto' | 'user',
   logger: SessionLogger,
 ): Promise<void> {
   state.pendingAction = { type: 'skip_phase', targetPhase: phase as PhaseNumber, sourcePhase: null, feedbackPaths: [] };
   writeState(runDir, state);
+
+  // Emit force_pass as the sole terminal event for this path
+  logger.logEvent({ event: 'force_pass', phase, by });
 
   // Side effects: cleanup, advance
   deleteGateSidecars(runDir, phase);
@@ -526,7 +611,6 @@ export async function forcePassGate(
   }
   writeState(runDir, state);
   void cwd;
-  void logger;
 }
 
 export async function handleGateError(
@@ -550,13 +634,21 @@ export async function handleGateError(
     inputManager,
   );
 
+  // Emit escalation event after userChoice is resolved (exactly 1 per path)
+  logger.logEvent({
+    event: 'escalation',
+    phase,
+    reason: 'gate-error',
+    userChoice: choice as 'R' | 'S' | 'Q',
+  });
+
   if (choice === 'R') {
     // Retry: leave phase as-is, the loop will re-enter handleGatePhase
     state.phases[String(phase)] = 'pending';
     writeState(runDir, state);
     // currentPhase stays the same — loop retries
   } else if (choice === 'S') {
-    await forcePassGate(phase, state, runDir, cwd, logger);
+    await forcePassGate(phase, state, runDir, cwd, 'user', logger);
   } else {
     // Quit
     state.phases[String(phase)] = 'error';
@@ -655,7 +747,7 @@ export async function handleVerifyFail(
   if (retryCount < VERIFY_RETRY_LIMIT || state.autoMode) {
     if (retryCount >= VERIFY_RETRY_LIMIT && state.autoMode) {
       // Auto-mode: skip verify
-      await forcePassVerify(state, runDir, cwd, logger);
+      await forcePassVerify(state, runDir, cwd, 'auto', logger);
       return;
     }
 
@@ -671,6 +763,7 @@ export async function handleVerifyFail(
     state.phases['5'] = 'pending';
     state.phases['6'] = 'pending';
     state.phaseReopenFlags['5'] = true;
+    state.phaseReopenSource['5'] = 6; // verify phase triggered reopen
     state.currentPhase = 5;
     writeState(runDir, state);
 
@@ -707,6 +800,14 @@ export async function handleVerifyEscalation(
     inputManager,
   );
 
+  // Emit escalation event after userChoice is resolved (exactly 1 per path)
+  logger.logEvent({
+    event: 'escalation',
+    phase: 6,
+    reason: 'verify-limit',
+    userChoice: choice as 'C' | 'S' | 'Q',
+  });
+
   if (choice === 'C') {
     state.verifyRetries = 0;
     state.pendingAction = {
@@ -718,6 +819,7 @@ export async function handleVerifyEscalation(
     state.phases['5'] = 'pending';
     state.phases['6'] = 'pending';
     state.phaseReopenFlags['5'] = true;
+    state.phaseReopenSource['5'] = 6; // verify escalation triggered reopen
     state.currentPhase = 5;
     writeState(runDir, state);
 
@@ -729,7 +831,7 @@ export async function handleVerifyEscalation(
       fs.unlinkSync(evalAbsPath);
     } catch { /* ignore */ }
   } else if (choice === 'S') {
-    await forcePassVerify(state, runDir, cwd, logger);
+    await forcePassVerify(state, runDir, cwd, 'user', logger);
   } else {
     // Quit — verify-escalation uses show_escalation (per spec: only gate/verify error quit use show_verify_error)
     state.pendingAction = {
@@ -749,11 +851,15 @@ export async function forcePassVerify(
   state: HarnessState,
   runDir: string,
   cwd: string,
+  by: 'auto' | 'user',
   logger: SessionLogger,
 ): Promise<void> {
   // Atomic write with skip_phase pendingAction before side effects
   state.pendingAction = { type: 'skip_phase', targetPhase: 6, sourcePhase: null, feedbackPaths: [] };
   writeState(runDir, state);
+
+  // Emit force_pass as the sole terminal event for this path
+  logger.logEvent({ event: 'force_pass', phase: 6, by });
 
   // Write synthetic eval report
   writeSyntheticEvalReport(state.artifacts.evalReport, state.runId, cwd);
@@ -791,7 +897,6 @@ export async function forcePassVerify(
   } catch { /* best-effort */ }
 
   printInfo('Verify force-passed — advancing to Phase 7');
-  void logger;
 }
 
 export async function handleVerifyError(
@@ -815,6 +920,14 @@ export async function handleVerifyError(
     inputManager,
   );
 
+  // Emit escalation event after userChoice is resolved (exactly 1 per path)
+  logger.logEvent({
+    event: 'escalation',
+    phase: 6,
+    reason: 'verify-error',
+    userChoice: choice as 'R' | 'Q',
+  });
+
   if (choice === 'R') {
     // Retry: reset phase status, loop re-enters
     state.phases['6'] = 'pending';
@@ -834,5 +947,4 @@ export async function handleVerifyError(
     savePausedAtHead(state, cwd);
     writeState(runDir, state);
   }
-  void logger;
 }

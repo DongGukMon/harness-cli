@@ -68,7 +68,19 @@ vi.mock('../../src/state.js', async (importOriginal) => {
 
 // ─── Imports after mocks ──────────────────────────────────────────────────────
 
-import { runPhaseLoop, handleInteractivePhase } from '../../src/phases/runner.js';
+import {
+  runPhaseLoop,
+  handleInteractivePhase,
+  handleGatePhase,
+  handleGateReject,
+  handleGateEscalation,
+  handleGateError,
+  forcePassGate,
+  forcePassVerify,
+  handleVerifyFail,
+  handleVerifyEscalation,
+  handleVerifyError,
+} from '../../src/phases/runner.js';
 import { runInteractivePhase } from '../../src/phases/interactive.js';
 import { runGatePhase } from '../../src/phases/gate.js';
 import { runVerifyPhase } from '../../src/phases/verify.js';
@@ -145,7 +157,7 @@ describe('Test 1: Phase 1 completed → dispatches gate Phase 2', () => {
     await runPhaseLoop(state, HDIR, runDir, CWD, createNoOpInputManager(), new NoopLogger(), { value: false });
 
     expect(vi.mocked(runInteractivePhase)).toHaveBeenCalledWith(1, expect.any(Object), HDIR, runDir, CWD, expect.any(String));
-    expect(vi.mocked(runGatePhase)).toHaveBeenCalledWith(2, expect.any(Object), HDIR, runDir, CWD);
+    expect(vi.mocked(runGatePhase)).toHaveBeenCalledWith(2, expect.any(Object), HDIR, runDir, CWD, expect.any(Object));
   });
 });
 
@@ -814,5 +826,517 @@ describe('handleInteractivePhase — event emission', () => {
     } finally {
       cleanup();
     }
+  });
+});
+
+// ─── handleGatePhase — event emission ─────────────────────────────────────────
+
+describe('handleGatePhase — gate_verdict emission (APPROVE)', () => {
+  it('emits gate_verdict(APPROVE) with runner/tokensTotal when runner is defined', async () => {
+    const runDir = makeTmpDir();
+    const state = makeState({ currentPhase: 2 });
+    const { logger, eventsPath, cleanup } = makeTestLogger(state.runId);
+
+    vi.mocked(runGatePhase).mockResolvedValueOnce({
+      type: 'verdict',
+      verdict: 'APPROVE',
+      comments: '',
+      rawOutput: '',
+      runner: 'codex',
+      promptBytes: 1000,
+      durationMs: 5000,
+      tokensTotal: 45000,
+    } as any);
+
+    try {
+      await handleGatePhase(2, state, HDIR, runDir, CWD, createNoOpInputManager(), logger, { value: false });
+      const events = readEvents(eventsPath);
+      const verdict = events.find((e: any) => e.event === 'gate_verdict');
+      expect(verdict).toBeDefined();
+      expect(verdict.verdict).toBe('APPROVE');
+      expect(verdict.phase).toBe(2);
+      expect(verdict.runner).toBe('codex');
+      expect(verdict.tokensTotal).toBe(45000);
+      expect(verdict.retryIndex).toBe(0);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('does NOT emit gate_verdict when runner is undefined (legacy sidecar replay)', async () => {
+    const runDir = makeTmpDir();
+    const state = makeState({ currentPhase: 2 });
+    const { logger, eventsPath, cleanup } = makeTestLogger(state.runId);
+
+    vi.mocked(runGatePhase).mockResolvedValueOnce({
+      type: 'verdict',
+      verdict: 'APPROVE',
+      comments: '',
+      rawOutput: '',
+      // runner deliberately omitted (undefined)
+    } as any);
+
+    try {
+      await handleGatePhase(2, state, HDIR, runDir, CWD, createNoOpInputManager(), logger, { value: false });
+      const events = readEvents(eventsPath);
+      const verdict = events.find((e: any) => e.event === 'gate_verdict');
+      expect(verdict).toBeUndefined();
+      // But state should still advance (execution flow unchanged)
+      expect(state.phases['2']).toBe('completed');
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('emits state_anomaly(pending_action_stale_after_approve) when pendingAction is not null after APPROVE', async () => {
+    const runDir = makeTmpDir();
+    const state = makeState({
+      currentPhase: 2,
+      pendingAction: {
+        type: 'reopen_phase',
+        targetPhase: 1,
+        sourcePhase: 2,
+        feedbackPaths: [],
+      },
+    });
+    const { logger, eventsPath, cleanup } = makeTestLogger(state.runId);
+
+    vi.mocked(runGatePhase).mockResolvedValueOnce({
+      type: 'verdict',
+      verdict: 'APPROVE',
+      comments: '',
+      rawOutput: '',
+      runner: 'codex',
+    } as any);
+
+    try {
+      await handleGatePhase(2, state, HDIR, runDir, CWD, createNoOpInputManager(), logger, { value: false });
+      const events = readEvents(eventsPath);
+      const anomaly = events.find((e: any) => e.event === 'state_anomaly');
+      expect(anomaly).toBeDefined();
+      expect(anomaly.kind).toBe('pending_action_stale_after_approve');
+      expect(anomaly.details.phase).toBe(2);
+    } finally {
+      cleanup();
+    }
+  });
+});
+
+describe('handleGatePhase — gate_verdict(REJECT) + gate_retry emission', () => {
+  it('emits gate_verdict(REJECT) then gate_retry in order with correct retryIndex', async () => {
+    const runDir = makeTmpDir();
+    const state = makeState({ currentPhase: 2, gateRetries: { '2': 0, '4': 0, '7': 0 } });
+    const { logger, eventsPath, cleanup } = makeTestLogger(state.runId);
+
+    vi.mocked(runGatePhase).mockResolvedValueOnce({
+      type: 'verdict',
+      verdict: 'REJECT',
+      comments: 'Section A needs work',
+      rawOutput: '',
+      runner: 'codex',
+      durationMs: 3000,
+      tokensTotal: 20000,
+      promptBytes: 500,
+    } as any);
+    // After reopen, phase 1 fails to stop loop
+    vi.mocked(runInteractivePhase).mockResolvedValueOnce({ status: 'failed', attemptId: 'a' } as any);
+
+    try {
+      await handleGatePhase(2, state, HDIR, runDir, CWD, createNoOpInputManager(), logger, { value: false });
+      const events = readEvents(eventsPath);
+      const verdictIdx = events.findIndex((e: any) => e.event === 'gate_verdict');
+      const retryIdx = events.findIndex((e: any) => e.event === 'gate_retry');
+      expect(verdictIdx).toBeGreaterThanOrEqual(0);
+      expect(retryIdx).toBeGreaterThan(verdictIdx);
+
+      const verdict = events[verdictIdx];
+      expect(verdict.verdict).toBe('REJECT');
+      expect(verdict.retryIndex).toBe(0);
+      expect(verdict.runner).toBe('codex');
+
+      const retry = events[retryIdx];
+      expect(retry.phase).toBe(2);
+      expect(retry.retryIndex).toBe(0);
+      expect(retry.retryCount).toBe(1);
+      expect(retry.retryLimit).toBe(GATE_RETRY_LIMIT);
+      expect(typeof retry.feedbackPath).toBe('string');
+      expect(typeof retry.feedbackBytes).toBe('number');
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('tracks phaseReopenSource[prevPhase] = gatePhase after REJECT', async () => {
+    const runDir = makeTmpDir();
+    const state = makeState({ currentPhase: 2, gateRetries: { '2': 0, '4': 0, '7': 0 } });
+    const { logger, eventsPath: _eventsPath, cleanup } = makeTestLogger(state.runId);
+
+    vi.mocked(runGatePhase).mockResolvedValueOnce({
+      type: 'verdict',
+      verdict: 'REJECT',
+      comments: 'Fix it',
+      rawOutput: '',
+      runner: 'codex',
+    } as any);
+    vi.mocked(runInteractivePhase).mockResolvedValueOnce({ status: 'failed', attemptId: 'b' } as any);
+
+    try {
+      await handleGatePhase(2, state, HDIR, runDir, CWD, createNoOpInputManager(), logger, { value: false });
+      // Phase 2 REJECT → prevInteractivePhase = 1
+      expect(state.phaseReopenSource['1']).toBe(2);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('does NOT emit gate_verdict when runner is undefined (legacy sidecar REJECT)', async () => {
+    const runDir = makeTmpDir();
+    const state = makeState({ currentPhase: 2, gateRetries: { '2': 0, '4': 0, '7': 0 } });
+    const { logger, eventsPath, cleanup } = makeTestLogger(state.runId);
+
+    vi.mocked(runGatePhase).mockResolvedValueOnce({
+      type: 'verdict',
+      verdict: 'REJECT',
+      comments: 'Issues found',
+      rawOutput: '',
+      // runner deliberately omitted
+    } as any);
+    vi.mocked(runInteractivePhase).mockResolvedValueOnce({ status: 'failed', attemptId: 'c' } as any);
+
+    try {
+      await handleGatePhase(2, state, HDIR, runDir, CWD, createNoOpInputManager(), logger, { value: false });
+      const events = readEvents(eventsPath);
+      const verdict = events.find((e: any) => e.event === 'gate_verdict');
+      // No gate_verdict for legacy sidecar
+      expect(verdict).toBeUndefined();
+      // But gate_retry should still be emitted (saveGateFeedback still runs)
+      const retry = events.find((e: any) => e.event === 'gate_retry');
+      expect(retry).toBeDefined();
+    } finally {
+      cleanup();
+    }
+  });
+});
+
+describe('handleGatePhase — gate_error emission', () => {
+  it('emits gate_error when runner is defined', async () => {
+    const runDir = makeTmpDir();
+    const state = makeState({ currentPhase: 2 });
+    const { logger, eventsPath, cleanup } = makeTestLogger(state.runId);
+
+    vi.mocked(runGatePhase).mockResolvedValueOnce({
+      type: 'error',
+      error: 'subprocess timeout',
+      runner: 'codex',
+      durationMs: 60000,
+      exitCode: 1,
+    } as any);
+    vi.mocked(promptChoice).mockResolvedValueOnce('Q');
+
+    try {
+      await handleGatePhase(2, state, HDIR, runDir, CWD, createNoOpInputManager(), logger, { value: false });
+      const events = readEvents(eventsPath);
+      const errEvent = events.find((e: any) => e.event === 'gate_error');
+      expect(errEvent).toBeDefined();
+      expect(errEvent.phase).toBe(2);
+      expect(errEvent.retryIndex).toBe(0);
+      expect(errEvent.runner).toBe('codex');
+      expect(errEvent.error).toBe('subprocess timeout');
+      expect(errEvent.exitCode).toBe(1);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('does NOT emit gate_error when runner is undefined (legacy sidecar error)', async () => {
+    const runDir = makeTmpDir();
+    const state = makeState({ currentPhase: 2 });
+    const { logger, eventsPath, cleanup } = makeTestLogger(state.runId);
+
+    vi.mocked(runGatePhase).mockResolvedValueOnce({
+      type: 'error',
+      error: 'subprocess timeout',
+      // runner deliberately omitted
+    } as any);
+    vi.mocked(promptChoice).mockResolvedValueOnce('Q');
+
+    try {
+      await handleGatePhase(2, state, HDIR, runDir, CWD, createNoOpInputManager(), logger, { value: false });
+      const events = readEvents(eventsPath);
+      const errEvent = events.find((e: any) => e.event === 'gate_error');
+      expect(errEvent).toBeUndefined();
+      // Execution still flows — state should be paused
+      expect(state.status).toBe('paused');
+    } finally {
+      cleanup();
+    }
+  });
+});
+
+describe('escalation — handleGateEscalation emission', () => {
+  it('emits exactly one escalation event with reason=gate-retry-limit after promptChoice', async () => {
+    const runDir = makeTmpDir();
+    const state = makeState({
+      currentPhase: 2,
+      gateRetries: { '2': GATE_RETRY_LIMIT, '4': 0, '7': 0 },
+    });
+    const { logger, eventsPath, cleanup } = makeTestLogger(state.runId);
+
+    vi.mocked(promptChoice).mockResolvedValueOnce('Q');
+
+    try {
+      await handleGateEscalation(2, 'Feedback text', state, runDir, CWD, createNoOpInputManager(), logger);
+      const events = readEvents(eventsPath);
+      const escalations = events.filter((e: any) => e.event === 'escalation');
+      expect(escalations).toHaveLength(1);
+      expect(escalations[0].reason).toBe('gate-retry-limit');
+      expect(escalations[0].userChoice).toBe('Q');
+      expect(escalations[0].phase).toBe(2);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('emits escalation then force_pass when user chooses S', async () => {
+    const runDir = makeTmpDir();
+    const state = makeState({
+      currentPhase: 2,
+      gateRetries: { '2': GATE_RETRY_LIMIT, '4': 0, '7': 0 },
+    });
+    const { logger, eventsPath, cleanup } = makeTestLogger(state.runId);
+
+    vi.mocked(promptChoice).mockResolvedValueOnce('S');
+
+    try {
+      await handleGateEscalation(2, 'Feedback', state, runDir, CWD, createNoOpInputManager(), logger);
+      const events = readEvents(eventsPath);
+      const escalation = events.find((e: any) => e.event === 'escalation');
+      const forcePass = events.find((e: any) => e.event === 'force_pass');
+      expect(escalation).toBeDefined();
+      expect(escalation.userChoice).toBe('S');
+      expect(forcePass).toBeDefined();
+      expect(forcePass.by).toBe('user');
+      expect(forcePass.phase).toBe(2);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('tracks phaseReopenSource when user chooses C', async () => {
+    const runDir = makeTmpDir();
+    const state = makeState({
+      currentPhase: 2,
+      gateRetries: { '2': GATE_RETRY_LIMIT, '4': 0, '7': 0 },
+    });
+    const { logger, eventsPath: _eventsPath, cleanup } = makeTestLogger(state.runId);
+
+    vi.mocked(promptChoice).mockResolvedValueOnce('C');
+
+    try {
+      await handleGateEscalation(2, 'More feedback', state, runDir, CWD, createNoOpInputManager(), logger);
+      // Phase 2 → prevInteractivePhase = 1
+      expect(state.phaseReopenSource['1']).toBe(2);
+    } finally {
+      cleanup();
+    }
+  });
+});
+
+describe('escalation — handleGateError emission', () => {
+  it('emits exactly one escalation event with reason=gate-error after promptChoice', async () => {
+    const runDir = makeTmpDir();
+    const state = makeState({ currentPhase: 4 });
+    const { logger, eventsPath, cleanup } = makeTestLogger(state.runId);
+
+    vi.mocked(promptChoice).mockResolvedValueOnce('Q');
+
+    try {
+      await handleGateError(4, 'timeout error', state, runDir, CWD, createNoOpInputManager(), logger);
+      const events = readEvents(eventsPath);
+      const escalations = events.filter((e: any) => e.event === 'escalation');
+      expect(escalations).toHaveLength(1);
+      expect(escalations[0].reason).toBe('gate-error');
+      expect(escalations[0].userChoice).toBe('Q');
+      expect(escalations[0].phase).toBe(4);
+    } finally {
+      cleanup();
+    }
+  });
+});
+
+describe('escalation — handleVerifyEscalation emission', () => {
+  it('emits exactly one escalation event with reason=verify-limit after promptChoice', async () => {
+    const runDir = makeTmpDir();
+    const cwd = makeTmpDir();
+    const state = makeState({ currentPhase: 6, verifyRetries: VERIFY_RETRY_LIMIT });
+    const feedbackPath = path.join(runDir, 'verify-feedback.md');
+    fs.writeFileSync(feedbackPath, '# feedback');
+    // Create eval report so deletion doesn't fail (we care about event emission)
+    const evalAbsPath = path.join(cwd, state.artifacts.evalReport);
+    fs.mkdirSync(path.dirname(evalAbsPath), { recursive: true });
+    fs.writeFileSync(evalAbsPath, '# eval');
+    const { logger, eventsPath, cleanup } = makeTestLogger(state.runId);
+
+    vi.mocked(promptChoice).mockResolvedValueOnce('Q');
+
+    try {
+      await handleVerifyEscalation(feedbackPath, state, runDir, cwd, createNoOpInputManager(), logger);
+      const events = readEvents(eventsPath);
+      const escalations = events.filter((e: any) => e.event === 'escalation');
+      expect(escalations).toHaveLength(1);
+      expect(escalations[0].reason).toBe('verify-limit');
+      expect(escalations[0].userChoice).toBe('Q');
+      expect(escalations[0].phase).toBe(6);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('tracks phaseReopenSource[5] = 6 when user chooses C', async () => {
+    const runDir = makeTmpDir();
+    const cwd = makeTmpDir();
+    const state = makeState({ currentPhase: 6, verifyRetries: VERIFY_RETRY_LIMIT });
+    const feedbackPath = path.join(runDir, 'verify-feedback.md');
+    fs.writeFileSync(feedbackPath, '# feedback');
+    const evalAbsPath = path.join(cwd, state.artifacts.evalReport);
+    fs.mkdirSync(path.dirname(evalAbsPath), { recursive: true });
+    fs.writeFileSync(evalAbsPath, '# eval');
+    const { logger, eventsPath: _eventsPath, cleanup } = makeTestLogger(state.runId);
+
+    vi.mocked(promptChoice).mockResolvedValueOnce('C');
+
+    try {
+      await handleVerifyEscalation(feedbackPath, state, runDir, cwd, createNoOpInputManager(), logger);
+      expect(state.phaseReopenSource['5']).toBe(6);
+    } finally {
+      cleanup();
+    }
+  });
+});
+
+describe('escalation — handleVerifyError emission', () => {
+  it('emits exactly one escalation event with reason=verify-error after promptChoice', async () => {
+    const runDir = makeTmpDir();
+    const state = makeState({ currentPhase: 6 });
+    const { logger, eventsPath, cleanup } = makeTestLogger(state.runId);
+
+    vi.mocked(promptChoice).mockResolvedValueOnce('Q');
+
+    try {
+      await handleVerifyError(undefined, state, HDIR, runDir, CWD, createNoOpInputManager(), logger);
+      const events = readEvents(eventsPath);
+      const escalations = events.filter((e: any) => e.event === 'escalation');
+      expect(escalations).toHaveLength(1);
+      expect(escalations[0].reason).toBe('verify-error');
+      expect(escalations[0].userChoice).toBe('Q');
+      expect(escalations[0].phase).toBe(6);
+    } finally {
+      cleanup();
+    }
+  });
+});
+
+describe('force_pass — forcePassGate emission', () => {
+  it('emits exactly one force_pass event with by=user', async () => {
+    const runDir = makeTmpDir();
+    const state = makeState({ currentPhase: 2 });
+    const { logger, eventsPath, cleanup } = makeTestLogger(state.runId);
+
+    try {
+      await forcePassGate(2, state, runDir, CWD, 'user', logger);
+      const events = readEvents(eventsPath);
+      expect(events).toHaveLength(1);
+      expect(events[0].event).toBe('force_pass');
+      expect(events[0].phase).toBe(2);
+      expect(events[0].by).toBe('user');
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('emits force_pass with by=auto in auto mode', async () => {
+    const runDir = makeTmpDir();
+    const state = makeState({ currentPhase: 4 });
+    const { logger, eventsPath, cleanup } = makeTestLogger(state.runId);
+
+    try {
+      await forcePassGate(4, state, runDir, CWD, 'auto', logger);
+      const events = readEvents(eventsPath);
+      expect(events).toHaveLength(1);
+      expect(events[0].event).toBe('force_pass');
+      expect(events[0].by).toBe('auto');
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('does NOT emit gate_verdict, phase_end alongside force_pass', async () => {
+    const runDir = makeTmpDir();
+    const state = makeState({ currentPhase: 7 });
+    const { logger, eventsPath, cleanup } = makeTestLogger(state.runId);
+
+    try {
+      await forcePassGate(7, state, runDir, CWD, 'user', logger);
+      const events = readEvents(eventsPath);
+      const forbidden = events.filter((e: any) =>
+        e.event === 'gate_verdict' || e.event === 'phase_end'
+      );
+      expect(forbidden).toHaveLength(0);
+      expect(events[0].event).toBe('force_pass');
+    } finally {
+      cleanup();
+    }
+  });
+});
+
+describe('force_pass — forcePassVerify emission', () => {
+  it('emits exactly one force_pass event with by=user, phase=6', async () => {
+    const runDir = makeTmpDir();
+    const cwd = makeTmpDir();
+    const state = makeState({ currentPhase: 6 });
+    const { logger, eventsPath, cleanup } = makeTestLogger(state.runId);
+
+    try {
+      await forcePassVerify(state, runDir, cwd, 'user', logger);
+      const events = readEvents(eventsPath);
+      const forcePassEvents = events.filter((e: any) => e.event === 'force_pass');
+      expect(forcePassEvents).toHaveLength(1);
+      expect(forcePassEvents[0].phase).toBe(6);
+      expect(forcePassEvents[0].by).toBe('user');
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('does NOT emit verify_result alongside force_pass', async () => {
+    const runDir = makeTmpDir();
+    const cwd = makeTmpDir();
+    const state = makeState({ currentPhase: 6 });
+    const { logger, eventsPath, cleanup } = makeTestLogger(state.runId);
+
+    try {
+      await forcePassVerify(state, runDir, cwd, 'auto', logger);
+      const events = readEvents(eventsPath);
+      const forbidden = events.filter((e: any) => e.event === 'verify_result');
+      expect(forbidden).toHaveLength(0);
+    } finally {
+      cleanup();
+    }
+  });
+});
+
+describe('handleVerifyFail — phaseReopenSource tracking', () => {
+  it('sets phaseReopenSource[5] = 6 when verify fails within retry limit', async () => {
+    const runDir = makeTmpDir();
+    const cwd = makeTmpDir();
+    const state = makeState({ currentPhase: 6, verifyRetries: 0 });
+    const feedbackPath = path.join(runDir, 'verify-feedback.md');
+    fs.writeFileSync(feedbackPath, '# feedback');
+    const evalAbsPath = path.join(cwd, state.artifacts.evalReport);
+    fs.mkdirSync(path.dirname(evalAbsPath), { recursive: true });
+    fs.writeFileSync(evalAbsPath, '# eval');
+
+    await handleVerifyFail(feedbackPath, state, runDir, cwd, createNoOpInputManager(), new NoopLogger());
+    expect(state.phaseReopenSource['5']).toBe(6);
   });
 });
