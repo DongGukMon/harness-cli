@@ -195,14 +195,12 @@ export async function runInteractivePhase(
   const promptFile = path.join(runDir, `phase-${phase}-init-prompt.md`);
   fs.writeFileSync(promptFile, prompt, 'utf-8');
 
-  printAdvisorReminder(phase, preset.runner);
-  await new Promise<void>((resolve) => setTimeout(resolve, 300));
-
   // Dispatch to runner
   if (preset.runner === 'claude') {
     const { pid: claudePid } = await runClaudeInteractive(
       phase, updatedState, preset, harnessDir, runDir, promptFile,
     );
+    printAdvisorReminder(phase, preset.runner);
     const sentinelPath = path.join(runDir, `phase-${phase}.done`);
     const resolvedAttemptId = updatedState.phaseAttemptId[String(phase)] ?? attemptId;
     const result = await waitForPhaseCompletion(
@@ -210,7 +208,7 @@ export async function runInteractivePhase(
     );
     return { ...result, attemptId };
   } else {
-    // Codex runner
+    // Codex runner — printAdvisorReminder is a no-op for codex, omit call
     const { runCodexInteractive } = await import('../runners/codex.js');
     const result = await runCodexInteractive(
       phase, updatedState, preset, harnessDir, runDir, promptFile, cwd,
