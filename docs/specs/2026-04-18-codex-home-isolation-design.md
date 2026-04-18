@@ -312,11 +312,12 @@ Behavioral (prove the fix, not just surface changes):
 - test passes: "runCodexInteractive spawn env contains CODEX_HOME=<provided path>" (same file)
 - test passes: "gate.ts propagates CodexIsolationError as gate_error (no retry)" in tests/phases/gate.test.ts
 - test passes: "interactive.ts propagates CodexIsolationError as phase error" in tests/phases/interactive.test.ts
+- test passes: "codex-interactive branch in interactive.ts calls ensureCodexIsolation(runDir) and passes codexHomeFor(runDir) to runCodexInteractive" in tests/phases/interactive.test.ts
 - test passes: "startCommand with --codex-no-isolate sets state.codexNoIsolate=true and emits stderr warning" in tests/commands/run.test.ts
 - test passes: "migrateState adds codexNoIsolate=false to legacy state" in tests/state.test.ts
 - test passes: "resumeCommand preserves state.codexNoIsolate=true across resume" in tests/commands (or equivalent resume test file)
 - test passes: "first gate invocation creates <runDir>/codex-home/auth.json symlink" in tests/phases/gate.test.ts (lazy-at-first-use, not startCommand)
-- test passes: "ensureCodexIsolation creates ONLY auth.json (no config.toml, no AGENTS.md) in <runDir>/codex-home/" in tests/runners/codex-isolation.test.ts — explicit absence check for config.toml
+- test passes: "ensureCodexIsolation bootstraps ONLY auth.json — absent: AGENTS.md, config.toml, agents/, prompts/, skills/, rules/, memories/, hooks.json" in tests/runners/codex-isolation.test.ts
 - test passes: "SessionMeta contains codexHome path when isolation enabled" in tests/integration/logging.test.ts (or tests/logger.test.ts)
 - test passes: "SessionMeta does NOT contain codexHome when --codex-no-isolate" (same file)
 - test passes: "updateMeta lazy-bootstrap path (resume with missing meta.json) persists codexHome" in tests/logger.test.ts
@@ -355,8 +356,10 @@ TDD rhythm: where a test is listed before its implementation, write the failing 
    - Write failing test in `tests/phases/gate.test.ts` asserting `CodexIsolationError` → `gate_error` (no retry).
    - Modify `src/phases/gate.ts` to call `ensureCodexIsolation(runDir)` unless `state.codexNoIsolate`; wrap in try/catch producing a `GatePhaseResult` error. Test passes.
 7. **Caller integration** (interactive):
-   - Write failing test in `tests/phases/interactive.test.ts` for the codex-interactive branch asserting propagation.
-   - Modify `src/phases/interactive.ts` codex branch with same pattern. Test passes.
+   - Write failing tests in `tests/phases/interactive.test.ts` for the codex-interactive branch:
+     - **Positive path**: when `state.codexNoIsolate === false`, `ensureCodexIsolation(runDir)` is invoked and `codexHomeFor(runDir)` is passed to `runCodexInteractive` (spy on `ensureCodexIsolation` + assert `runCodexInteractive.mock.calls[0]` includes the expected path arg).
+     - **Error propagation**: when `ensureCodexIsolation` throws `CodexIsolationError`, the phase surfaces it as an interactive phase error (not a retry-eligible condition).
+   - Modify `src/phases/interactive.ts` codex branch with same pattern as gate. Tests pass.
 8. **CLI flag + warning**:
    - `bin/harness.ts`: add `--codex-no-isolate` option on `start` and `run` subcommands.
    - `src/commands/start.ts`: `StartOptions.codexNoIsolate?: boolean`, threaded into `createInitialState`. On `true`, emit stderr warning: `⚠️  CODEX_HOME isolation disabled. Codex subprocess may load personal conventions (BUG-C risk).`
