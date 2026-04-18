@@ -271,9 +271,9 @@ Fallback policy: **abort, not silent bypass**. Silent fallback to non-isolated w
 
 ### 7.3 Integration — existing harness
 
-- Default `harness start`/`harness run` new-run creates `<runDir>/codex-home/auth.json` (symlink) before any gate fires.
-- `--codex-no-isolate` flag: `codex-home/` is NOT created; `state.codexNoIsolate === true`.
-- `harness resume` on a run started with `--codex-no-isolate` preserves the decision.
+- First codex-phase invocation (gate or codex-interactive) creates `<runDir>/codex-home/auth.json` (symlink). Creation is lazy-at-first-use, not at `harness start` — this keeps the start path unchanged and auth errors surface as gate errors (the same boundary where they're already handled). `SessionMeta.codexHome` is pre-populated with the *planned* path at bootstrap time (via pure `codexHomeFor(runDir)`), so observability doesn't depend on creation timing.
+- `--codex-no-isolate` flag: `codex-home/` is NOT created; `state.codexNoIsolate === true`; runner spawns without `CODEX_HOME`.
+- `harness resume` on a run started with `--codex-no-isolate` preserves the decision (state already has the flag; resume doesn't re-ask).
 
 ### 7.4 Manual smoke (documented in PR body)
 
@@ -310,13 +310,16 @@ Behavioral (prove the fix, not just surface changes):
 - test passes: "gate.ts propagates CodexIsolationError as gate_error (no retry)" in tests/phases/gate.test.ts
 - test passes: "interactive.ts propagates CodexIsolationError as phase error" in tests/phases/interactive.test.ts
 - test passes: "startCommand with --codex-no-isolate sets state.codexNoIsolate=true and emits stderr warning" in tests/commands/run.test.ts
-- test passes: "startCommand default new-run creates <runDir>/codex-home/auth.json symlink" in tests/commands/run.test.ts (or dedicated integration)
 - test passes: "migrateState adds codexNoIsolate=false to legacy state" in tests/state.test.ts
 - test passes: "resumeCommand preserves state.codexNoIsolate=true across resume" in tests/commands (or equivalent resume test file)
+- test passes: "first gate invocation creates <runDir>/codex-home/auth.json symlink" in tests/phases/gate.test.ts (lazy-at-first-use, not startCommand)
+- test passes: "ensureCodexIsolation creates ONLY auth.json (no config.toml, no AGENTS.md) in <runDir>/codex-home/" in tests/runners/codex-isolation.test.ts — explicit absence check for config.toml
 - test passes: "SessionMeta contains codexHome path when isolation enabled" in tests/integration/logging.test.ts (or tests/logger.test.ts)
 - test passes: "SessionMeta does NOT contain codexHome when --codex-no-isolate" (same file)
 - test passes: "updateMeta lazy-bootstrap path (resume with missing meta.json) persists codexHome" in tests/logger.test.ts
+- test passes: "buildConfigCancelHandler writeMeta path persists codexHome (regression guard for second call site)" in tests/logger.test.ts OR tests/commands/inner.test.ts
 - test passes: "ensureCodexIsolation wraps mkdir/symlink EACCES failures as CodexIsolationError" in tests/runners/codex-isolation.test.ts
+- test passes: "resume-fallback path (session_missing → fresh) — BOTH spawn calls carry CODEX_HOME=<provided path>" in tests/runners/codex-resume.test.ts
 ```
 
 Evidence (attached to PR body):
