@@ -91,12 +91,12 @@
 
  RUN  v2.1.9 /Users/daniel/.grove/github.com/DongGukMon/harness-cli/worktrees/logging
 
- ✓ tests/logger.test.ts (23 tests) 14ms
+ ✓ tests/logger.test.ts (24 tests) 13ms
 
  Test Files  1 passed (1)
-      Tests  23 passed (23)
-   Start at  09:51:54
-   Duration  743ms (transform 74ms, setup 0ms, collect 87ms, tests 14ms, environment 0ms, prepare 48ms)
+      Tests  24 passed (24)
+   Start at  10:04:38
+   Duration  214ms (transform 37ms, setup 0ms, collect 38ms, tests 13ms, environment 0ms, prepare 27ms)
 ```
 
 </details>
@@ -125,12 +125,12 @@
 
  RUN  v2.1.9 /Users/daniel/.grove/github.com/DongGukMon/harness-cli/worktrees/logging
 
- ✓ tests/phases/verdict.test.ts (4 tests) 2ms
+ ✓ tests/phases/verdict.test.ts (4 tests) 1ms
 
  Test Files  1 passed (1)
       Tests  4 passed (4)
-   Start at  09:51:55
-   Duration  545ms (transform 34ms, setup 0ms, collect 38ms, tests 2ms, environment 0ms, prepare 33ms)
+   Start at  10:04:39
+   Duration  205ms (transform 28ms, setup 0ms, collect 26ms, tests 1ms, environment 0ms, prepare 27ms)
 ```
 
 </details>
@@ -159,12 +159,12 @@
 
  RUN  v2.1.9 /Users/daniel/.grove/github.com/DongGukMon/harness-cli/worktrees/logging
 
- ✓ tests/state.test.ts (16 tests) 43ms
+ ✓ tests/state.test.ts (16 tests) 19ms
 
  Test Files  1 passed (1)
       Tests  16 passed (16)
-   Start at  09:51:56
-   Duration  673ms (transform 64ms, setup 0ms, collect 76ms, tests 43ms, environment 3ms, prepare 59ms)
+   Start at  10:04:39
+   Duration  258ms (transform 38ms, setup 0ms, collect 42ms, tests 19ms, environment 0ms, prepare 29ms)
 ```
 
 </details>
@@ -193,12 +193,12 @@
 
  RUN  v2.1.9 /Users/daniel/.grove/github.com/DongGukMon/harness-cli/worktrees/logging
 
- ✓ tests/phases/gate.test.ts (24 tests) 11ms
+ ✓ tests/phases/gate.test.ts (24 tests) 10ms
 
  Test Files  1 passed (1)
       Tests  24 passed (24)
-   Start at  09:52:00
-   Duration  314ms (transform 72ms, setup 0ms, collect 57ms, tests 11ms, environment 0ms, prepare 55ms)
+   Start at  10:04:40
+   Duration  230ms (transform 46ms, setup 0ms, collect 51ms, tests 10ms, environment 0ms, prepare 30ms)
 ```
 
 </details>
@@ -227,14 +227,14 @@
 
  RUN  v2.1.9 /Users/daniel/.grove/github.com/DongGukMon/harness-cli/worktrees/logging
 
- ✓ tests/phases/interactive.test.ts (33 tests) 4315ms
-   ✓ runInteractivePhase — advisor reminder fires before sendKeysToPane > printAdvisorReminder is called before sendKeysToPane 1861ms
-   ✓ runInteractivePhase — advisor reminder fires before sendKeysToPane > sendKeysToPane command includes --dangerously-skip-permissions and --effort 1863ms
+ ✓ tests/phases/interactive.test.ts (33 tests) 4231ms
+   ✓ runInteractivePhase — advisor reminder fires before sendKeysToPane > printAdvisorReminder is called before sendKeysToPane 1860ms
+   ✓ runInteractivePhase — advisor reminder fires before sendKeysToPane > sendKeysToPane command includes --dangerously-skip-permissions and --effort 1860ms
 
  Test Files  1 passed (1)
       Tests  33 passed (33)
-   Start at  09:52:01
-   Duration  4.67s (transform 83ms, setup 0ms, collect 104ms, tests 4.32s, environment 0ms, prepare 79ms)
+   Start at  10:04:40
+   Duration  4.47s (transform 71ms, setup 0ms, collect 82ms, tests 4.23s, environment 0ms, prepare 30ms)
 ```
 
 </details>
@@ -263,12 +263,12 @@
 
  RUN  v2.1.9 /Users/daniel/.grove/github.com/DongGukMon/harness-cli/worktrees/logging
 
- ✓ tests/phases/runner.test.ts (55 tests) 62ms
+ ✓ tests/phases/runner.test.ts (56 tests) 56ms
 
  Test Files  1 passed (1)
-      Tests  55 passed (55)
-   Start at  09:52:06
-   Duration  4.04s (transform 1.48s, setup 0ms, collect 2.12s, tests 62ms, environment 0ms, prepare 316ms)
+      Tests  56 passed (56)
+   Start at  10:04:45
+   Duration  335ms (transform 84ms, setup 0ms, collect 95ms, tests 56ms, environment 0ms, prepare 26ms)
 ```
 
 </details>
@@ -297,12 +297,12 @@
 
  RUN  v2.1.9 /Users/daniel/.grove/github.com/DongGukMon/harness-cli/worktrees/logging
 
- ✓ tests/commands/inner.test.ts (9 tests) 6ms
+ ✓ tests/commands/inner.test.ts (11 tests) 43ms
 
  Test Files  1 passed (1)
-      Tests  9 passed (9)
-   Start at  09:52:11
-   Duration  426ms (transform 102ms, setup 0ms, collect 101ms, tests 6ms, environment 0ms, prepare 95ms)
+      Tests  11 passed (11)
+   Start at  10:04:45
+   Duration  308ms (transform 63ms, setup 0ms, collect 74ms, tests 43ms, environment 0ms, prepare 25ms)
 ```
 
 </details>
@@ -331,13 +331,12 @@
 
  RUN  v2.1.9 /Users/daniel/.grove/github.com/DongGukMon/harness-cli/worktrees/logging
 
- ✓ tests/commands/run.test.ts (13 tests) 2697ms
-   ✓ startCommand > allows unstaged changes by default 393ms
+ ✓ tests/commands/run.test.ts (13 tests) 1893ms
 
  Test Files  1 passed (1)
       Tests  13 passed (13)
-   Start at  09:52:12
-   Duration  3.93s (transform 544ms, setup 0ms, collect 625ms, tests 2.70s, environment 0ms, prepare 248ms)
+   Start at  10:04:46
+   Duration  2.14s (transform 54ms, setup 0ms, collect 64ms, tests 1.89s, environment 0ms, prepare 29ms)
 ```
 
 </details>
@@ -366,13 +365,12 @@
 
  RUN  v2.1.9 /Users/daniel/.grove/github.com/DongGukMon/harness-cli/worktrees/logging
 
- ✓ tests/commands/resume-cmd.test.ts (10 tests) 1583ms
-   ✓ resumeCommand > Case 2: session alive + inner dead → restart inner via control pane 388ms
+ ✓ tests/commands/resume-cmd.test.ts (10 tests) 787ms
 
  Test Files  1 passed (1)
       Tests  10 passed (10)
-   Start at  09:52:16
-   Duration  2.24s (transform 241ms, setup 0ms, collect 279ms, tests 1.58s, environment 0ms, prepare 57ms)
+   Start at  10:04:48
+   Duration  1.09s (transform 71ms, setup 0ms, collect 78ms, tests 787ms, environment 0ms, prepare 37ms)
 ```
 
 </details>
@@ -401,12 +399,12 @@
 
  RUN  v2.1.9 /Users/daniel/.grove/github.com/DongGukMon/harness-cli/worktrees/logging
 
- ✓ tests/integration/logging.test.ts (15 tests) 151ms
+ ✓ tests/integration/logging.test.ts (15 tests) 88ms
 
  Test Files  1 passed (1)
       Tests  15 passed (15)
-   Start at  09:52:19
-   Duration  960ms (transform 153ms, setup 0ms, collect 153ms, tests 151ms, environment 0ms, prepare 93ms)
+   Start at  10:04:50
+   Duration  397ms (transform 95ms, setup 0ms, collect 121ms, tests 88ms, environment 0ms, prepare 26ms)
 ```
 
 </details>
@@ -435,88 +433,55 @@
 
  RUN  v2.1.9 /Users/daniel/.grove/github.com/DongGukMon/harness-cli/worktrees/logging
 
- ✓ tests/logger.test.ts (23 tests) 15ms
- ✓ tests/phases/gate.test.ts (24 tests) 35ms
- ✓ tests/commands/inner.test.ts (9 tests) 39ms
- ✓ tests/phases/verify.test.ts (12 tests) 25ms
- ✓ tests/phases/runner.test.ts (55 tests) 164ms
- ✓ tests/preflight.test.ts (29 tests | 1 skipped) 353ms
- ✓ tests/integration/logging.test.ts (15 tests) 248ms
- ✓ tests/state.test.ts (16 tests) 57ms
- ✓ tests/signal.test.ts (15 tests) 600ms
- ✓ tests/lock.test.ts (20 tests) 658ms
- ✓ tests/tmux.test.ts (33 tests) 823ms
-   ✓ pollForPidFile > returns null on timeout when file never appears 410ms
-   ✓ pollForPidFile > returns null when file contains non-numeric content 407ms
- ✓ tests/context/assembler.test.ts (9 tests) 24ms
- ✓ tests/root.test.ts (10 tests) 1159ms
-   ✓ findHarnessRoot > with git repo > returns gitRoot/.harness 868ms
- ✓ tests/commands/jump.test.ts (5 tests) 1901ms
-   ✓ jumpCommand > rejects invalid phase number 782ms
-   ✓ jumpCommand > rejects forward jump 342ms
- ✓ tests/commands/status-list.test.ts (7 tests) 2107ms
-   ✓ statusCommand > prints status for current run 479ms
-   ✓ statusCommand > errors when no current-run pointer 452ms
-   ✓ statusCommand > errors when state.json missing 349ms
-   ✓ listCommand > shows all runs 371ms
- ✓ tests/commands/skip.test.ts (4 tests) 1074ms
-   ✓ skipCommand > rejects skip on paused run 312ms
-   ✓ skipCommand > rejects skip on completed run 427ms
- ✓ tests/terminal.test.ts (5 tests) 3ms
- ✓ tests/commands/resume-cmd.test.ts (10 tests) 3897ms
-   ✓ resumeCommand > errors on completed run and updates current-run pointer 302ms
-   ✓ resumeCommand > resumes with explicit runId (Case 3: no session) 367ms
-   ✓ resumeCommand > resumes with implicit current-run (Case 3: no session) 1059ms
-   ✓ resumeCommand > Case 1: session + inner alive → re-attach only 627ms
-   ✓ resumeCommand > Case 2: session alive + inner dead → restart inner via control pane 465ms
-   ✓ resumeCommand > resumeCommand — loggingEnabled inheritance > resume preserves state.loggingEnabled=true from original start 366ms
- ✓ tests/conformance/phase-models.test.ts (9 tests) 6ms
- ✓ tests/input.test.ts (7 tests) 41ms
- ✓ tests/phases/verdict.test.ts (4 tests) 5ms
- ✓ tests/git.test.ts (16 tests) 3547ms
-   ✓ getGitRoot > returns repo root path 539ms
-   ✓ getGitRoot > throws in non-git directory 599ms
-   ✓ getHead > returns a SHA string 490ms
-   ✓ isAncestor > returns true when ancestor is an ancestor of descendant 790ms
-   ✓ isAncestor > returns false when not an ancestor 350ms
- ✓ tests/resume.test.ts (6 tests) 3124ms
-   ✓ resumeRun > errors on paused run with null pendingAction 1391ms
-   ✓ resumeRun > clears pendingAction when rerun_gate target already completed 581ms
-   ✓ resumeRun > clears pendingAction when rerun_verify and phase 6 completed 367ms
-   ✓ resumeRun > clears skip_phase pendingAction when target completed 345ms
- ✓ tests/ui.test.ts (6 tests) 71ms
- ✓ tests/process.test.ts (6 tests) 206ms
- ✓ tests/runners/claude.test.ts (1 test) 18ms
- ✓ tests/integration/lifecycle.test.ts (8 tests) 3361ms
-   ✓ CLI lifecycle integration > harness --help works 924ms
-   ✓ CLI lifecycle integration > harness --version outputs version 417ms
-   ✓ CLI lifecycle integration > harness list shows empty in fresh repo 893ms
-   ✓ CLI lifecycle integration > harness status without current-run errors 368ms
-   ✓ CLI lifecycle integration > harness list shows existing runs 306ms
- ✓ tests/runners/codex.test.ts (1 test) 23ms
- ✓ tests/artifact.test.ts (12 tests) 4679ms
-   ✓ normalizeArtifactCommit > creates commit for new untracked file 1620ms
-   ✓ normalizeArtifactCommit > is no-op for already-committed file 844ms
-   ✓ normalizeArtifactCommit > fails when non-target files are staged 322ms
-   ✓ normalizeArtifactCommit > recovers from interrupted git add (target-only staged) 421ms
-   ✓ runPhase6Preconditions > git rm + commit for tracked eval report 319ms
- ✓ tests/commands/run.test.ts (13 tests) 4758ms
-   ✓ startCommand > accepts empty task as untitled 1493ms
-   ✓ startCommand > accepts whitespace-only task as untitled 666ms
-   ✓ startCommand > creates run directory with state.json + task.md 444ms
-   ✓ startCommand > creates required directories 342ms
-   ✓ startCommand > adds .harness/ to .gitignore 327ms
- ✓ tests/phases/interactive.test.ts (33 tests) 6679ms
-   ✓ validatePhaseArtifacts — Phase 5 > returns true when HEAD has advanced and working tree is clean 623ms
-   ✓ validatePhaseArtifacts — Phase 5 > returns false when HEAD has not advanced (no commits made) 978ms
-   ✓ validatePhaseArtifacts — Phase 5 > returns false when working tree is dirty 653ms
-   ✓ runInteractivePhase — advisor reminder fires before sendKeysToPane > printAdvisorReminder is called before sendKeysToPane 1999ms
-   ✓ runInteractivePhase — advisor reminder fires before sendKeysToPane > sendKeysToPane command includes --dangerously-skip-permissions and --effort 1888ms
+ ✓ tests/logger.test.ts (24 tests) 14ms
+ ✓ tests/phases/gate.test.ts (24 tests) 17ms
+ ✓ tests/commands/inner.test.ts (11 tests) 92ms
+ ✓ tests/state.test.ts (16 tests) 52ms
+ ✓ tests/phases/verify.test.ts (12 tests) 96ms
+ ✓ tests/integration/logging.test.ts (15 tests) 194ms
+ ✓ tests/preflight.test.ts (29 tests | 1 skipped) 268ms
+ ✓ tests/lock.test.ts (20 tests) 373ms
+ ✓ tests/phases/runner.test.ts (56 tests) 357ms
+ ✓ tests/signal.test.ts (15 tests) 407ms
+ ✓ tests/context/assembler.test.ts (9 tests) 7ms
+ ✓ tests/tmux.test.ts (33 tests) 815ms
+   ✓ pollForPidFile > returns null on timeout when file never appears 406ms
+   ✓ pollForPidFile > returns null when file contains non-numeric content 404ms
+ ✓ tests/root.test.ts (10 tests) 180ms
+ ✓ tests/commands/status-list.test.ts (7 tests) 750ms
+ ✓ tests/commands/jump.test.ts (5 tests) 987ms
+   ✓ jumpCommand > rejects forward jump 377ms
+ ✓ tests/terminal.test.ts (5 tests) 2ms
+ ✓ tests/conformance/phase-models.test.ts (9 tests) 4ms
+ ✓ tests/resume.test.ts (6 tests) 1545ms
+   ✓ resumeRun > clears pendingAction when rerun_verify and phase 6 completed 365ms
+ ✓ tests/commands/resume-cmd.test.ts (10 tests) 2058ms
+ ✓ tests/input.test.ts (7 tests) 3ms
+ ✓ tests/ui.test.ts (6 tests) 2ms
+ ✓ tests/git.test.ts (16 tests) 1700ms
+ ✓ tests/phases/verdict.test.ts (4 tests) 1ms
+ ✓ tests/runners/claude.test.ts (1 test) 17ms
+ ✓ tests/process.test.ts (6 tests) 84ms
+ ✓ tests/commands/skip.test.ts (4 tests) 503ms
+ ✓ tests/runners/codex.test.ts (1 test) 11ms
+ ✓ tests/integration/lifecycle.test.ts (8 tests) 1708ms
+ ✓ tests/artifact.test.ts (12 tests) 2703ms
+   ✓ normalizeArtifactCommit > creates commit for new untracked file 432ms
+   ✓ normalizeArtifactCommit > is no-op for already-committed file 356ms
+   ✓ normalizeArtifactCommit > recovers from interrupted git add (target-only staged) 347ms
+ ✓ tests/commands/run.test.ts (13 tests) 3024ms
+   ✓ startCommand > accepts whitespace-only task as untitled 361ms
+   ✓ startCommand > creates run directory with state.json + task.md 353ms
+   ✓ startCommand > creates required directories 457ms
+   ✓ startCommand > adds .harness/ to .gitignore 343ms
+ ✓ tests/phases/interactive.test.ts (33 tests) 5006ms
+   ✓ runInteractivePhase — advisor reminder fires before sendKeysToPane > printAdvisorReminder is called before sendKeysToPane 1913ms
+   ✓ runInteractivePhase — advisor reminder fires before sendKeysToPane > sendKeysToPane command includes --dangerously-skip-permissions and --effort 1861ms
 
  Test Files  31 passed (31)
-      Tests  422 passed | 1 skipped (423)
-   Start at  09:52:20
-   Duration  7.54s (transform 2.63s, setup 0ms, collect 6.48s, tests 39.70s, environment 21ms, prepare 3.33s)
+      Tests  426 passed | 1 skipped (427)
+   Start at  10:04:50
+   Duration  5.40s (transform 1.23s, setup 0ms, collect 3.02s, tests 22.98s, environment 3ms, prepare 1.69s)
 ```
 
 </details>
