@@ -13,10 +13,10 @@ import {
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 /**
- * Shared reviewer contract per spec "Gate phase 프롬프트 계약 > 공통 역할 지시".
- * All gate phases (2, 4, 7) include this preamble.
+ * Shared reviewer contract — common preamble across all gates (2, 4, 7).
+ * Per-gate 5-axis rubric is appended via REVIEWER_CONTRACT_BY_GATE below.
  */
-const REVIEWER_CONTRACT = `You are an independent technical reviewer. Review the provided documents and return a structured verdict.
+const REVIEWER_CONTRACT_BASE = `You are an independent technical reviewer. Review the provided documents and return a structured verdict.
 Output format — must include exactly these sections in order:
 
 ## Verdict
@@ -38,6 +38,42 @@ Scope rules:
 - Do NOT apply personal or workspace-level conventions (commit-message formats, naming rules, protocols) unless they are explicitly cited in the provided artifacts.
 - Do NOT flag artifacts that are outside this phase's scope as "missing" — later harness phases produce plan/impl/eval artifacts.
 `;
+
+const FIVE_AXIS_SPEC_GATE = `
+## Five-Axis Evaluation (Phase 2 — spec gate)
+평가 대상은 spec 문서다. 다음 축만 적용:
+1. Correctness — 요구사항/비요구사항/경계조건/성공기준이 명시되었는가?
+2. Readability — 섹션 구성이 명확하고 모호 표현이 없는가?
+3. Scope — 단일 구현 plan으로 분해 가능한 크기인가? 여러 독립 프로젝트 섞이지 않음?
+
+Additional required check: spec MUST contain an explicit '## Open Questions' section. Missing/empty-without-rationale → P1.
+`;
+
+const FIVE_AXIS_PLAN_GATE = `
+## Five-Axis Evaluation (Phase 4 — plan gate)
+평가 대상은 plan + spec이다.
+1. Correctness — plan이 spec의 모든 요구사항을 커버?
+2. Architecture — 태스크 분해가 수직 슬라이스이고 의존성 순서가 명확?
+3. Testability — 각 태스크에 수용 기준과 검증 절차 있음?
+4. Readability — 맥락 없이 태스크 하나만 집어도 수행 가능?
+`;
+
+const FIVE_AXIS_EVAL_GATE = `
+## Five-Axis Evaluation (Phase 7 — eval gate)
+평가 대상은 spec + plan + eval report + diff. 5축 전부:
+1. Correctness — 구현이 spec+plan과 일치? 경계조건·테스트 커버리지?
+2. Readability — 이름/흐름/로컬 복잡도 적절?
+3. Architecture — 기존 패턴 부합, 경계 선명, 조기 추상화 없음?
+4. Security — 경계 입력 검증, 비밀 노출, 인증 경로?
+5. Performance — N+1, 무한 루프, 핫패스 회귀?
+Severity: P0/P1=Critical(블록), P2=Important, P3=Suggestion.
+`;
+
+const REVIEWER_CONTRACT_BY_GATE: Record<2 | 4 | 7, string> = {
+  2: REVIEWER_CONTRACT_BASE + FIVE_AXIS_SPEC_GATE,
+  4: REVIEWER_CONTRACT_BASE + FIVE_AXIS_PLAN_GATE,
+  7: REVIEWER_CONTRACT_BASE + FIVE_AXIS_EVAL_GATE,
+};
 
 function readTemplateFile(filename: string): string {
   const templatePath = path.join(__dirname, 'prompts', filename);
@@ -147,7 +183,7 @@ function buildGatePromptPhase2(state: HarnessState, cwd: string): string | { err
   if ('error' in specResult) return specResult;
 
   return (
-    REVIEWER_CONTRACT +
+    REVIEWER_CONTRACT_BY_GATE[2] +
     buildLifecycleContext(2) +
     `<spec>\n${specResult.content}\n</spec>\n`
   );
@@ -163,7 +199,7 @@ function buildGatePromptPhase4(state: HarnessState, cwd: string): string | { err
   if ('error' in planResult) return planResult;
 
   return (
-    REVIEWER_CONTRACT +
+    REVIEWER_CONTRACT_BY_GATE[4] +
     buildLifecycleContext(4) +
     `<spec>\n${specResult.content}\n</spec>\n\n` +
     `<plan>\n${planResult.content}\n</plan>\n`
@@ -248,7 +284,7 @@ function buildGatePromptPhase7(state: HarnessState, cwd: string): string | { err
   const { diffSection, externalSummary, metadata } = buildPhase7DiffAndMetadata(state, cwd);
 
   return (
-    REVIEWER_CONTRACT +
+    REVIEWER_CONTRACT_BY_GATE[7] +
     buildLifecycleContext(7) +
     `<spec>\n${specResult.content}\n</spec>\n\n` +
     `<plan>\n${planResult.content}\n</plan>\n\n` +
