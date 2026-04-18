@@ -4,7 +4,7 @@
 
 ## 프로젝트 한 줄
 
-`harness-cli`는 AI 에이전트 개발 라이프사이클을 7단계 파이프라인(spec → gate → plan → gate → impl → verify → eval gate)으로 강제하는 CLI. Claude Code가 구현자, Codex가 독립 리뷰어. `--light` flag로 4-phase 경량 모드(P1 → P5 → P6 → P7)도 설계 완료(구현 대기).
+`harness-cli`는 AI 에이전트 개발 라이프사이클을 7단계 파이프라인(spec → gate → plan → gate → impl → verify → eval gate)으로 강제하는 CLI. Claude Code가 구현자, Codex가 독립 리뷰어. `--light` flag로 4-phase 경량 모드(P1 → P5 → P6 → P7)도 설계 + 구현 플랜 완료(PR #10/#17), **구현 대기**.
 
 ## 먼저 읽을 것
 
@@ -14,11 +14,12 @@
 2. `docs/specs/2026-04-12-harness-cli-design.md` — 원 설계 rationale (ADR)
 3. `docs/specs/2026-04-14-tmux-rearchitecture-design.md` — 현 tmux 아키텍처 ADR
 4. `docs/specs/2026-04-14-claude-harness-skill-design.md` — `/harness` 슬래시 커맨드 플러그인 설계
-5. **최근 shipped 설계** (main에 merged, 구현 일부 완료):
+5. **최근 shipped 설계** (main에 merged):
    - `docs/specs/2026-04-18-gate-prompt-hardening-design.md` + `docs/plans/2026-04-18-gate-prompt-hardening.md` (PR #11) — BUG-A/B/C 수정 + phase-start preset 로깅
-   - `docs/specs/2026-04-18-harness-skills-synthesis-{INTENT,design}.md` + `docs/plans/2026-04-18-harness-skills-synthesis.md` (PR #12) — **T1/T2/T3/T6 완료, T4/T5/T7 대기**
-6. **In-flight 설계** (구현 플랜 대기):
-   - `docs/specs/2026-04-18-untitled-design.md` (PR #10) — `harness start --light` 경량 4-phase 플로우. **파일명 정리 필요** (`untitled` → 의미있는 이름).
+   - `docs/specs/2026-04-18-harness-skills-synthesis-{INTENT,design}.md` + `docs/plans/2026-04-18-harness-skills-synthesis.md` (PR #12 + #15) — **T1–T7 전부 완료**. PR #15가 assembler inline(T4) + thin `phase-{1,3,5}.md` binding(T5) + E2E/docs(T7) 마감.
+   - `docs/specs/2026-04-18-claude-token-capture-design.md` (PR #16) — interactive phase_end에 `claudeTokens` 필드 추가. 5 라운드 gate 리뷰를 거친 설계 + 구현.
+6. **In-flight 설계** (구현 대기):
+   - `docs/specs/2026-04-18-light-flow-design.md` + `docs/plans/2026-04-18-light-flow.md` (PR #10 spec + PR #17 plan) — `harness start --light` 경량 4-phase 플로우. 플랜은 gate 6라운드 후 Codex APPROVE 상태, 구현 세션 대기. 원 `untitled-design.md` 파일명은 PR #17에서 의미있는 이름으로 rename 완료.
 
 ## 코드 탐색 entry points
 
@@ -26,12 +27,14 @@
 |---|---|
 | `src/commands/` | CLI 서브커맨드 (`run`, `resume`, `jump`, `skip`, `inner`, `start`) |
 | `src/phases/` | 라이프사이클 페이즈 구현 (interactive, gate, runner dispatcher, verdict) |
-| `src/runners/` | Claude/Codex runner (`claude.ts` interactive+gate, `codex.ts` gate+resume) |
-| `src/context/assembler.ts` | 페이즈별 프롬프트 조립. **주요 상수**: `REVIEWER_CONTRACT_BASE` + `FIVE_AXIS_{SPEC,PLAN,EVAL}_GATE` + `REVIEWER_CONTRACT_BY_GATE[2\|4\|7]`. **주요 함수**: `buildLifecycleContext(phase)` — Gate 2/4/7에 주입되는 `<harness_lifecycle>` stanza (PR #11, BUG-A fix). |
-| `src/context/prompts/phase-{1,3,5}.md` | Phase 1/3/5 템플릿. 현재 `HARNESS FLOW CONSTRAINT` 블록 inline (PR #11, BUG-B fix — `advisor()` 중간 호출 금지). Skills-synthesis T5에서 thin binding으로 전환 시 이 constraint를 wrapper에 migrate하거나 유지해야 함. |
-| `src/context/skills/` | Phase 1/3/5 wrapper 스킬 (`harness-phase-{1,3,5}-*.md`, T2 authored). **아직 assembler에 inline되지 않음** — T4 (`assembleInteractivePrompt`에 `{{wrapper_skill}}` 렌더링) 구현 대기. |
+| `src/runners/` | Claude/Codex runner (`claude.ts` interactive+gate with `--session-id` pinning per PR #16; `codex.ts` gate+resume; `claude-usage.ts` PR #16 — Claude session JSONL 파싱 + `ClaudeTokens` 집계). |
+| `src/context/assembler.ts` | 페이즈별 프롬프트 조립. **주요 상수**: `REVIEWER_CONTRACT_BASE` + `FIVE_AXIS_{SPEC,PLAN,EVAL}_GATE` + `REVIEWER_CONTRACT_BY_GATE[2\|4\|7]`. **주요 함수**: `buildLifecycleContext(phase)` — Gate 2/4/7에 주입되는 `<harness_lifecycle>` stanza (PR #11, BUG-A fix). `assembleInteractivePrompt`는 PR #15부터 wrapper skill body를 `{{wrapper_skill}}` 플레이스홀더로 inline 렌더링 (frontmatter strip, `playbookDir` 런타임 계산). |
+| `src/context/prompts/phase-{1,3,5}.md` | Phase 1/3/5 **thin-binding 템플릿** (PR #15 이후). `{{wrapper_skill}}` + 런타임 컨텍스트 vars만 포함하고, `HARNESS FLOW CONSTRAINT`(PR #11 BUG-B fix — `advisor()` 중간 호출 금지)는 wrapper skill의 Invariants 섹션으로 migrate됨. |
+| `src/context/skills/` | Phase 1/3/5 wrapper 스킬 (`harness-phase-{1,3,5}-*.md`). PR #15로 assembler inline 경로가 완성되어 **실 런타임에 반영됨**. BUG-B invariant + Phase 1 Open Questions 의무화가 여기에서 적용된다. |
 | `src/context/playbooks/` | Vendored agent-skills playbooks (T1 at pinned SHA `9534f44c`): `context-engineering.md`, `git-workflow-and-versioning.md`, MIT `LICENSE`, `VENDOR.md` (sync 절차). |
-| `src/state.ts`, `src/types.ts` | `state.json` 스키마 + migration + `GateSessionInfo` lineage |
+| `src/phases/runner.ts` | Phase 러너 dispatcher. PR #16부터 Claude interactive 페이즈 4개 실자 `phase_end` 발행 지점(completed / artifact-commit 실패 / normal failed / catch-throw)에 `claudeTokens` 부착. redirected-by-signal 브랜치는 의도적으로 생략. |
+| `src/state.ts`, `src/types.ts` | `state.json` 스키마 + migration + `GateSessionInfo` lineage. `types.ts`에 `ClaudeTokens` + `phase_end.claudeTokens?` 옵셔널 필드(PR #16). |
+| `src/ui.ts` | 컨트롤 패널 UI. PR #14로 `separator()` 함수가 `max(16, min(64, stdout.columns − 2))`로 터미널 폭에 적응 (이전 이슈 #10 해소). |
 | `src/signal.ts` | SIGUSR1 control-plane handler (online jump/skip) |
 | `src/input.ts` | InputManager — pre-emptive key buffer (1s TTL pendingKey) |
 | `scripts/harness-verify.sh` | Phase 6 결정론 평가 (checklist.json 소비) |
@@ -41,7 +44,7 @@
 
 ```bash
 pnpm tsc --noEmit   # typecheck (= pnpm lint; package.json에서 alias)
-pnpm vitest run     # 전체 테스트 스위트 (현재 baseline: 497 passed / 1 skipped)
+pnpm vitest run     # 전체 테스트 스위트 (현재 baseline: 514 passed / 1 skipped — PR #15/#16 이후)
 pnpm build          # tsc + scripts/copy-assets.mjs (dist 생성)
 ```
 
@@ -55,10 +58,12 @@ pnpm build          # tsc + scripts/copy-assets.mjs (dist 생성)
 |---|---|
 | `session_start` | `task`, `autoMode`, `baseCommit`, `harnessVersion` |
 | `phase_start` | `phase`, `attemptId`, **`preset: { id, runner, model, effort }`** (PR #11 — phase 6 제외) |
-| `phase_end` | `phase`, `attemptId`, `status`, `durationMs` |
+| `phase_end` | `phase`, `attemptId`, `status`, `durationMs`, **`claudeTokens?: { input, output, cacheRead, cacheCreate, total } \| null`** (PR #16 — interactive 1/3/5 + `preset.runner === 'claude'` 실자 페이즈만; codex/redirect-by-signal 분기는 필드 자체 생략) |
 | `gate_verdict` | `phase`, `retryIndex`, `runner`, `verdict`, `durationMs`, `tokensTotal`, `promptBytes`, `codexSessionId`, `resumedFrom`, `resumeFallback`, `preset` |
 | `gate_retry` | `phase`, `retryIndex`, `retryCount`, `retryLimit`, `feedbackPath`, `feedbackBytes`, `feedbackPreview` |
 | `gate_error` | `preset` (PR #11) |
+
+`claudeTokens` 3-state 계약: 성공 시 객체, 추출 실패 시 `null` + 단일 stderr warn (best-effort, 런 실패시키지 않음), 시도 자체가 해당 없으면 필드 부재.
 
 Session meta: `~/.harness/sessions/<hash>/<runId>/{events.jsonl, meta.json, summary.json}`.
 
@@ -82,20 +87,16 @@ Session meta: `~/.harness/sessions/<hash>/<runId>/{events.jsonl, meta.json, summ
 
 | # | 요지 | 상태 |
 |---|---|---|
-| 1 | Gate reject 루프 비수렴 | **PR #11 이후 재실험 필수**. PR #11이 BUG-A (gate lifecycle 부재)와 BUG-C (codex AGENTS.md leak) 수정 → 이전 관찰 데이터 대부분 invalid. content-fix 후보는 "exhaustive-first hint" + "retry limit 상향". "already-addressed dedup"은 dog-fooding 결과 invalid. |
+| 1 | Gate reject 루프 비수렴 | **PR #11/#14/#15 이후 재실험 필수**. shipped 변경 전부 적용된 dist(특히 wrapper-skill runtime 반영 후)로 측정 권장. content-fix 후보는 "exhaustive-first hint" + "retry limit 상향". "already-addressed dedup"은 dog-fooding 결과 invalid. |
 | 5 | Phase 3 interactive 폭주 (37분 runaway 이력) | 원인 미파악. 재현 실험 선행 후 soft-timeout 설계. |
-| 7 | Interactive clarify dialog (`## Open Questions` 의무화) | **harness-skills-synthesis T2에서 wrapper skill에 흡수 완료**. T4/T5 완료 시 runtime 반영. |
 
 ### 2026-04-18 dog-fooding에서 확인된 신규 이슈 (`~/Desktop/projects/harness/experimental-todo/observations.md` 참조)
 
 | # | 요지 | 심각도 | 상태 |
 |---|---|---|---|
 | 8 | Phase 1 default preset 과중 (`opus-max` xHigh) — 간단한 CLI에 4분+ 사용 | P1 | **미처리** (PR #11 §5 deferred). `--simple`/`--complex` 힌트 또는 `opus-high` 기본값 검토 필요. |
-| 9 | `printAdvisorReminder` orphan text (control-pane tip이 Claude로 전달 안 됨) | P2 UX | PR #11 `HARNESS FLOW CONSTRAINT`가 `advisor()` 금지로 실질 무효화. 함수 자체 제거 검토. |
-| 10 | Control-pane 64-char hardcoded (`src/ui.ts:12`) — 40/60 tmux split에서 라벨 줄바꿈 | P2 UX | 미처리. `Math.min(64, termWidth-2)` + 기본 split 60/40 재검토. |
-| 11 | Claude Code folder-trust 다이얼로그 첫 실행 무감지 — hang처럼 보임 | P2 UX | 미처리. README tip 또는 pre-approval 검토. |
-| 12 | 인터랙티브 Phase별 Claude 토큰 기록 부재 (`events.jsonl`에 `preset`만, token 수 없음) | P2 관측성 | 미처리. Claude 런 래핑 시 token meta 캡처 필요. |
-| 13 | Codex `HOME` 격리 미도입 — BUG-C alternative fix | P3 | PR #11 `REVIEWER_CONTRACT` scope-rules로 일단 해결. 항구적 격리는 추후. |
+| 9 | `printAdvisorReminder` orphan text (control-pane tip이 Claude로 전달 안 됨) | P2 UX | PR #11 `HARNESS FLOW CONSTRAINT`가 `advisor()` 금지로 실질 무효화. **제거 PR 진행 중** (`fix/remove-advisor-reminder`, Group C). |
+| 13 | Codex `HOME` 격리 미도입 — BUG-C alternative fix | P3 | PR #11 `REVIEWER_CONTRACT` scope-rules로 일단 해결. **영구 격리 PR 진행 중** (`feat/codex-home-isolation`, Group D). |
 
 ## Worktree 관례
 
