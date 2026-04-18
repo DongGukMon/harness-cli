@@ -6,6 +6,7 @@ import type { HarnessState, GatePhaseResult, VerifyOutcome } from '../../src/typ
 import type { InteractiveResult } from '../../src/phases/interactive.js';
 import { createInitialState } from '../../src/state.js';
 import { GATE_RETRY_LIMIT, VERIFY_RETRY_LIMIT, TERMINAL_PHASE } from '../../src/config.js';
+import { FileSessionLogger, computeRepoKey } from '../../src/logger.js';
 
 // ─── Mocks ────────────────────────────────────────────────────────────────────
 
@@ -67,7 +68,7 @@ vi.mock('../../src/state.js', async (importOriginal) => {
 
 // ─── Imports after mocks ──────────────────────────────────────────────────────
 
-import { runPhaseLoop } from '../../src/phases/runner.js';
+import { runPhaseLoop, handleInteractivePhase } from '../../src/phases/runner.js';
 import { runInteractivePhase } from '../../src/phases/interactive.js';
 import { runGatePhase } from '../../src/phases/gate.js';
 import { runVerifyPhase } from '../../src/phases/verify.js';
@@ -694,5 +695,124 @@ describe('renderControlPanel called on advance', () => {
     await runPhaseLoop(state, HDIR, runDir, CWD, createNoOpInputManager(), new NoopLogger(), { value: false });
 
     expect(vi.mocked(renderControlPanel)).toHaveBeenCalled();
+  });
+});
+
+// ─── handleInteractivePhase — event emission ───────────────────────────────────
+
+function makeTestLogger(runId: string): { logger: FileSessionLogger; eventsPath: string; cleanup: () => void } {
+  const harnessDir = fs.mkdtempSync(path.join(os.tmpdir(), 'handler-test-'));
+  const sessionsRoot = path.join(harnessDir, 'sessions');
+  const logger = new FileSessionLogger(runId, harnessDir, { sessionsRoot });
+  logger.writeMeta({ task: 't' });
+  const eventsPath = path.join(sessionsRoot, computeRepoKey(harnessDir), runId, 'events.jsonl');
+  return { logger, eventsPath, cleanup: () => fs.rmSync(harnessDir, { recursive: true, force: true }) };
+}
+
+function readEvents(eventsPath: string): any[] {
+  if (!fs.existsSync(eventsPath)) return [];
+  return fs.readFileSync(eventsPath, 'utf-8').trim().split('\n').filter(Boolean).map(l => JSON.parse(l));
+}
+
+describe('handleInteractivePhase — event emission', () => {
+  it('emits phase_start then phase_end(completed) on normal success', async () => {
+    const runDir = makeTmpDir();
+    const state = makeState({ currentPhase: 1 });
+    const { logger, eventsPath, cleanup } = makeTestLogger(state.runId);
+
+    vi.mocked(runInteractivePhase).mockImplementationOnce(async (phase, st, _h, _r, _c, attemptId) => {
+      st.phases[String(phase)] = 'completed';
+      return { status: 'completed', attemptId } as any;
+    });
+
+    try {
+      await handleInteractivePhase(1, state, HDIR, runDir, CWD, logger);
+      const events = readEvents(eventsPath);
+      expect(events[0].event).toBe('phase_start');
+      expect(events[0].phase).toBe(1);
+      expect(typeof events[0].attemptId).toBe('string');
+      const lastEvent = events[events.length - 1];
+      expect(lastEvent.event).toBe('phase_end');
+      expect(lastEvent.status).toBe('completed');
+      expect(typeof lastEvent.durationMs).toBe('number');
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('emits phase_start with reopenFromGate and clears phaseReopenSource', async () => {
+    const runDir = makeTmpDir();
+    const state = makeState({
+      currentPhase: 5,
+      phaseReopenFlags: { '1': false, '3': false, '5': true },
+      phaseReopenSource: { '1': null, '3': null, '5': 6 },
+    });
+    const { logger, eventsPath, cleanup } = makeTestLogger(state.runId);
+
+    vi.mocked(runInteractivePhase).mockImplementationOnce(async (phase, st, _h, _r, _c, attemptId) => {
+      st.phases[String(phase)] = 'completed';
+      return { status: 'completed', attemptId } as any;
+    });
+
+    try {
+      await handleInteractivePhase(5, state, HDIR, runDir, CWD, logger);
+      const events = readEvents(eventsPath);
+      const phaseStart = events.find((e: any) => e.event === 'phase_start');
+      expect(phaseStart).toBeDefined();
+      expect(phaseStart.reopenFromGate).toBe(6);
+      // phaseReopenSource should be cleared after emission
+      expect(state.phaseReopenSource['5']).toBeNull();
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('emits state_anomaly(phase_reopen_flag_stuck) when phase 5 completes with flag still set', async () => {
+    const runDir = makeTmpDir();
+    const state = makeState({
+      currentPhase: 5,
+      phaseReopenFlags: { '1': false, '3': false, '5': true },
+    });
+    const { logger, eventsPath, cleanup } = makeTestLogger(state.runId);
+
+    vi.mocked(runInteractivePhase).mockImplementationOnce(async (phase, st, _h, _r, _c, attemptId) => {
+      // Simulate success but DON'T clear the reopen flag (it stays true)
+      st.phases[String(phase)] = 'completed';
+      return { status: 'completed', attemptId } as any;
+    });
+
+    try {
+      await handleInteractivePhase(5, state, HDIR, runDir, CWD, logger);
+      const events = readEvents(eventsPath);
+      const anomaly = events.find((e: any) => e.event === 'state_anomaly');
+      expect(anomaly).toBeDefined();
+      expect(anomaly.kind).toBe('phase_reopen_flag_stuck');
+      expect(anomaly.details.phase).toBe(5);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('emits phase_end(failed) with details.reason=redirected on control-signal redirect', async () => {
+    const runDir = makeTmpDir();
+    const state = makeState({ currentPhase: 1 });
+    const { logger, eventsPath, cleanup } = makeTestLogger(state.runId);
+
+    vi.mocked(runInteractivePhase).mockImplementationOnce(async (_phase, st, _h, _r, _c, attemptId) => {
+      // Simulate SIGUSR1 redirect: currentPhase changes mid-run
+      st.currentPhase = 3;
+      return { status: 'failed', attemptId } as any;
+    });
+
+    try {
+      await handleInteractivePhase(1, state, HDIR, runDir, CWD, logger);
+      const events = readEvents(eventsPath);
+      const phaseEnd = events.find((e: any) => e.event === 'phase_end');
+      expect(phaseEnd).toBeDefined();
+      expect(phaseEnd.status).toBe('failed');
+      expect(phaseEnd.details?.reason).toBe('redirected');
+    } finally {
+      cleanup();
+    }
   });
 });

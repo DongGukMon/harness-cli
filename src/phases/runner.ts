@@ -211,55 +211,118 @@ export async function handleInteractivePhase(
   writeState(runDir, state);
 
   const attemptId = randomUUID();
-  const result = await runInteractivePhase(phase, state, harnessDir, runDir, cwd, attemptId);
+  const phaseStartTs = Date.now();
 
-  if (result.status === 'completed') {
-    // Normalize artifact commits for Phase 1/3. Failure → error (not completed).
-    if (phase === 1 || phase === 3) {
-      try {
-        normalizeInteractiveArtifacts(phase, state, cwd);
-      } catch (err) {
-        printError(`Phase ${phase} artifact commit failed: ${(err as Error).message}`);
-        state.phases[String(phase)] = 'error';
-        savePausedAtHead(state, cwd);
-        writeState(runDir, state);
-        return;
+  const isReopen = state.phaseReopenFlags[String(phase)] ?? false;
+  const reopenFromGate = isReopen ? (state.phaseReopenSource[String(phase)] ?? undefined) : undefined;
+
+  logger.logEvent({ event: 'phase_start', phase, attemptId, reopenFromGate });
+
+  // Clear the logging-only reopen source (keep phaseReopenFlags for runInteractivePhase)
+  if (state.phaseReopenSource[String(phase)] !== null) {
+    state.phaseReopenSource[String(phase)] = null;
+    writeState(runDir, state);
+  }
+
+  try {
+    const result = await runInteractivePhase(phase, state, harnessDir, runDir, cwd, attemptId);
+
+    if (result.status === 'completed') {
+      // Normalize artifact commits for Phase 1/3. Failure → error (not completed).
+      if (phase === 1 || phase === 3) {
+        try {
+          normalizeInteractiveArtifacts(phase, state, cwd);
+        } catch (err) {
+          printError(`Phase ${phase} artifact commit failed: ${(err as Error).message}`);
+          state.phases[String(phase)] = 'error';
+          savePausedAtHead(state, cwd);
+          writeState(runDir, state);
+          logger.logEvent({
+            event: 'phase_end',
+            phase,
+            attemptId,
+            status: 'failed',
+            durationMs: Date.now() - phaseStartTs,
+          });
+          return;
+        }
       }
-    }
 
-    // Update commit anchors (only AFTER commit succeeds)
-    try {
-      const head = getHead(cwd);
-      if (phase === 1) state.specCommit = head;
-      if (phase === 3) state.planCommit = head;
-      if (phase === 5) state.implCommit = head;
-    } catch {
-      // getHead unavailable — leave anchor as-is
-    }
+      // Update commit anchors (only AFTER commit succeeds)
+      try {
+        const head = getHead(cwd);
+        if (phase === 1) state.specCommit = head;
+        if (phase === 3) state.planCommit = head;
+        if (phase === 5) state.implCommit = head;
+      } catch {
+        // getHead unavailable — leave anchor as-is
+      }
 
-    // Clear pendingAction now that phase succeeded
-    state.pendingAction = null;
-    state.phases[String(phase)] = 'completed';
+      // Clear pendingAction now that phase succeeded
+      state.pendingAction = null;
+      state.phases[String(phase)] = 'completed';
 
-    // Advance to next phase
-    const next = nextPhase(phase);
-    state.currentPhase = next;
+      // Advance to next phase
+      const next = nextPhase(phase);
+      state.currentPhase = next;
 
-    renderControlPanel(state);
-    writeState(runDir, state);
-  } else {
-    // Check if SIGUSR1 already redirected to a different phase
-    if (state.currentPhase !== phase) {
-      // Signal handler changed currentPhase — don't overwrite, just continue loop
-      printInfo(`Phase ${phase} interrupted by control signal → phase ${state.currentPhase}`);
       renderControlPanel(state);
-      return; // Return to runPhaseLoop which will pick up the new currentPhase
+      writeState(runDir, state);
+
+      logger.logEvent({
+        event: 'phase_end',
+        phase,
+        attemptId,
+        status: 'completed',
+        durationMs: Date.now() - phaseStartTs,
+      });
+
+      // Anomaly: phase 5 completed but reopen flag still set
+      if (phase === 5 && state.phaseReopenFlags['5'] === true) {
+        logger.logEvent({
+          event: 'state_anomaly',
+          kind: 'phase_reopen_flag_stuck',
+          details: { phase: 5 },
+        });
+      }
+    } else {
+      // Check if SIGUSR1 already redirected to a different phase
+      if (state.currentPhase !== phase) {
+        // Signal handler changed currentPhase — don't overwrite, just continue loop
+        printInfo(`Phase ${phase} interrupted by control signal → phase ${state.currentPhase}`);
+        renderControlPanel(state);
+        logger.logEvent({
+          event: 'phase_end',
+          phase,
+          attemptId,
+          status: 'failed',
+          durationMs: Date.now() - phaseStartTs,
+          details: { reason: 'redirected' },
+        });
+        return; // Return to runPhaseLoop which will pick up the new currentPhase
+      }
+      // Normal failure
+      state.phases[String(phase)] = 'failed';
+      savePausedAtHead(state, cwd);
+      printError(`Phase ${phase} failed`);
+      writeState(runDir, state);
+      logger.logEvent({
+        event: 'phase_end',
+        phase,
+        attemptId,
+        status: 'failed',
+        durationMs: Date.now() - phaseStartTs,
+      });
     }
-    // Normal failure
-    state.phases[String(phase)] = 'failed';
-    savePausedAtHead(state, cwd);
-    printError(`Phase ${phase} failed`);
-    writeState(runDir, state);
+  } catch (err) {
+    logger.logEvent({
+      event: 'phase_end',
+      phase,
+      attemptId,
+      status: 'failed',
+      durationMs: Date.now() - phaseStartTs,
+    });
+    throw err;
   }
 }
 
