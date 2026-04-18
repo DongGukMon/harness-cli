@@ -57,17 +57,27 @@ Task 0 (baseline, no deps)
   ↓
 Task 1 (types + state + migration)        ← foundation; blocks 2, 3, 4, 5, 6, 7, 8
   ↓
-Task 2 (getPhaseArtifactFiles + getReopenTarget)  ← depends on Task 1 (types); blocks 6, 8
+Task 2 (getPhaseArtifactFiles + getReopenTarget + getRequiredPhaseKeys + ADR-13 validation)
+  ← depends on Task 1 (types); blocks 3, 4, 6, 7, 8 (all other tasks consume one of these helpers)
   ↓
-Task 3 (phase-1-light.md + assembler interactive)  ← depends on Task 1 (state.flow, carryoverFeedback); blocks 8
+Task 3 (phase-1-light.md + phase-5-light.md + assembler interactive wiring)
+  ← depends on Task 1 + Task 2. Touches src/context/assembler.ts + tests/context/assembler.test.ts.
+    **Serialized with Task 4** — both modify the same two files; do Task 3 first, rebase/merge, then Task 4.
   ↓
-Task 4 (Phase 7 assembler fresh + resume)  ← depends on Task 1 (state.flow); blocks 8
+Task 4 (Phase 7 assembler flow-aware — fresh only; resume omits <plan>)
+  ← depends on Task 1 + Task 2 + Task 3 (file-level ordering; assembler.ts edits must stack cleanly).
   ↓
-Task 5 (CLI surface --light, resume reject)  ← depends on Task 1 (createInitialState signature); blocks 8 (integration uses built CLI)
+Task 5 (CLI surface --light, resume reject, CLI parser smoke test)
+  ← depends on Task 1 (createInitialState signature). Independent files from Tasks 3/4 — can run in parallel
+    with them once Task 2 lands, but the CLI parser smoke test in Step 8 depends on `pnpm build`, so run
+    that step after Task 10's build (or build once at the end of Task 5 itself).
   ↓
-Task 6 (runner flow-aware skip + REJECT + carryover lifecycle)  ← depends on Task 1 + Task 2; blocks 8
+Task 6 (runner flow-aware skip + REJECT + carryover lifecycle + preserve-skipped on jump/skip)
+  ← depends on Task 1 + Task 2 + Task 5 (resume/inner consumption paths).
   ↓
-Task 7 (UI)                                ← depends on Task 1 ('skipped' status); parallel with Task 6
+Task 7 (UI + inner.ts propagation)
+  ← depends on Task 1 ('skipped' status) AND Task 2 (`getRequiredPhaseKeys`). Can run in parallel with
+    Task 6 (disjoint files: src/ui.ts + src/commands/inner.ts vs src/phases/runner.ts + src/commands/jump.ts).
   ↓
 Task 8 (E2E integration)                   ← depends on Tasks 1-7
   ↓
@@ -76,7 +86,7 @@ Task 9 (docs)                              ← no code deps; can run anywhere af
 Task 10 (final verification + build + PR)  ← must run last
 ```
 
-**Parallelizable windows:** Tasks 3, 4, 5, 7 can be implemented in parallel once Task 1 + Task 2 are merged (they touch disjoint files). Task 6 runs after Task 2 (shares `getReopenTarget`). Task 8 is strictly serial at the end because it exercises the whole integration.
+**Parallelizable windows:** After Task 2 lands, Task 5 and Task 7 can run concurrently (disjoint file sets from each other and from Tasks 3/4/6). Tasks 3 and 4 share `src/context/assembler.ts` and `tests/context/assembler.test.ts`, so they **must be serialized**; Task 6 and Task 7 share no files and can run concurrently. Task 8 is strictly serial at the end because it exercises the whole integration.
 
 **Per-task acceptance:** every task's "Expected: … PASS" assertion at the end of each Step block is the acceptance gate. Final acceptance is the Eval Checklist at the bottom of this document.
 
@@ -739,7 +749,7 @@ Expected: all green. Existing full-flow tests pass unchanged because `getPhaseAr
 - [ ] **Step 9: Commit**
 
 ```bash
-git add src/config.ts src/phases/interactive.ts src/phases/runner.ts src/resume.ts tests/state.test.ts tests/phases/interactive.test.ts tests/resume.test.ts
+git add src/config.ts src/phases/checklist.ts src/phases/interactive.ts src/phases/runner.ts src/resume.ts tests/state.test.ts tests/phases/interactive.test.ts tests/resume.test.ts
 git commit -m "$(cat <<'EOF'
 feat(config): flow-aware artifact helpers + light Phase 1 validation
 
@@ -1008,9 +1018,9 @@ Expected: all green.
 - [ ] **Step 8: Commit**
 
 ```bash
-git add src/context/prompts/phase-1-light.md src/context/assembler.ts tests/context/assembler.test.ts scripts/copy-assets.mjs
+git add src/context/prompts/phase-1-light.md src/context/prompts/phase-5-light.md src/context/assembler.ts tests/context/assembler.test.ts scripts/copy-assets.mjs
 git commit -m "$(cat <<'EOF'
-feat(assembler): light Phase 1 combined-doc template + carryoverFeedback merge
+feat(assembler): light Phase 1 + Phase 5 combined-doc templates + carryoverFeedback merge
 
 - New src/context/prompts/phase-1-light.md: brainstorm + plan + checklist
   instructions in one template; mandates '## Implementation Plan' section.
@@ -1205,10 +1215,10 @@ function buildGatePromptPhase7(state: HarnessState, cwd: string): string | { err
 }
 ```
 
-Add two focused tests to the `buildGatePromptPhase7 — flow-aware` describe block:
+Add two focused tests for the **fresh** Gate-7 path to the `buildGatePromptPhase7 — flow-aware` describe block:
 
 ```ts
-it('light Gate 7 contract text does not claim a separate plan artifact', () => {
+it('light Gate 7 (fresh) contract text does not claim a separate plan artifact', () => {
   const state = makeLightEvalState();
   const result = assembleGatePrompt(7, state, '/tmp/harness', makeTmpDir());
   if (typeof result !== 'string') throw new Error('expected string');
@@ -1218,7 +1228,7 @@ it('light Gate 7 contract text does not claim a separate plan artifact', () => {
   expect(result).toContain('4-phase light harness lifecycle');
 });
 
-it('full Gate 7 contract text is unchanged', () => {
+it('full Gate 7 (fresh) contract text is unchanged', () => {
   const state = makeFullEvalState();
   const result = assembleGatePrompt(7, state, '/tmp/harness', makeTmpDir());
   if (typeof result !== 'string') throw new Error('expected string');
@@ -1227,7 +1237,7 @@ it('full Gate 7 contract text is unchanged', () => {
 });
 ```
 
-A parallel test in `tests/context/assembler-resume.test.ts` (resume path) should assert the same contract text: light resume prompts quote `결합 design spec` while full resume prompts retain `spec + plan + eval report + diff`. Reuse the existing `buildResumeSections` — it already assembles from the same `reviewerContractForGate7` output because `assembleGateResumePrompt` concatenates `buildResumeSections`'s output into its own preamble; confirm the contract lands via the same helper, and if it does not today, pass `state.flow` into the resume path identically.
+**Resume path — scoped to spec requirement only.** Per `src/context/assembler.ts::assembleGateResumePrompt`, the resume prompt deliberately omits `REVIEWER_CONTRACT` and `buildLifecycleContext` (the reviewer session already has them from the fresh turn) — only artifacts + structured-output reminder are resent. The spec's ADR-12 requirement for resume is limited to omitting the `<plan>` slot, already covered by the earlier `buildResumeSections` tests. Do NOT add resume-side contract/lifecycle assertions in this task — those strings are intentionally absent from resume prompts. If a future requirement ever demands flow-aware contract text on resume, that is a separate, out-of-scope change.
 
 - [ ] **Step 4: Branch `buildResumeSections` on flow**
 
@@ -1552,9 +1562,9 @@ Expected: 3 PASS. (Requires `pnpm build` first — the suite reads `dist/bin/har
 - [ ] **Step 9: Commit**
 
 ```bash
-git add bin/harness.ts src/commands/start.ts src/commands/resume.ts tests/commands/run.test.ts tests/commands/resume-cmd.test.ts
+git add bin/harness.ts src/commands/start.ts src/commands/resume.ts tests/commands/run.test.ts tests/commands/resume-cmd.test.ts tests/integration/lifecycle.test.ts
 git commit -m "$(cat <<'EOF'
-feat(cli): add --light flag on start/run; reject on resume
+feat(cli): add --light flag on start/run; reject on resume; parser smoke test
 
 --light wires StartOptions.light → createInitialState(…, flow='light').
 resume explicitly rejects --light with a message pointing users to
@@ -2172,19 +2182,25 @@ import path from 'path';
 import os from 'os';
 import type { HarnessState } from '../../src/types.js';
 
-// Mock runners so we don't spawn real Claude/Codex processes
-vi.mock('../../src/runners/claude.js', () => ({
-  runClaudeInteractive: vi.fn(),
-  runClaudeGate: vi.fn(),
+// Mock the interactive phase at the seam used by runner.ts — avoids hitting
+// validatePhaseArtifacts which execSyncs into git. Tests drive phase completion
+// by mutating state inside the mock impl.
+vi.mock('../../src/phases/interactive.js', () => ({
+  runInteractivePhase: vi.fn(),
+  preparePhase: vi.fn(),
+  checkSentinelFreshness: vi.fn(),
+  validatePhaseArtifacts: vi.fn(() => true),
 }));
-vi.mock('../../src/runners/codex.js', () => ({
-  runCodexGate: vi.fn(),
-  runCodexInteractive: vi.fn(),
+
+// Mock the gate phase so we can inject verdicts without spawning Codex.
+vi.mock('../../src/phases/gate.js', () => ({
+  runGatePhase: vi.fn(),
+  checkGateSidecars: vi.fn(() => null),
+  buildGateResult: vi.fn(),
+  parseVerdict: vi.fn(),
 }));
 
 // Mock the verify phase so we don't invoke harness-verify.sh against a real repo.
-// Happy path: runVerifyPhase resolves with {type:'pass'}; Gate-7 reject path
-// does not reach verify, so this mock is only exercised by the happy-path test.
 vi.mock('../../src/phases/verify.js', () => ({
   runVerifyPhase: vi.fn(async () => ({ type: 'pass' } as const)),
   readVerifyResult: vi.fn(() => null),
@@ -2202,7 +2218,9 @@ vi.mock('../../src/git.js', () => ({
   detectExternalCommits: vi.fn(() => []),
 }));
 
-import { runPhaseLoop } from '../../src/phases/runner.js';
+import { runPhaseLoop, handleGatePhase } from '../../src/phases/runner.js';
+import { runInteractivePhase } from '../../src/phases/interactive.js';
+import { runGatePhase } from '../../src/phases/gate.js';
 import { createInitialState, writeState, readState } from '../../src/state.js';
 import { NoopLogger } from '../../src/logger.js';
 import { InputManager } from '../../src/input.js';
@@ -2240,27 +2258,28 @@ describe('light-flow end-to-end (P1 → P5 → P6 → P7)', () => {
     const state = createInitialState('r1', 'dummy', 'base-sha', false, false, 'light');
     writeState(runDir, state);
 
-    // Phase 1 (design) — write combined doc + decisions + checklist, then sentinel
-    vi.mocked(runClaudeInteractive).mockImplementationOnce(async (phase, st) => {
-      fs.writeFileSync(path.join(cwd, st.artifacts.spec),
-        '# Design Spec (Light)\n## Context & Decisions\n\n## Implementation Plan\n- Task 1\n');
-      fs.writeFileSync(path.join(cwd, st.artifacts.decisionLog), '# Decisions\n');
-      fs.writeFileSync(path.join(cwd, st.artifacts.checklist),
-        JSON.stringify({ checks: [{ name: 'smoke', command: 'true' }] }));
-      fs.writeFileSync(path.join(runDir, 'phase-1.done'), st.phaseAttemptId['1']!);
-      return { pid: 0 } as any;
+    // Phase 1 — mark success at the runInteractivePhase seam. The real interactive
+    // runner's validatePhaseArtifacts is mocked to return true at module level,
+    // so no real git repo is required.
+    vi.mocked(runInteractivePhase).mockImplementationOnce(async (phase, st, _h, _r, _c, aid) => {
+      st.phases['1'] = 'completed';
+      return { status: 'completed', attemptId: aid } as any;
     });
 
-    // Phase 5 (impl) — mark success, create a commit marker file
-    vi.mocked(runClaudeInteractive).mockImplementationOnce(async (_p, st) => {
-      fs.writeFileSync(path.join(runDir, 'phase-5.done'), st.phaseAttemptId['5']!);
-      return { pid: 0 } as any;
+    // Phase 5 — same seam; set implCommit so Phase 6 can start.
+    vi.mocked(runInteractivePhase).mockImplementationOnce(async (_p, st, _h, _r, _c, aid) => {
+      st.phases['5'] = 'completed';
+      st.implCommit = 'impl-sha';
+      return { status: 'completed', attemptId: aid } as any;
     });
 
     // Gate 7 verdict APPROVE
-    vi.mocked(runCodexGate).mockResolvedValueOnce({
+    vi.mocked(runGatePhase).mockResolvedValueOnce({
       type: 'verdict', verdict: 'APPROVE', comments: '',
-      rawOutput: '## Verdict\nAPPROVE\n', codexSessionId: 's',
+      rawOutput: '## Verdict\nAPPROVE\n', runner: 'codex',
+      durationMs: 1, tokensTotal: 0, promptBytes: 0,
+      codexSessionId: 's', recoveredFromSidecar: false,
+      resumedFrom: null, resumeFallback: false,
       sourcePreset: { model: 'gpt-5.4', effort: 'high' },
     } as any);
 
@@ -2291,17 +2310,19 @@ describe('light-flow end-to-end (P1 → P5 → P6 → P7)', () => {
     state.currentPhase = 7;
     writeState(runDir, state);
 
-    vi.mocked(runCodexGate).mockResolvedValueOnce({
+    vi.mocked(runGatePhase).mockResolvedValueOnce({
       type: 'verdict', verdict: 'REJECT', comments: 'fix design',
       rawOutput: '## Verdict\nREJECT\n## Comments\n- **[P1]** fix\n',
-      codexSessionId: 's',
+      runner: 'codex',
+      durationMs: 1, tokensTotal: 0, promptBytes: 0,
+      codexSessionId: 's', recoveredFromSidecar: false,
+      resumedFrom: null, resumeFallback: false,
       sourcePreset: { model: 'gpt-5.4', effort: 'high' },
     } as any);
 
     const logger = new NoopLogger();
     // We only want the gate phase to execute and observe state mutation, so we
     // don't run another full loop iteration. Call handleGatePhase directly:
-    const { handleGatePhase } = await import('../../src/phases/runner.js');
     await handleGatePhase(7, state, harnessDir, runDir, cwd, createNoOpInputManager(), logger, { value: false });
 
     const persisted = readState(runDir)!;
@@ -2531,7 +2552,9 @@ Anything that came up during plan-gate review but is not a P1 blocker lands here
     { "name": "phase-5-light.md packaged to dist", "command": "test -f dist/src/context/prompts/phase-5-light.md" },
     { "name": "CLI parser --light smoke test", "command": "pnpm vitest run tests/integration/lifecycle.test.ts -t '--light flag registration'" },
     { "name": "light Phase 5 prompt contract", "command": "pnpm vitest run tests/context/assembler.test.ts -t 'light \\+ phase 5 uses phase-5-light'" },
-    { "name": "light Gate 7 reviewer contract flow-aware (fresh + resume)", "command": "pnpm vitest run tests/context/assembler.test.ts tests/context/assembler-resume.test.ts -t '결합 design spec|4-phase light harness'" },
+    { "name": "light Gate 7 reviewer contract flow-aware (fresh prompt only)", "command": "pnpm vitest run tests/context/assembler.test.ts -t '결합 design spec|4-phase light harness'" },
+    { "name": "light Gate 7 resume omits <plan>", "command": "pnpm vitest run tests/context/assembler-resume.test.ts -t 'flow-aware'" },
+    { "name": "docs mention --light", "command": "rg --fixed-strings -- '--light' docs/HOW-IT-WORKS.md CLAUDE.md" },
     { "name": "jump/skip preserve 'skipped' invariant", "command": "pnpm vitest run tests/signal.test.ts tests/commands/jump.test.ts -t 'skipped'" }
   ]
 }
