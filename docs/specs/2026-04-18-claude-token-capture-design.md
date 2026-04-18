@@ -127,7 +127,7 @@ Emission rules:
 | `src/types.ts` | Add `ClaudeTokens` interface; add optional `claudeTokens` on the `phase_end` variant. |
 | `src/runners/claude.ts` | `runClaudeInteractive`: prepend `--session-id ${attemptId}` to `claudeArgs`. |
 | `src/runners/claude-usage.ts` **(new)** | Pure module exposing `encodeProjectDir(cwd)` and `readClaudeSessionUsage({ sessionId, cwd, phaseStartTs, homeDir? })`. |
-| `src/phases/runner.ts` | `handleInteractivePhase`: call the reader when `preset.runner === 'claude'` and attach `claudeTokens` to every `phase_end` emission in that function — the success path (completed), the normal failed path, **and** the catch-block (`throw`) path. The only `phase_end` emission that does NOT receive `claudeTokens` is the `control signal redirect` branch (`state.currentPhase !== phase`), since the phase didn't actually perform its own work. |
+| `src/phases/runner.ts` | `handleInteractivePhase`: call the reader when `preset.runner === 'claude'` and attach `claudeTokens` to every `phase_end` emission representing real work by this phase. Four such sites: (1) success/completed, (2) artifact-commit failure, (3) normal failed, (4) catch-block `throw`. The only `phase_end` emission that does NOT receive `claudeTokens` is the `control signal redirect` branch (`state.currentPhase !== phase`), since the phase didn't actually perform its own work. |
 | `tests/runners/claude-usage.test.ts` **(new)** | Unit tests for the parser, driven by fixtures under `tests/fixtures/claude-sessions/`. |
 | `tests/phases/runner-token-capture.test.ts` **(new)** | Integration-ish test: fake a jsonl, run `handleInteractivePhase`, assert the emitted `phase_end` event carries `claudeTokens`. |
 
@@ -170,6 +170,7 @@ Cases:
 6. cache-only entries sum correctly.
 7. project dir missing entirely → `null` + single stderr warn.
 8. **tie-break**: pinned file missing + `fallback-tie-a` + `fallback-tie-b` both present with identical first-assistant timestamp → scanner returns `fallback-tie-a` aggregates (lexical filename rule).
+9. **hard I/O on pinned file (non-ENOENT)**: stub `fs.readFileSync` (or the module-level file reader) to throw `EACCES` on the pinned path → reader returns `null` + single stderr warn. Separates the ENOENT→fallback branch from the hard-error→null branch per §2.7.
 
 **Integration (`tests/phases/runner-token-capture.test.ts`):**
 - Set up a temp `$HOME` via env; drop a fixture jsonl at `<HOME>/.claude/projects/<encoded>/<attemptId>.jsonl`.
@@ -266,7 +267,7 @@ Tests (cover all three observable states of D3 / §2.5, plus every real-work `ph
 Manual smoke (not automatable — requires an interactive Claude session):
 - `pnpm build` in this worktree.
 - Run a trivial `harness run --enable-logging "<task>"` from a scratch worktree (or Desktop experimental dir).
-- Verify `events.jsonl` phases 1/3/5 `phase_end` events have `claudeTokens` with:
+- Verify, for each interactive phase whose `preset.runner === 'claude'` (typically 1/3/5 under default presets), that the `phase_end` event has `claudeTokens` with:
   - all four subfields present (`input`, `output`, `cacheRead`, `cacheCreate`) + `total`;
   - each subfield is a finite non-negative number;
   - arithmetic identity: `total === input + output + cacheRead + cacheCreate`;
