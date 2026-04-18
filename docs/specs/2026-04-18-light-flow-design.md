@@ -3,7 +3,7 @@
 - Date: 2026-04-18
 - Status: Draft (Phase 1 output, Gate-2 rev-2)
 - Scope: `harness start --light` — 중간 규모 작업(≈1–4h, ≤~500 LoC, 소수 모듈) 대상 경량 파이프라인
-- Related decisions: [.harness/2026-04-18-untitled/decisions.md](../../.harness/2026-04-18-untitled/decisions.md)
+- Related decisions: [.harness/2026-04-18-light-flow/decisions.md](../../.harness/2026-04-18-light-flow/decisions.md)
 - 구현 범위: **본 스펙은 설계만 다룬다. 실제 구현은 별도 세션에서 진행.**
 
 ---
@@ -48,7 +48,7 @@
 
 ### Key Decisions (요약)
 
-> 전체 Decision Log: [.harness/2026-04-18-untitled/decisions.md](../../.harness/2026-04-18-untitled/decisions.md)
+> 전체 Decision Log: [.harness/2026-04-18-light-flow/decisions.md](../../.harness/2026-04-18-light-flow/decisions.md)
 
 | ID | 결정 |
 |----|------|
@@ -454,8 +454,8 @@ if (!('carryoverFeedback' in state)) {
 | File | Purpose |
 |---|---|
 | `src/context/prompts/phase-1-light.md` | Light mode Phase 1 init prompt (brainstorm+plan 결합 지시; `## Implementation Plan` 섹션 필수 명시; checklist.json 생성 규약; reopen 시 gate-7-feedback 반영 지시) |
-| `docs/specs/2026-04-18-untitled-design.md` | 본 문서 |
-| `.harness/2026-04-18-untitled/decisions.md` | Decision log |
+| `docs/specs/2026-04-18-light-flow-design.md` | 본 문서 |
+| `.harness/2026-04-18-light-flow/decisions.md` | Decision log |
 
 ### Delete
 
