@@ -140,6 +140,7 @@ export async function innerCommand(runId: string, options: InnerOptions = {}): P
   // Step 5.6: Create logger (before InputManager so onConfigCancel can close over it)
   const isResume = options.resume === true;
   const logger = await bootstrapSessionLogger(runId, harnessDir, state, isResume, { cwd });
+  const sidecarReplayAllowed = { value: isResume };
   let sessionEndStatus: 'completed' | 'paused' | 'interrupted' = 'interrupted';
 
   // Step 5.6: Create InputManager
@@ -213,7 +214,7 @@ export async function innerCommand(runId: string, options: InnerOptions = {}): P
 
   // 6. Run phase loop
   try {
-    await runPhaseLoop(state, harnessDir, runDir, cwd, inputManager);
+    await runPhaseLoop(state, harnessDir, runDir, cwd, inputManager, logger, sidecarReplayAllowed);
     if (state.status === 'completed') sessionEndStatus = 'completed';
     else if (state.status === 'paused') sessionEndStatus = 'paused';
     else sessionEndStatus = 'interrupted';

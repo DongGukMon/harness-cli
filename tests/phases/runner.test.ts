@@ -76,6 +76,7 @@ import { normalizeArtifactCommit } from '../../src/artifact.js';
 import { getHead } from '../../src/git.js';
 import { writeState } from '../../src/state.js';
 import { InputManager } from '../../src/input.js';
+import { NoopLogger } from '../../src/logger.js';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -140,7 +141,7 @@ describe('Test 1: Phase 1 completed → dispatches gate Phase 2', () => {
     mockGate({ type: 'verdict', verdict: 'APPROVE', comments: '', rawOutput: '' });
     mockInteractive({ status: 'failed' }); // Phase 3 fails to stop the loop
 
-    await runPhaseLoop(state, HDIR, runDir, CWD, createNoOpInputManager());
+    await runPhaseLoop(state, HDIR, runDir, CWD, createNoOpInputManager(), new NoopLogger(), { value: false });
 
     expect(vi.mocked(runInteractivePhase)).toHaveBeenCalledWith(1, expect.any(Object), HDIR, runDir, CWD);
     expect(vi.mocked(runGatePhase)).toHaveBeenCalledWith(2, expect.any(Object), HDIR, runDir, CWD);
@@ -158,7 +159,7 @@ describe('Test 2: Gate APPROVE → advance', () => {
     mockGate({ type: 'verdict', verdict: 'APPROVE', comments: '', rawOutput: '' });
     mockInteractive({ status: 'failed' });
 
-    await runPhaseLoop(state, HDIR, runDir, CWD, createNoOpInputManager());
+    await runPhaseLoop(state, HDIR, runDir, CWD, createNoOpInputManager(), new NoopLogger(), { value: false });
 
     // After APPROVE, state should reflect Phase 2 completed
     const lastWriteCallArgs = vi.mocked(writeState).mock.calls;
@@ -181,7 +182,7 @@ describe('Test 3: Gate Phase 7 APPROVE → run complete', () => {
 
     mockGate({ type: 'verdict', verdict: 'APPROVE', comments: '', rawOutput: '' });
 
-    await runPhaseLoop(state, HDIR, runDir, CWD, createNoOpInputManager());
+    await runPhaseLoop(state, HDIR, runDir, CWD, createNoOpInputManager(), new NoopLogger(), { value: false });
 
     // The final state write should have TERMINAL_PHASE and completed
     const writes = vi.mocked(writeState).mock.calls.map(([, s]) => s);
@@ -202,7 +203,7 @@ describe('Test 4: Gate REJECT retries < limit', () => {
     // After reopen Phase 1, it fails to stop loop
     mockInteractive({ status: 'failed' });
 
-    await runPhaseLoop(state, HDIR, runDir, CWD, createNoOpInputManager());
+    await runPhaseLoop(state, HDIR, runDir, CWD, createNoOpInputManager(), new NoopLogger(), { value: false });
 
     const writes = vi.mocked(writeState).mock.calls.map(([, s]) => s);
 
@@ -229,7 +230,7 @@ describe('Test 5: Gate REJECT retries >= limit → escalation', () => {
     mockGate({ type: 'verdict', verdict: 'REJECT', comments: 'Still wrong', rawOutput: '' });
     mockChoice('Q'); // Quit
 
-    await runPhaseLoop(state, HDIR, runDir, CWD, createNoOpInputManager());
+    await runPhaseLoop(state, HDIR, runDir, CWD, createNoOpInputManager(), new NoopLogger(), { value: false });
 
     expect(vi.mocked(promptChoice)).toHaveBeenCalled();
 
@@ -252,7 +253,7 @@ describe('Test 6: Verify PASS', () => {
     mockGate({ type: 'error', error: 'timeout' });
     mockChoice('Q'); // Quit from gate error
 
-    await runPhaseLoop(state, HDIR, runDir, CWD, createNoOpInputManager());
+    await runPhaseLoop(state, HDIR, runDir, CWD, createNoOpInputManager(), new NoopLogger(), { value: false });
 
     const writes = vi.mocked(writeState).mock.calls.map(([, s]) => s);
 
@@ -278,7 +279,7 @@ describe('Test 7: Verify FAIL retries < limit', () => {
     // Phase 5 fails to stop loop
     mockInteractive({ status: 'failed' });
 
-    await runPhaseLoop(state, HDIR, runDir, CWD, createNoOpInputManager());
+    await runPhaseLoop(state, HDIR, runDir, CWD, createNoOpInputManager(), new NoopLogger(), { value: false });
 
     const writes = vi.mocked(writeState).mock.calls.map(([, s]) => s);
     const afterFail = writes.find(s => s.verifyRetries === 1);
@@ -305,7 +306,7 @@ describe('Test 8: Escalation Skip → force-pass', () => {
     // After force-pass → Phase 3 interactive → fails to stop loop
     mockInteractive({ status: 'failed' });
 
-    await runPhaseLoop(state, HDIR, runDir, CWD, createNoOpInputManager());
+    await runPhaseLoop(state, HDIR, runDir, CWD, createNoOpInputManager(), new NoopLogger(), { value: false });
 
     const writes = vi.mocked(writeState).mock.calls.map(([, s]) => s);
     const skipped = writes.find(s => s.phases['2'] === 'completed' && s.currentPhase === 3);
@@ -328,7 +329,7 @@ describe('Test 9: Auto mode gate limit exceeded → force pass', () => {
     // After force-pass → Phase 3 fails
     mockInteractive({ status: 'failed' });
 
-    await runPhaseLoop(state, HDIR, runDir, CWD, createNoOpInputManager());
+    await runPhaseLoop(state, HDIR, runDir, CWD, createNoOpInputManager(), new NoopLogger(), { value: false });
 
     // promptChoice should NOT be called in auto mode
     expect(vi.mocked(promptChoice)).not.toHaveBeenCalled();
@@ -354,7 +355,7 @@ describe('Test 10: Phase 7 REJECT → Phase 5 reopen, verifyRetries reset', () =
     // Phase 5 fails to stop loop
     mockInteractive({ status: 'failed' });
 
-    await runPhaseLoop(state, HDIR, runDir, CWD, createNoOpInputManager());
+    await runPhaseLoop(state, HDIR, runDir, CWD, createNoOpInputManager(), new NoopLogger(), { value: false });
 
     const writes = vi.mocked(writeState).mock.calls.map(([, s]) => s);
     const afterReject = writes.find(s => s.gateRetries['7'] === 1);
@@ -378,7 +379,7 @@ describe('Test 11: normalizeArtifactCommit called for Phase 1/3', () => {
     mockGate({ type: 'verdict', verdict: 'REJECT', comments: 'stop', rawOutput: '' });
     mockInteractive({ status: 'failed' }); // Phase 1 reopen fails
 
-    await runPhaseLoop(state, HDIR, runDir, CWD, createNoOpInputManager());
+    await runPhaseLoop(state, HDIR, runDir, CWD, createNoOpInputManager(), new NoopLogger(), { value: false });
 
     const calls = vi.mocked(normalizeArtifactCommit).mock.calls;
     const paths = calls.map(([p]) => p);
@@ -397,7 +398,7 @@ describe('Test 11: normalizeArtifactCommit called for Phase 1/3', () => {
     mockGate({ type: 'verdict', verdict: 'REJECT', comments: 'stop', rawOutput: '' });
     mockInteractive({ status: 'failed' });
 
-    await runPhaseLoop(state, HDIR, runDir, CWD, createNoOpInputManager());
+    await runPhaseLoop(state, HDIR, runDir, CWD, createNoOpInputManager(), new NoopLogger(), { value: false });
 
     const calls = vi.mocked(normalizeArtifactCommit).mock.calls;
     const paths = calls.map(([p]) => p);
@@ -421,7 +422,7 @@ describe('Test 12: Commit anchors updated after phase completion', () => {
     mockGate({ type: 'verdict', verdict: 'REJECT', comments: 'stop', rawOutput: '' });
     mockInteractive({ status: 'failed' });
 
-    await runPhaseLoop(state, HDIR, runDir, CWD, createNoOpInputManager());
+    await runPhaseLoop(state, HDIR, runDir, CWD, createNoOpInputManager(), new NoopLogger(), { value: false });
 
     const writes = vi.mocked(writeState).mock.calls.map(([, s]) => s);
     const withSpecCommit = writes.find(s => s.specCommit === 'spec-commit-sha');
@@ -438,7 +439,7 @@ describe('Test 12: Commit anchors updated after phase completion', () => {
     mockGate({ type: 'verdict', verdict: 'REJECT', comments: 'stop', rawOutput: '' });
     mockInteractive({ status: 'failed' });
 
-    await runPhaseLoop(state, HDIR, runDir, CWD, createNoOpInputManager());
+    await runPhaseLoop(state, HDIR, runDir, CWD, createNoOpInputManager(), new NoopLogger(), { value: false });
 
     const writes = vi.mocked(writeState).mock.calls.map(([, s]) => s);
     const withPlanCommit = writes.find(s => s.planCommit === 'plan-commit-sha');
@@ -457,7 +458,7 @@ describe('Test 13: pausedAtHead saved on intentional exit', () => {
     mockGate({ type: 'error', error: 'timeout' });
     mockChoice('Q'); // Quit
 
-    await runPhaseLoop(state, HDIR, runDir, CWD, createNoOpInputManager());
+    await runPhaseLoop(state, HDIR, runDir, CWD, createNoOpInputManager(), new NoopLogger(), { value: false });
 
     const writes = vi.mocked(writeState).mock.calls.map(([, s]) => s);
     const pausedWrite = writes.find(s => s.status === 'paused');
@@ -480,7 +481,7 @@ describe('Test 14: Gate error → shows retry/skip/quit', () => {
     // Phase 3 fails to stop loop
     mockInteractive({ status: 'failed' });
 
-    await runPhaseLoop(state, HDIR, runDir, CWD, createNoOpInputManager());
+    await runPhaseLoop(state, HDIR, runDir, CWD, createNoOpInputManager(), new NoopLogger(), { value: false });
 
     expect(vi.mocked(runGatePhase)).toHaveBeenCalledTimes(2);
 
@@ -496,7 +497,7 @@ describe('Test 14: Gate error → shows retry/skip/quit', () => {
     mockGate({ type: 'error', error: 'timeout' });
     mockChoice('Q');
 
-    await runPhaseLoop(state, HDIR, runDir, CWD, createNoOpInputManager());
+    await runPhaseLoop(state, HDIR, runDir, CWD, createNoOpInputManager(), new NoopLogger(), { value: false });
 
     const writes = vi.mocked(writeState).mock.calls.map(([, s]) => s);
     const paused = writes.find(s => s.status === 'paused');
@@ -539,7 +540,7 @@ describe('Test 15: Crash-safe ordering', () => {
       void s;
     });
 
-    await runPhaseLoop(state, HDIR, runDir, cwd, createNoOpInputManager());
+    await runPhaseLoop(state, HDIR, runDir, cwd, createNoOpInputManager(), new NoopLogger(), { value: false });
 
     // Find when the eval report was deleted (after which calls it's gone)
     // The key invariant: at least one writeState call should have happened
@@ -580,7 +581,7 @@ describe('Test 15: Crash-safe ordering', () => {
       void s;
     });
 
-    await runPhaseLoop(state, HDIR, runDir, CWD, createNoOpInputManager());
+    await runPhaseLoop(state, HDIR, runDir, CWD, createNoOpInputManager(), new NoopLogger(), { value: false });
 
     // The pendingAction write should have occurred
     expect(statesWithPendingAndSidecars.length).toBeGreaterThan(0);
@@ -601,7 +602,7 @@ describe('Phase 5 completion sets implCommit', () => {
     mockVerify({ type: 'error', errorPath: undefined });
     mockChoice('Q'); // Quit from verify error
 
-    await runPhaseLoop(state, HDIR, runDir, CWD, createNoOpInputManager());
+    await runPhaseLoop(state, HDIR, runDir, CWD, createNoOpInputManager(), new NoopLogger(), { value: false });
 
     const writes = vi.mocked(writeState).mock.calls.map(([, s]) => s);
     const withImpl = writes.find(s => s.implCommit === 'impl-commit-sha');
@@ -622,7 +623,7 @@ describe('Verify error → retry/quit', () => {
     // Phase 7 gate
     mockGate({ type: 'verdict', verdict: 'APPROVE', comments: '', rawOutput: '' });
 
-    await runPhaseLoop(state, HDIR, runDir, CWD, createNoOpInputManager());
+    await runPhaseLoop(state, HDIR, runDir, CWD, createNoOpInputManager(), new NoopLogger(), { value: false });
 
     expect(vi.mocked(runVerifyPhase)).toHaveBeenCalledTimes(2);
 
@@ -638,7 +639,7 @@ describe('Verify error → retry/quit', () => {
     mockVerify({ type: 'error', errorPath: '/tmp/verify-error.md' });
     mockChoice('Q');
 
-    await runPhaseLoop(state, HDIR, runDir, CWD, createNoOpInputManager());
+    await runPhaseLoop(state, HDIR, runDir, CWD, createNoOpInputManager(), new NoopLogger(), { value: false });
 
     const writes = vi.mocked(writeState).mock.calls.map(([, s]) => s);
     const paused = writes.find(s => s.status === 'paused');
@@ -669,7 +670,7 @@ describe('Verify FAIL escalation [C]ontinue', () => {
     // Phase 5 fails to stop loop
     mockInteractive({ status: 'failed' });
 
-    await runPhaseLoop(state, HDIR, runDir, cwd, createNoOpInputManager());
+    await runPhaseLoop(state, HDIR, runDir, cwd, createNoOpInputManager(), new NoopLogger(), { value: false });
 
     expect(vi.mocked(promptChoice)).toHaveBeenCalled();
 
@@ -690,7 +691,7 @@ describe('renderControlPanel called on advance', () => {
     mockGate({ type: 'verdict', verdict: 'REJECT', comments: 'stop', rawOutput: '' });
     mockInteractive({ status: 'failed' });
 
-    await runPhaseLoop(state, HDIR, runDir, CWD, createNoOpInputManager());
+    await runPhaseLoop(state, HDIR, runDir, CWD, createNoOpInputManager(), new NoopLogger(), { value: false });
 
     expect(vi.mocked(renderControlPanel)).toHaveBeenCalled();
   });

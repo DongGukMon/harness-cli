@@ -1,6 +1,6 @@
 import fs from 'fs';
 import path from 'path';
-import type { HarnessState, PendingAction, PhaseNumber, InteractivePhase, GatePhase } from '../types.js';
+import type { HarnessState, PendingAction, PhaseNumber, InteractivePhase, GatePhase, SessionLogger } from '../types.js';
 import type { InputManager } from '../input.js';
 import {
   GATE_RETRY_LIMIT,
@@ -162,18 +162,20 @@ export async function runPhaseLoop(
   runDir: string,
   cwd: string,
   inputManager: InputManager,
+  logger: SessionLogger,
+  sidecarReplayAllowed: { value: boolean },
 ): Promise<void> {
   while (state.currentPhase < TERMINAL_PHASE) {
     const phase = state.currentPhase;
     renderControlPanel(state);
 
     if (isInteractivePhase(phase)) {
-      await handleInteractivePhase(phase, state, harnessDir, runDir, cwd);
+      await handleInteractivePhase(phase, state, harnessDir, runDir, cwd, logger);
       // If state changed to paused or phase failed, check if we should stop
       if (state.status === 'paused') return;
       if (state.phases[String(phase)] === 'failed') return;
     } else if (isGatePhase(phase)) {
-      await handleGatePhase(phase as GatePhase, state, harnessDir, runDir, cwd, inputManager);
+      await handleGatePhase(phase as GatePhase, state, harnessDir, runDir, cwd, inputManager, logger, sidecarReplayAllowed);
       if (state.status === 'paused') return;
       if (state.currentPhase === TERMINAL_PHASE) {
         // Completed
@@ -182,9 +184,11 @@ export async function runPhaseLoop(
         return;
       }
     } else if (isVerifyPhase(phase)) {
-      await handleVerifyPhase(state, harnessDir, runDir, cwd, inputManager);
+      await handleVerifyPhase(state, harnessDir, runDir, cwd, inputManager, logger);
       if (state.status === 'paused') return;
     }
+
+    logger.finalizeSummary(state);
   }
 
   // currentPhase === TERMINAL_PHASE
@@ -194,12 +198,13 @@ export async function runPhaseLoop(
 
 // ─── Interactive phase handler ─────────────────────────────────────────────────
 
-async function handleInteractivePhase(
+export async function handleInteractivePhase(
   phase: InteractivePhase,
   state: HarnessState,
   harnessDir: string,
   runDir: string,
-  cwd: string
+  cwd: string,
+  logger: SessionLogger,
 ): Promise<void> {
   state.phases[String(phase)] = 'in_progress';
   writeState(runDir, state);
@@ -258,13 +263,15 @@ async function handleInteractivePhase(
 
 // ─── Gate phase handler ────────────────────────────────────────────────────────
 
-async function handleGatePhase(
+export async function handleGatePhase(
   phase: GatePhase,
   state: HarnessState,
   harnessDir: string,
   runDir: string,
   cwd: string,
   inputManager: InputManager,
+  logger: SessionLogger,
+  sidecarReplayAllowed: { value: boolean },
 ): Promise<void> {
   state.phases[String(phase)] = 'in_progress';
   writeState(runDir, state);
@@ -294,7 +301,7 @@ async function handleGatePhase(
       }
     } else {
       // REJECT
-      await handleGateReject(phase, result.comments, state, harnessDir, runDir, cwd, inputManager);
+      await handleGateReject(phase, result.comments, state, harnessDir, runDir, cwd, inputManager, logger);
     }
   } else {
     // Error — but check if SIGUSR1 redirected first
@@ -303,11 +310,12 @@ async function handleGatePhase(
       renderControlPanel(state);
       return;
     }
-    await handleGateError(phase, result.error, state, runDir, cwd, inputManager);
+    await handleGateError(phase, result.error, state, runDir, cwd, inputManager, logger);
   }
+  void sidecarReplayAllowed;
 }
 
-async function handleGateReject(
+export async function handleGateReject(
   phase: GatePhase,
   comments: string,
   state: HarnessState,
@@ -315,6 +323,7 @@ async function handleGateReject(
   runDir: string,
   cwd: string,
   inputManager: InputManager,
+  logger: SessionLogger,
 ): Promise<void> {
   state.phases[String(phase)] = 'pending';
 
@@ -337,7 +346,7 @@ async function handleGateReject(
   if (retryCount < GATE_RETRY_LIMIT || state.autoMode) {
     if (retryCount >= GATE_RETRY_LIMIT && state.autoMode) {
       // Auto-mode force pass
-      await forcePassGate(phase, state, runDir, cwd);
+      await forcePassGate(phase, state, runDir, cwd, logger);
       return;
     }
 
@@ -366,7 +375,7 @@ async function handleGateReject(
     writeState(runDir, state);
   } else {
     // Escalation
-    await handleGateEscalation(phase, comments, state, runDir, cwd, inputManager);
+    await handleGateEscalation(phase, comments, state, runDir, cwd, inputManager, logger);
   }
 }
 
@@ -377,6 +386,7 @@ export async function handleGateEscalation(
   runDir: string,
   cwd: string,
   inputManager: InputManager,
+  logger: SessionLogger,
 ): Promise<void> {
   printWarning(`Gate ${phase} retry limit reached (${GATE_RETRY_LIMIT})`);
 
@@ -409,7 +419,7 @@ export async function handleGateEscalation(
     writeState(runDir, state);
   } else if (choice === 'S') {
     // Force-pass (skip)
-    await forcePassGate(phase, state, runDir, cwd);
+    await forcePassGate(phase, state, runDir, cwd, logger);
   } else {
     // Quit
     const targetInteractive = previousInteractivePhase(phase);
@@ -427,11 +437,12 @@ export async function handleGateEscalation(
   }
 }
 
-async function forcePassGate(
+export async function forcePassGate(
   phase: GatePhase,
   state: HarnessState,
   runDir: string,
-  cwd: string
+  cwd: string,
+  logger: SessionLogger,
 ): Promise<void> {
   state.pendingAction = { type: 'skip_phase', targetPhase: phase as PhaseNumber, sourcePhase: null, feedbackPaths: [] };
   writeState(runDir, state);
@@ -452,15 +463,17 @@ async function forcePassGate(
   }
   writeState(runDir, state);
   void cwd;
+  void logger;
 }
 
-async function handleGateError(
+export async function handleGateError(
   phase: GatePhase,
   error: string,
   state: HarnessState,
   runDir: string,
   cwd: string,
   inputManager: InputManager,
+  logger: SessionLogger,
 ): Promise<void> {
   printError(`Gate ${phase} error: ${error}`);
 
@@ -480,7 +493,7 @@ async function handleGateError(
     writeState(runDir, state);
     // currentPhase stays the same — loop retries
   } else if (choice === 'S') {
-    await forcePassGate(phase, state, runDir, cwd);
+    await forcePassGate(phase, state, runDir, cwd, logger);
   } else {
     // Quit
     state.phases[String(phase)] = 'error';
@@ -499,12 +512,13 @@ async function handleGateError(
 
 // ─── Verify phase handler ──────────────────────────────────────────────────────
 
-async function handleVerifyPhase(
+export async function handleVerifyPhase(
   state: HarnessState,
   harnessDir: string,
   runDir: string,
   cwd: string,
   inputManager: InputManager,
+  logger: SessionLogger,
 ): Promise<void> {
   // Note: runVerifyPhase internally sets phase to 'in_progress' and calls writeState
   const outcome = await runVerifyPhase(state, harnessDir, runDir, cwd);
@@ -550,7 +564,7 @@ async function handleVerifyPhase(
 
     renderControlPanel(state);
   } else if (outcome.type === 'fail') {
-    await handleVerifyFail(outcome.feedbackPath, state, runDir, cwd, inputManager);
+    await handleVerifyFail(outcome.feedbackPath, state, runDir, cwd, inputManager, logger);
   } else {
     // error — but check if SIGUSR1 redirected first
     if (state.currentPhase !== 6) {
@@ -558,16 +572,17 @@ async function handleVerifyPhase(
       renderControlPanel(state);
       return;
     }
-    await handleVerifyError(outcome.errorPath, state, harnessDir, runDir, cwd, inputManager);
+    await handleVerifyError(outcome.errorPath, state, harnessDir, runDir, cwd, inputManager, logger);
   }
 }
 
-async function handleVerifyFail(
+export async function handleVerifyFail(
   feedbackPath: string,
   state: HarnessState,
   runDir: string,
   cwd: string,
   inputManager: InputManager,
+  logger: SessionLogger,
 ): Promise<void> {
   state.verifyRetries += 1;
   const retryCount = state.verifyRetries;
@@ -577,7 +592,7 @@ async function handleVerifyFail(
   if (retryCount < VERIFY_RETRY_LIMIT || state.autoMode) {
     if (retryCount >= VERIFY_RETRY_LIMIT && state.autoMode) {
       // Auto-mode: skip verify
-      await forcePassVerify(state, runDir, cwd);
+      await forcePassVerify(state, runDir, cwd, logger);
       return;
     }
 
@@ -605,7 +620,7 @@ async function handleVerifyFail(
     } catch { /* ignore */ }
   } else {
     // Escalation
-    await handleVerifyEscalation(feedbackPath, state, runDir, cwd, inputManager);
+    await handleVerifyEscalation(feedbackPath, state, runDir, cwd, inputManager, logger);
   }
 }
 
@@ -615,6 +630,7 @@ export async function handleVerifyEscalation(
   runDir: string,
   cwd: string,
   inputManager: InputManager,
+  logger: SessionLogger,
 ): Promise<void> {
   printWarning(`Verify retry limit reached (${VERIFY_RETRY_LIMIT})`);
 
@@ -650,7 +666,7 @@ export async function handleVerifyEscalation(
       fs.unlinkSync(evalAbsPath);
     } catch { /* ignore */ }
   } else if (choice === 'S') {
-    await forcePassVerify(state, runDir, cwd);
+    await forcePassVerify(state, runDir, cwd, logger);
   } else {
     // Quit — verify-escalation uses show_escalation (per spec: only gate/verify error quit use show_verify_error)
     state.pendingAction = {
@@ -666,10 +682,11 @@ export async function handleVerifyEscalation(
   }
 }
 
-async function forcePassVerify(
+export async function forcePassVerify(
   state: HarnessState,
   runDir: string,
-  cwd: string
+  cwd: string,
+  logger: SessionLogger,
 ): Promise<void> {
   // Atomic write with skip_phase pendingAction before side effects
   state.pendingAction = { type: 'skip_phase', targetPhase: 6, sourcePhase: null, feedbackPaths: [] };
@@ -711,6 +728,7 @@ async function forcePassVerify(
   } catch { /* best-effort */ }
 
   printInfo('Verify force-passed — advancing to Phase 7');
+  void logger;
 }
 
 export async function handleVerifyError(
@@ -720,6 +738,7 @@ export async function handleVerifyError(
   runDir: string,
   cwd: string,
   inputManager: InputManager,
+  logger: SessionLogger,
 ): Promise<void> {
   const errorInfo = errorPath ? ` (see ${errorPath})` : '';
   printError(`Verify error${errorInfo}`);
@@ -752,4 +771,5 @@ export async function handleVerifyError(
     savePausedAtHead(state, cwd);
     writeState(runDir, state);
   }
+  void logger;
 }
