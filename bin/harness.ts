@@ -21,7 +21,8 @@ program
   .description('start a new harness session')
   .option('--require-clean', 'block if working tree has any uncommitted changes')
   .option('--auto', 'autonomous mode (no user escalations)')
-  .action(async (task: string | undefined, opts: { requireClean?: boolean; auto?: boolean }) => {
+  .option('--enable-logging', 'enable session logging to ~/.harness/sessions')
+  .action(async (task: string | undefined, opts: { requireClean?: boolean; auto?: boolean; enableLogging?: boolean }) => {
     const globalOpts = program.opts();
     await startCommand(task, { ...opts, root: globalOpts.root });
   });
@@ -31,7 +32,8 @@ program
   .description('alias for start')
   .option('--require-clean', 'block if working tree has any uncommitted changes')
   .option('--auto', 'autonomous mode (no user escalations)')
-  .action(async (task: string | undefined, opts: { requireClean?: boolean; auto?: boolean }) => {
+  .option('--enable-logging', 'enable session logging to ~/.harness/sessions')
+  .action(async (task: string | undefined, opts: { requireClean?: boolean; auto?: boolean; enableLogging?: boolean }) => {
     const globalOpts = program.opts();
     await startCommand(task, { ...opts, root: globalOpts.root });
   });
