@@ -287,3 +287,79 @@ export function assembleGatePrompt(
 
   return result;
 }
+
+// ─── Gate resume prompts (spec §4.3) ─────────────────────────────────────────
+//
+// Strategy C: resume prompts do NOT include REVIEWER_CONTRACT (already in session).
+// Artifacts are resent fresh each time (updates between retries). Two variants:
+//   A) lastOutcome='reject' + previousFeedback: "artifacts updated + previous feedback"
+//   B) lastOutcome='error'/'approve': "continue review" without feedback block
+
+function buildResumeSections(
+  phase: 2 | 4 | 7,
+  state: HarnessState,
+  cwd: string,
+): string | { error: string } {
+  const specResult = readArtifactContent(state.artifacts.spec, cwd);
+  if ('error' in specResult) return specResult;
+  let body = `<spec>\n${specResult.content}\n</spec>\n`;
+
+  if (phase === 4 || phase === 7) {
+    const planResult = readArtifactContent(state.artifacts.plan, cwd);
+    if ('error' in planResult) return planResult;
+    body += `\n<plan>\n${planResult.content}\n</plan>\n`;
+  }
+  if (phase === 7) {
+    const evalResult = readArtifactContent(state.artifacts.evalReport, cwd);
+    if ('error' in evalResult) return evalResult;
+    body += `\n<eval_report>\n${evalResult.content}\n</eval_report>\n`;
+
+    // Phase 7: include current diff for resume too
+    let diff = runGit(`git diff ${state.baseCommit}...HEAD`, cwd);
+    const maxDiffBytes = MAX_DIFF_SIZE_KB * 1024;
+    if (diff.length > maxDiffBytes) {
+      diff = truncateDiffPerFile(diff, PER_FILE_DIFF_LIMIT_KB * 1024);
+    }
+    if (diff) body += `\n<diff>\n${diff}\n</diff>\n`;
+  }
+  return body;
+}
+
+export function assembleGateResumePrompt(
+  phase: 2 | 4 | 7,
+  state: HarnessState,
+  cwd: string,
+  lastOutcome: 'approve' | 'reject' | 'error',
+  previousFeedback: string,
+): string | { error: string } {
+  const sections = buildResumeSections(phase, state, cwd);
+  if (typeof sections !== 'string') return sections;
+
+  let prompt: string;
+  if (lastOutcome === 'reject' && previousFeedback.trim().length > 0) {
+    // Variant A
+    prompt =
+      '## Updated Artifacts (Re-Review Requested)\n\n' +
+      'The artifacts have been updated based on your previous feedback. Re-review the new versions and verify your prior concerns were addressed.\n\n' +
+      sections +
+      '\n## Your Previous Feedback (for reference)\n\n' +
+      previousFeedback + '\n\n' +
+      '## Instructions\n\n' +
+      'Return verdict in the same format you used before.\n';
+  } else {
+    // Variant B
+    prompt =
+      '## Continue Review\n\n' +
+      'The previous review turn did not complete with a verdict. Re-examine the current artifacts and emit a verdict now.\n\n' +
+      sections +
+      '\n## Instructions\n\n' +
+      'Return verdict in the same format you used before.\n';
+  }
+
+  if (prompt.length > MAX_PROMPT_SIZE_KB * 1024) {
+    return {
+      error: `Assembled resume prompt too large: ${Math.round(prompt.length / 1024)}KB > ${MAX_PROMPT_SIZE_KB}KB limit`,
+    };
+  }
+  return prompt;
+}
