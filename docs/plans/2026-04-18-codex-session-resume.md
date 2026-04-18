@@ -61,31 +61,42 @@ grep -iE "session id:\s*[0-9a-f-]+" /tmp/codex-probe-fresh.txt
 ```
 Expected: 한 줄에 `session id: <uuid>` 형태로 출력.
 
+**중요 — exit code 캡처 규약**: 아래 커맨드들은 `| tee`로 파이프를 통과한다. `$?`는 shell에 따라 pipeline의 **마지막** 명령(tee) exit code만 반환하므로, `codex exec`의 실제 exit code를 잘못 읽을 수 있다. 반드시 아래 중 하나를 사용:
+- bash: `codex_ec="${PIPESTATUS[0]}"` (pipe 직후 즉시 읽기)
+- zsh: `codex_ec="${pipestatus[1]}"` (zsh는 1-based)
+- 또는 간단히 `set -o pipefail`을 세션 최상단에 두고 `$?` 읽기 (대신 pipefail은 tee 성공 여부도 고려하므로 정확한 "codex 자체의 exit code"가 필요하면 PIPESTATUS 권장)
+
 - [ ] **Step 2: 실존 session id로 resume 호출 시 응답과 session id 패턴 확인**
 
 위 Step 1에서 얻은 UUID를 `$SID`에 담고:
 ```bash
 echo "Say 'world' and stop." | codex exec resume "$SID" - 2>&1 | tee /tmp/codex-probe-resume.txt
+# bash
+codex_ec="${PIPESTATUS[0]}"; echo "codex exit code: $codex_ec"
+# zsh이면: codex_ec="${pipestatus[1]}"; echo "codex exit code: $codex_ec"
 grep -iE "session id:\s*[0-9a-f-]+" /tmp/codex-probe-resume.txt
 ```
-Expected: exit 0, stdout 또는 stderr에 같은 UUID 또는 새 UUID 찍힘. 결과를 §9 Q#2 (동일 id vs fork)에 반영.
+Expected: `codex_ec == 0`, stdout 또는 stderr에 같은 UUID 또는 새 UUID 찍힘. 결과를 §9 Q#2 (동일 id vs fork)에 반영.
 
 - [ ] **Step 3: 존재하지 않는 UUID로 resume 호출 시 에러 패턴 확인**
 
 ```bash
 echo "noop" | codex exec resume "00000000-0000-0000-0000-000000000000" - 2>&1 | tee /tmp/codex-probe-missing.txt
-echo "exit code: $?"
+# bash
+codex_ec="${PIPESTATUS[0]}"; echo "codex exit code: $codex_ec"
+# zsh: codex_ec="${pipestatus[1]}"
 ```
-Expected: non-zero exit. stderr에 "session not found" 또는 유사 패턴. 정확한 문자열을 §9 Q#1에 반영하여 Task 4 `session_missing` 정규식 확정.
+Expected: `codex_ec`가 non-zero. stderr(`/tmp/codex-probe-missing.txt`)에 "session not found" 또는 유사 패턴이 포함됨. 이 정확한 문자열과 exit code를 §9 Q#1에 반영하여 Task 4 `session_missing` 정규식을 확정한다. **여기서 $?로만 읽으면 tee의 exit 0을 받게 되어 "exit 0인데 에러"라는 잘못된 가정이 Task 4에 전파될 위험이 있다.**
 
 - [ ] **Step 4: 모델/effort 오버라이드 호환성 확인**
 
 Step 1(`gpt-5.4` + effort=high)로 만든 세션을 `gpt-5.4` + effort=medium으로 resume해서 effort만 다를 때의 거동 확인:
 ```bash
 echo "Summarize in one sentence." | codex exec resume "$SID" --model gpt-5.4 -c model_reasoning_effort="medium" - 2>&1 | tee /tmp/codex-probe-modelchange.txt
-echo "exit code: $?"
+# bash: codex_ec="${PIPESTATUS[0]}"; echo "codex exit code: $codex_ec"
+# zsh:  codex_ec="${pipestatus[1]}"; echo "codex exit code: $codex_ec"
 ```
-Expected: exit 0 또는 document된 error. §9 Q#3에 결과 기록. 현재 spec 정책상 preset 변경 시 세션을 invalidate하므로 이 case가 런타임에 도달하지 않지만 edge case 자료로 남긴다. 두 effort(high ↔ medium) 모두 repo에서 실제로 선택 가능한 값이므로, 무효화 훅이 실패했을 때 fallback 거동을 판단하는 근거가 된다.
+Expected: `codex_ec == 0` 또는 document된 error. §9 Q#3에 결과 기록. 현재 spec 정책상 preset 변경 시 세션을 invalidate하므로 이 case가 런타임에 도달하지 않지만 edge case 자료로 남긴다. 두 effort(high ↔ medium) 모두 repo에서 실제로 선택 가능한 값이므로, 무효화 훅이 실패했을 때 fallback 거동을 판단하는 근거가 된다.
 
 - [ ] **Step 5: 결과를 spec §9에 추가 (세 Q 각각 "pilot 결과" 서브-bullet)**
 
@@ -577,13 +588,18 @@ import { assembleGateResumePrompt } from '../../src/context/assembler.js';
 import type { HarnessState } from '../../src/types.js';
 
 function makeState(overrides: Partial<HarnessState> = {}): HarnessState {
-  // 최소 state — test에 필요한 필드만 채움
+  // 최소 state — test에 필요한 필드만 채움.
+  // 주의: `assembleGateResumePrompt`는 artifact 파일을 `path.join(cwd, filePath)`로 resolve한다.
+  // test에서 `cwd = 'tests/context/fixtures'`로 지정하므로, artifact 경로는 fixtures 디렉토리
+  // 내부의 **상대** 경로(= bare 파일명)여야 실제 파일을 찾는다. 'fixtures/spec.md'로 두면
+  // `tests/context/fixtures/fixtures/spec.md`를 찾다가 놓치고 "(file not found ...)" placeholder로
+  // fallthrough — 테스트가 실질 로딩을 검증하지 못한다.
   return {
     runId: 'r1',
     artifacts: {
-      spec: 'fixtures/spec.md',
-      plan: 'fixtures/plan.md',
-      evalReport: 'fixtures/eval.md',
+      spec: 'spec.md',
+      plan: 'plan.md',
+      evalReport: 'eval.md',
       decisionLog: '.harness/r1/decisions.md',
       checklist: '.harness/r1/checklist.json',
     },
@@ -606,6 +622,11 @@ describe('assembleGateResumePrompt — Variant A (reject)', () => {
       expect(res).toMatch(/Updated Artifacts \(Re-Review Requested\)/);
       expect(res).toMatch(/previous feedback/i);
       expect(res).toMatch(/P1: fix X/);
+      // Fixture 파일이 **실제로 로드**되었는지 검증 — placeholder fallback 회피:
+      // fixtures/spec.md는 Step 2에서 "# Spec\ncontent\n"으로 생성되므로, 프롬프트에 "content"가 있어야 한다.
+      // 경로 mismatch로 `(file not found ...)` placeholder가 뿌려지면 이 어설션이 실패한다.
+      expect(res).toMatch(/# Spec[\s\S]*content/);
+      expect(res).not.toMatch(/file not found/i);
       // REVIEWER_CONTRACT 전문은 포함 안 함
       expect(res).not.toMatch(/You are an independent technical reviewer/);
     }
@@ -1596,6 +1617,96 @@ describe('runGatePhase — stillActivePhase guard', () => {
     expect(state.phaseCodexSessions['2']).toBeNull();
   });
 });
+
+// §4.7 two-stage replay compatibility gate — 4 scenarios:
+// (1) compatible Codex sidecar → replay accepted + hydration into phaseCodexSessions
+// (2) mismatched sourcePreset → replay skipped, live path taken
+// (3) legacy sidecar (no metadata) → replay skipped (authoritative gate blocks unknown-lineage replay)
+// (4) Claude sidecar → runner-only compatibility accepted, but no hydration (Claude ≠ codex)
+describe('runGatePhase — sidecar replay compatibility gate (§4.7)', () => {
+  // Helper to write a fake sidecar pair consumed by checkGateSidecars.
+  function writeSidecar(
+    phase: 2 | 4 | 7,
+    result: { verdict?: 'APPROVE' | 'REJECT'; runner: 'claude' | 'codex';
+              codexSessionId?: string;
+              sourcePreset?: { model: string; effort: string } },
+  ) {
+    const raw = `session id: ${result.codexSessionId ?? 'sc-sid'}\n## Verdict\n${result.verdict ?? 'APPROVE'}\n`;
+    fs.writeFileSync(path.join(runDir, `gate-${phase}-raw.txt`), raw);
+    fs.writeFileSync(
+      path.join(runDir, `gate-${phase}-result.json`),
+      JSON.stringify({
+        exitCode: 0, timestamp: Date.now(),
+        runner: result.runner,
+        codexSessionId: result.codexSessionId,
+        sourcePreset: result.sourcePreset,
+      }),
+    );
+  }
+
+  it('(1) compatible Codex sidecar: replay accepted, hydrates phaseCodexSessions', async () => {
+    const state = makeState();
+    writeSidecar(2, {
+      verdict: 'REJECT', runner: 'codex', codexSessionId: 'side-sid',
+      sourcePreset: { model: 'gpt-5.4', effort: 'high' },
+    });
+    // state.phasePresets[2] = 'codex-high' per makeState; getPresetById resolves to gpt-5.4/high
+    const res = await runGatePhase(2, state, runDir, runDir, runDir);
+    // runCodexGate는 호출되지 않아야 함 (replay hit)
+    expect((runCodexGate as any).mock.calls.length).toBe(0);
+    expect(res.type).toBe('verdict');
+    // Hydration 확인
+    expect(state.phaseCodexSessions['2']).toEqual({
+      sessionId: 'side-sid', runner: 'codex', model: 'gpt-5.4', effort: 'high',
+      lastOutcome: 'reject',
+    });
+  });
+
+  it('(2) mismatched sourcePreset: replay skipped, live path taken', async () => {
+    const state = makeState();
+    writeSidecar(2, {
+      verdict: 'APPROVE', runner: 'codex', codexSessionId: 'mismatch-sid',
+      sourcePreset: { model: 'some-other-model', effort: 'high' },
+    });
+    (runCodexGate as any).mockResolvedValueOnce(mockVerdict({ codexSessionId: 'live-sid' }));
+    await runGatePhase(2, state, runDir, runDir, runDir);
+    // Live path 탔는지 확인
+    expect((runCodexGate as any).mock.calls.length).toBe(1);
+    // Hydration은 일어나지 않고, live 결과로 저장
+    expect(state.phaseCodexSessions['2']?.sessionId).toBe('live-sid');
+  });
+
+  it('(3) legacy sidecar (no runner/sourcePreset metadata): replay skipped', async () => {
+    const state = makeState();
+    // metadata 없는 legacy sidecar
+    fs.writeFileSync(path.join(runDir, 'gate-2-raw.txt'), 'session id: legacy\n## Verdict\nAPPROVE\n');
+    fs.writeFileSync(
+      path.join(runDir, 'gate-2-result.json'),
+      JSON.stringify({ exitCode: 0, timestamp: Date.now() }),
+    );
+    (runCodexGate as any).mockResolvedValueOnce(mockVerdict({ codexSessionId: 'live-sid' }));
+    await runGatePhase(2, state, runDir, runDir, runDir);
+    // replay skip → live spawn
+    expect((runCodexGate as any).mock.calls.length).toBe(1);
+    expect(state.phaseCodexSessions['2']?.sessionId).toBe('live-sid');
+  });
+
+  it('(4) Claude sidecar with matching runner: replay accepted, no codex hydration', async () => {
+    const state = makeState();
+    // Claude runner 로 교체
+    state.phasePresets['2'] = 'sonnet-high';
+    writeSidecar(2, {
+      verdict: 'APPROVE', runner: 'claude',
+      // Claude는 sourcePreset 검증 대상 아님
+    });
+    const res = await runGatePhase(2, state, runDir, runDir, runDir);
+    // runCodexGate 미호출 (Claude replay hit)
+    expect((runCodexGate as any).mock.calls.length).toBe(0);
+    expect(res.type).toBe('verdict');
+    // Claude replay는 phaseCodexSessions hydrate 대상 아님
+    expect(state.phaseCodexSessions['2']).toBeNull();
+  });
+});
 ```
 
 - [ ] **Step 7: 테스트 실행 → 통과 확인**
@@ -1677,6 +1788,60 @@ logger.logEvent({
 ```
 
 `gate_error` 경로에도 동일 패턴 적용.
+
+- [ ] **Step 3a: 실제 logger의 `events.jsonl` 직렬화 검증 테스트 추가 (§4.6 end-to-end)**
+
+Mocked logger가 아니라 **실제 `src/logger.ts`의 `SessionLogger`**가 디스크에 쓴 JSON line에 `resumedFrom`/`resumeFallback` 필드가 정상 직렬화되는지 확인. `tests/logger.test.ts`에 추가(기존 파일이 있음 — 없으면 신설):
+
+```ts
+import { describe, it, expect } from 'vitest';
+import fs from 'fs';
+import path from 'path';
+import os from 'os';
+import { SessionLogger } from '../src/logger.js';
+
+describe('SessionLogger — §4.6 resume log fields', () => {
+  it('serializes resumedFrom and resumeFallback into events.jsonl', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-log-'));
+    const logger = new SessionLogger(dir, 'run-1');
+    logger.logEvent({
+      event: 'gate_verdict',
+      phase: 2,
+      retryIndex: 0,
+      runner: 'codex',
+      verdict: 'APPROVE',
+      codexSessionId: 'new-uuid',
+      resumedFrom: 'dead-uuid',
+      resumeFallback: true,
+    } as any);
+    logger.logEvent({
+      event: 'gate_error',
+      phase: 2,
+      retryIndex: 0,
+      runner: 'codex',
+      error: 'Codex gate timed out after 360000ms',
+      codexSessionId: 'partial-uuid',
+      resumedFrom: 'prev-uuid',
+      resumeFallback: false,
+    } as any);
+
+    const lines = fs
+      .readFileSync(path.join(dir, 'events.jsonl'), 'utf8')
+      .trim()
+      .split('\n')
+      .map((l) => JSON.parse(l));
+    const verdictLine = lines.find((l) => l.event === 'gate_verdict');
+    const errorLine = lines.find((l) => l.event === 'gate_error');
+
+    expect(verdictLine.resumedFrom).toBe('dead-uuid');
+    expect(verdictLine.resumeFallback).toBe(true);
+    expect(errorLine.resumedFrom).toBe('prev-uuid');
+    expect(errorLine.resumeFallback).toBe(false);
+  });
+});
+```
+
+이는 §4.6 "fresh / successful resume / fallback / error" 4-경로 중 directly serializable한 두 경로를 **실제 로거 + 파일시스템**으로 고정한다. Runner.test.ts의 mocked logger 테스트는 payload assembly를, 이 테스트는 serialization wire format을 담당해서 분리된 실패가 교차 검증된다.
 
 - [ ] **Step 3: redirect guard + §4.6 로그 필드 방출 테스트 추가**
 
@@ -2088,7 +2253,11 @@ git add -u && git commit -m "chore: lint fixes for codex session resume"
 - [ ] **EC-16**: `pnpm -s vitest run tests/commands/inner.test.ts tests/signal.test.ts` all passed
   - Pass: §4.8/§4.9 authoritative mutation sites(inner.ts, signal.ts)의 behavioral test가 통과 — 단순 presence grep을 넘어 "preset 변경/jump 후 세션·sidecar가 실제로 무효화되는지" 회귀 방지
 - [ ] **EC-17**: `pnpm -s vitest run tests/phases/runner.test.ts -t "resumedFrom|resumeFallback"` all passed
-  - Pass: §4.6 로그 필드(`resumedFrom`, `resumeFallback`)가 fresh/successful-resume/fallback/error 네 경로에서 정확히 방출됨을 회귀 방지. fail 0
+  - Pass: §4.6 로그 필드(`resumedFrom`, `resumeFallback`)가 fresh/successful-resume/fallback/error 네 경로에서 runner dispatch payload에 정확히 포함됨을 회귀 방지. fail 0
+- [ ] **EC-18**: `pnpm -s vitest run tests/logger.test.ts -t "resume log fields"` all passed
+  - Pass: 실제 `SessionLogger`가 `events.jsonl`로 직렬화한 JSON line에 `resumedFrom`/`resumeFallback` 필드가 존재 (mocked logger 경로를 넘어 wire format 보장). fail 0
+- [ ] **EC-19**: `pnpm -s vitest run tests/phases/gate-resume.test.ts -t "sidecar replay compatibility gate"` all passed
+  - Pass: §4.7 replay compat gate의 4 시나리오(compatible codex hydrate / mismatched sourcePreset skip / legacy metadata skip / claude runner replay) 전부 통과
 
 ### Spec traceability (spec 요구사항 → 구현 태스크 매핑)
 
@@ -2099,8 +2268,8 @@ git add -u && git commit -m "chore: lint fixes for codex session resume"
 | §4.3 Resume 프롬프트 Variant A/B | `assembleGateResumePrompt` | Task 3 | EC-3 |
 | §4.4 Control flow | resume dispatch, stillActivePhase | Task 5 | EC-5, EC-6 |
 | §4.5 Fallback | session_missing 감지 + closure | Task 4, 5 | EC-4, EC-6 |
-| §4.6 Logging | resumedFrom/resumeFallback 필드 + 이벤트 방출 검증 | Task 1, 6 | EC-1, EC-7, **EC-17** |
-| §4.7 Sidecar replay compat gate | replay-level + hydration-level | Task 5 | EC-5 |
+| §4.6 Logging | resumedFrom/resumeFallback 필드 + 이벤트 방출 + wire format 직렬화 | Task 1, 6 | EC-1, EC-7, **EC-17**, **EC-18** |
+| §4.7 Sidecar replay compat gate | replay-level + hydration-level (4 scenarios: codex-compat/mismatch/legacy/claude) | Task 5 | EC-5, **EC-19** |
 | §4.8 Preset 변경 invalidation | helper + inner.ts mutation site (behavioral test) | Task 2, 7 | EC-2, **EC-16**, EC-12 |
 | §4.9 Jump invalidation | helper + SIGUSR1 + consumePendingAction (behavioral test) | Task 2, 7 | EC-2, **EC-16**, EC-12 |
 | §4.10 Verdict redirect guard | runner.ts 공통 guard | Task 6 | EC-7 |
