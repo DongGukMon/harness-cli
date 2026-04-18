@@ -279,7 +279,8 @@ function rawToResult(
   resumedFrom: string | null,
   resumeFallback: boolean,
 ): GatePhaseResult {
-  const metadata = extractCodexMetadata(raw.stdout);
+  // Codex metadata (session id + tokens used) lands on STDERR, so pass both streams.
+  const metadata = extractCodexMetadata(raw.stdout, raw.stderr);
   const sourcePreset = { model: preset.model, effort: preset.effort };
 
   if (raw.category === 'success_verdict') {
@@ -337,7 +338,7 @@ export async function runCodexGate(
       // mistake it for a new fresh id and re-persist the dead lineage. We
       // preserve tokensTotal (useful for accounting) but drop codexSessionId
       // explicitly. resumedFrom still records the stale id for audit/logging.
-      const firstMeta = extractCodexMetadata(first.stdout);
+      const firstMeta = extractCodexMetadata(first.stdout, first.stderr);
       return {
         type: 'error',
         error: `Resume fallback failed: ${freshPrompt.error}`,
