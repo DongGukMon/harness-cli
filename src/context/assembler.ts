@@ -295,7 +295,7 @@ function buildLifecycleContext(phase: 2 | 4 | 7, flow: FlowMode = 'full'): strin
   if (flow === 'light') {
     return (
       '<harness_lifecycle>\n' +
-      'This is Gate 7 of a 4-phase light harness lifecycle (P1 design → P5 impl → P6 verify → P7 eval). ' +
+      'This is Gate 7 of a 5-phase light harness lifecycle (P1 design → P2 pre-impl review → P5 impl → P6 verify → P7 eval). ' +
       'The combined design spec contains the Implementation Plan section; there is no separate plan artifact. ' +
       'This is the terminal review — if APPROVE, the run is complete.\n' +
       '</harness_lifecycle>\n\n'

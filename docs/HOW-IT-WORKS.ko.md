@@ -38,21 +38,23 @@ harness run "task"
 
 중간 규모 작업(≈1–4시간, ≤~500 LoC, 모듈 ≤3개)에는 풀 플로우의 3회 interactive
 세션 + 3회 Codex gate가 과합니다. `--light`는 plan 산출물을 Phase 1 결합 문서에
-흡수하고 pre-impl gate 2개를 제거한 4-phase 파이프라인을 선택합니다:
+흡수하고 중간 interactive 페이즈 2개를 제거한 5-slot 파이프라인을 선택합니다:
 
 ```
-P1 design(=brainstorm+plan) → [P2/P3/P4 skipped] → P5 impl → P6 verify → P7 eval-gate
-                                                                                  │
-                                       P7 REJECT → P1 reopen (+ carryoverFeedback) ┘
-                                                        └─> P5 reopen (carryover 소비) ─> P6 ─> P7
-                                       P6 FAIL → P5 reopen (직접)
+P1 design(=brainstorm+plan) → P2 pre-impl review → [P3/P4 skipped] → P5 impl → P6 verify → P7 eval-gate
+                                                                                                    │
+                                                    P7 REJECT → P1 reopen (+ carryoverFeedback) ┘
+                                                                     └─> P5 reopen (carryover 소비) ─> P6 ─> P7
+                                                    P6 FAIL → P5 reopen (직접)
 ```
 
 - **state.flow**: `'full' | 'light'`, run 생성 시점에 고정. `harness resume --light`는 거부됩니다.
-- **skipped phases**: `phases['2'|'3'|'4']`가 신규 `'skipped'` status로 초기화되고 `runPhaseLoop`가 핸들러 호출 없이 건너뜁니다. `renderControlPanel`은 em-dash 아이콘과 `(skipped)` 라벨로 표시합니다.
+- **skipped phases**: `phases['3'|'4']`가 `'skipped'` status로 초기화되어 `runPhaseLoop`가 건너뜁니다. `renderControlPanel`은 em-dash 아이콘과 `(skipped)` 라벨로 표시합니다. Phase 2는 활성(`'pending'`) 상태로 결합 design spec Codex 리뷰를 실행합니다.
 - **Phase 1 산출물**: `docs/specs/<runId>-design.md` 하나의 결합 문서에 필수 `## Implementation Plan` 섹션을 포함합니다. `checklist.json`은 `scripts/harness-verify.sh`가 파싱해야 하므로 별도 파일로 유지.
-- **Phase 7 REJECT**: Phase 1으로 되돌립니다(Phase 5가 아니라 결합 문서 자체를 다시 쓰기 위함). `state.carryoverFeedback`이 Phase 1 완료 시 `pendingAction`이 비워져도 살아남아 Phase 5 재진입 시 소비됩니다.
-- **기본 preset**: P1 = `opus-high`, P5 = `sonnet-high`, P7 = `codex-high` (P2/P3/P4만 빠진 풀 플로우와 동일).
+- **Phase 2 (pre-impl gate)**: Codex가 4축 루브릭으로 결합 design doc(spec+plan)을 리뷰합니다. REJECT 시 P1 재진입 + carryover feedback 전달. 게이트 retry limit 3 (풀 플로우 P2와 동일).
+- **Phase 7 REJECT**: `Scope: impl`이면 Phase 5 재진입, `Scope: design|mixed` 또는 scope 누락이면 Phase 1 재진입. `state.carryoverFeedback`이 Phase 1 완료 이후에도 살아남아 Phase 5 재진입 시 소비됩니다.
+- **기본 preset**: P1 = `opus-high`, P2 = `codex-high`, P5 = `sonnet-high`, P7 = `codex-high`.
+- **Gate retry limit**: light P2 gate = 3, light P7 gate = 5, 풀 플로우 = 3.
 - **활성화**: `harness start --light "태스크"` (또는 `harness run --light …`). `--light`는 `--auto`와 직교.
 - **풀 플로우가 더 나은 경우**: 마이그레이션/보안/계약 변경처럼 pre-impl 독립 리뷰 가치가 큰 작업.
 

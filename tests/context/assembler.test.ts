@@ -419,7 +419,7 @@ describe('buildGatePromptPhase7 — flow-aware (ADR-12)', () => {
     expect(result).toContain('결합 design spec');
     expect(result).toContain('별도의 plan 아티팩트가 없다');
     expect(result).not.toContain('spec + plan + eval report + diff');
-    expect(result).toContain('4-phase light harness lifecycle');
+    expect(result).toContain('5-phase light harness lifecycle');
   });
 
   it('full Gate 7 (fresh) contract text is unchanged', () => {

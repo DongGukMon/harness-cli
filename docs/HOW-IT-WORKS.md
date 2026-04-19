@@ -38,23 +38,24 @@ harness run "task"
 
 For medium tasks (≈1–4h, ≤~500 LoC, ≤3 modules) the default full flow's three
 interactive sessions and three Codex gates are overkill. `--light` selects a
-4-phase pipeline that folds the plan artifact into the Phase 1 design doc and
-removes the two pre-impl gates:
+5-slot pipeline that folds the plan artifact into the Phase 1 design doc and
+removes the two middle interactive phases:
 
 ```
-P1 design(=brainstorm+plan) → [P2/P3/P4 skipped] → P5 impl → P6 verify → P7 eval-gate
-                                                                                  │
-                                       P7 REJECT → P1 reopen (+ carryoverFeedback) ┘
-                                                        └─> P5 reopen (carryover 소비) ─> P6 ─> P7
-                                       P6 FAIL → P5 reopen (직접)
+P1 design(=brainstorm+plan) → P2 pre-impl review → [P3/P4 skipped] → P5 impl → P6 verify → P7 eval-gate
+                                                                                                    │
+                                                    P7 REJECT → P1 reopen (+ carryoverFeedback) ┘
+                                                                     └─> P5 reopen (carryover 소비) ─> P6 ─> P7
+                                                    P6 FAIL → P5 reopen (직접)
 ```
 
 - **state.flow**: `'full' | 'light'`, frozen at run creation. `harness resume --light` is rejected.
-- **skipped phases**: `phases['2'|'3'|'4']` initialize to the new `'skipped'` `PhaseStatus`. `runPhaseLoop` short-circuits past them; `renderControlPanel` shows them with an em-dash glyph and `(skipped)` label.
+- **skipped phases**: `phases['3'|'4']` initialize to `'skipped'`. `runPhaseLoop` short-circuits past them; `renderControlPanel` shows them with an em-dash glyph and `(skipped)` label. Phase 2 is active (`'pending'`) and runs a combined design-spec Codex review.
 - **Phase 1 output**: single combined doc at `docs/specs/<runId>-design.md` containing a mandatory `## Implementation Plan` section. `checklist.json` stays a separate file so `scripts/harness-verify.sh` still parses it.
+- **Phase 2 (pre-impl gate)**: Codex reviews the combined design doc (spec + plan) using a 4-axis rubric. REJECT → P1 reopen with carryover feedback. Gate retry limit 3 (same as full-flow P2).
 - **Phase 7 REJECT**: `Scope: impl`이면 Phase 5 reopen, `Scope: design|mixed` 또는 scope 누락이면 Phase 1 reopen. Phase 1 reopen일 때는 combined doc를 다시 작성하고, `state.carryoverFeedback` 는 그 completion 이후에도 살아남아 Phase 5 on re-entry에서 소비된다.
-- **Gate retry limit**: light flow는 retry limit 5, full flow는 retry limit 3을 사용한다.
-- **Defaults**: P1 = `opus-high`, P5 = `sonnet-high`, P7 = `codex-high` (same presets as full flow, minus P2/P3/P4).
+- **Gate retry limit**: light P2 gate = 3, light P7 gate = 5, full flow = 3.
+- **Defaults**: P1 = `opus-high`, P2 = `codex-high`, P5 = `sonnet-high`, P7 = `codex-high`.
 - **Activation**: `harness start --light "task"` (or `harness run --light …`). `--light` composes with `--auto`.
 - **Measurement source**: rollout 후 scope 분류 점검은 events.jsonl schema를 늘리지 않고 `.harness/<runId>/gate-7-raw.txt` verdict-raw artifact를 샘플링해 수행한다. rollback threshold는 아직 codify되지 않았다.
 - **When full flow is still right**: migration/security/contract work, or any task where an independent pre-impl review adds real value.

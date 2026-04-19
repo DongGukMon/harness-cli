@@ -4,7 +4,7 @@
 
 ## 프로젝트 한 줄
 
-`harness-cli`는 AI 에이전트 개발 라이프사이클을 7단계 파이프라인(spec → gate → plan → gate → impl → verify → eval gate)으로 강제하는 CLI. Claude Code가 구현자, Codex가 독립 리뷰어. `--light` flag로 4-phase 경량 모드(P1 → P5 → P6 → P7)도 설계 + 구현 플랜 완료(PR #10/#17), **구현 대기**.
+`harness-cli`는 AI 에이전트 개발 라이프사이클을 7단계 파이프라인(spec → gate → plan → gate → impl → verify → eval gate)으로 강제하는 CLI. Claude Code가 구현자, Codex가 독립 리뷰어. `--light` flag로 5-slot 경량 모드(P1 → P2 → P5 → P6 → P7) 구현 완료.
 
 ## 먼저 읽을 것
 
@@ -18,8 +18,8 @@
    - `docs/specs/2026-04-18-gate-prompt-hardening-design.md` + `docs/plans/2026-04-18-gate-prompt-hardening.md` (PR #11) — BUG-A/B/C 수정 + phase-start preset 로깅
    - `docs/specs/2026-04-18-harness-skills-synthesis-{INTENT,design}.md` + `docs/plans/2026-04-18-harness-skills-synthesis.md` (PR #12 + #15) — **T1–T7 전부 완료**. PR #15가 assembler inline(T4) + thin `phase-{1,3,5}.md` binding(T5) + E2E/docs(T7) 마감.
    - `docs/specs/2026-04-18-claude-token-capture-design.md` (PR #16) — interactive phase_end에 `claudeTokens` 필드 추가. 5 라운드 gate 리뷰를 거친 설계 + 구현.
-6. **In-flight 설계** (구현 대기):
-   - `docs/specs/2026-04-18-light-flow-design.md` + `docs/plans/2026-04-18-light-flow.md` (PR #10 spec + PR #17 plan) — `harness start --light` 경량 4-phase 플로우. 플랜은 gate 6라운드 후 Codex APPROVE 상태, 구현 세션 대기. 원 `untitled-design.md` 파일명은 PR #17에서 의미있는 이름으로 rename 완료.
+6. **Shipped 설계** (이 브랜치에서 구현 완료):
+   - `docs/specs/2026-04-18-light-flow-design.md` + `docs/plans/2026-04-18-light-flow.md` (PR #10 spec + PR #17 plan) — `harness start --light` 경량 5-slot 플로우. Phase 2 pre-impl Codex gate 활성화(ADR-15~20). `docs/specs/2026-04-19-untitled-2-design.md` 참조.
 
 ## 코드 탐색 entry points
 
