@@ -1,6 +1,6 @@
-# harness-cli
+# phase-harness
 
-`harness-cli` is a TypeScript CLI for running AI-assisted engineering work as a reproducible, resumable tmux workflow.
+`phase-harness` is a TypeScript CLI for running AI-assisted engineering work as a reproducible, resumable tmux workflow.
 
 It supports:
 - a **full 7-phase flow**: spec → spec gate → plan → plan gate → implement → verify → eval gate
@@ -23,16 +23,18 @@ By default, harness uses:
 Those defaults are configurable at runtime. On every `harness start` / `harness resume`, harness prompts for the model preset of every remaining non-verify phase.
 
 Current built-in presets:
+- `opus-1m-max`, `opus-1m-xhigh`, `opus-1m-high`
+- `sonnet-1m-max`, `sonnet-1m-high`
 - `opus-max`, `opus-xhigh`, `opus-high`
 - `sonnet-max`, `sonnet-high`
 - `codex-high`, `codex-medium`
 
 Default phase assignments:
-- Phase 1 → `opus-high`
+- Phase 1 → `opus-1m-high`
 - Phase 2 → `codex-high`
-- Phase 3 → `sonnet-high`
+- Phase 3 → `sonnet-1m-high`
 - Phase 4 → `codex-high`
-- Phase 5 → `sonnet-high`
+- Phase 5 → `sonnet-1m-high`
 - Phase 7 → `codex-high`
 
 ---
@@ -101,16 +103,25 @@ Notes:
 - The verify script is resolved from the installed package first, with legacy fallback to `~/.claude/scripts/harness-verify.sh`.
 - If you switch an interactive phase to a Codex preset, harness will use the Codex CLI for that phase too.
 - By default, Codex phases run through the real `codex` CLI inside an isolated `<runDir>/codex-home`; use `--codex-no-isolate` only when you intentionally want inherited `CODEX_HOME` behavior.
+- New runs now default Claude phases to the explicit `*-1m-*` presets. If your Claude Code environment does not support 1M context, pick one of the legacy non-1M presets during the model-selection step (or change the defaults in `src/config.ts` in your own fork).
 
 ---
 
 ## Installation
 
+Install globally from npm:
+
+```bash
+npm install -g phase-harness
+# or
+pnpm add -g phase-harness
+```
+
 For local development:
 
 ```bash
-git clone <repo-url> harness-cli
-cd harness-cli
+git clone <repo-url> phase-harness
+cd phase-harness
 pnpm install
 pnpm run build
 pnpm link --global
@@ -127,7 +138,7 @@ pnpm run build
 Remove the global link:
 
 ```bash
-pnpm unlink --global harness-cli
+pnpm unlink --global phase-harness
 ```
 
 ---

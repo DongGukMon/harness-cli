@@ -15,7 +15,7 @@ Full flow
 P1 spec → P2 spec gate → P3 plan → P4 plan gate → P5 implement → P6 verify → P7 eval gate
 
 Light flow (`--light`)
-P1 design+plan → P5 implement → P6 verify → P7 eval gate
+P1 design+plan → P2 pre-impl gate → P5 implement → P6 verify → P7 eval gate
 ```
 
 Key invariants:
@@ -32,6 +32,11 @@ Built-in presets come from `src/config.ts`:
 
 | id | runner | model | effort |
 |---|---|---|---|
+| `opus-1m-max` | claude | `claude-opus-4-7[1m]` | `max` |
+| `opus-1m-xhigh` | claude | `claude-opus-4-7[1m]` | `xHigh` |
+| `opus-1m-high` | claude | `claude-opus-4-7[1m]` | `high` |
+| `sonnet-1m-max` | claude | `claude-sonnet-4-6[1m]` | `max` |
+| `sonnet-1m-high` | claude | `claude-sonnet-4-6[1m]` | `high` |
 | `opus-max` | claude | `claude-opus-4-7` | `max` |
 | `opus-xhigh` | claude | `claude-opus-4-7` | `xHigh` |
 | `opus-high` | claude | `claude-opus-4-7` | `high` |
@@ -41,11 +46,12 @@ Built-in presets come from `src/config.ts`:
 | `codex-medium` | codex | `gpt-5.4` | `medium` |
 
 Default assignments:
-- full flow: P1 `opus-high`, P2 `codex-high`, P3 `sonnet-high`, P4 `codex-high`, P5 `sonnet-high`, P7 `codex-high`
-- light flow: P1 `opus-high`, P5 `sonnet-high`, P7 `codex-high`
+- full flow: P1 `opus-1m-high`, P2 `codex-high`, P3 `sonnet-1m-high`, P4 `codex-high`, P5 `sonnet-1m-high`, P7 `codex-high`
+- light flow: P1 `opus-1m-high`, P2 `codex-high`, P5 `sonnet-1m-high`, P7 `codex-high`
 
 Users can change every non-verify phase preset during `harness start` and `harness resume`.
 Selections persist in `state.phasePresets`.
+Existing saved runs are not auto-migrated to the new 1M defaults; only newly created runs pick them up automatically.
 
 ---
 
@@ -62,15 +68,17 @@ Phase outputs are:
 
 ### Light flow (`harness start --light`)
 
-Light flow skips phases 2, 3, and 4 by initializing them as `skipped`.
-The control panel renders them as `(skipped)` and the phase loop jumps past them.
+Light flow skips phases 3 and 4 by initializing them as `skipped`.
+Phase 2 is active (`pending`) and runs a pre-impl Codex review of the combined design doc.
+The control panel renders skipped phases as `(skipped)` and the phase loop jumps past them.
 
 Light-flow specifics:
 - P1 writes a combined design+plan doc to `docs/specs/<runId>-design.md`
 - the combined doc must include `## Complexity`, `## Open Questions`, and `## Implementation Plan`
 - `checklist.json` still exists as a separate file under `.harness/<runId>/checklist.json`
 - `harness resume --light` is rejected because flow is frozen at run creation
-- gate retry limit is 5 in light flow, 3 in full flow
+- P2 (pre-impl gate): Codex reviews the combined design doc using a 4-axis rubric. REJECT → immediate P1 reopen with feedback delivered via `pendingAction.feedbackPaths` only; `state.carryoverFeedback` is not set at Gate 2. Gate retry limit 3 (same as full-flow P2). Legacy light runs created before P2 activation keep `phases['2']='skipped'` — activation is forward-only via `createInitialState`, not retroactive migration.
+- gate retry limit: light P2 = 3, light P7 = 5, full flow = 3
 - on P7 `REJECT`:
   - `Scope: impl` → reopen P5
   - `Scope: design`, `Scope: mixed`, or missing scope → reopen P1 and preserve carryover feedback for P5
@@ -81,11 +89,11 @@ Light-flow specifics:
 
 | Phase | Default preset | Runner type | Main outputs | On reject/fail |
 |---|---|---|---|---|
-| P1 Spec / Design+Plan | `opus-high` | interactive | spec/design doc + decisions + checklist (light only) | Gate 2 reject reopens P1; light-flow P7 design/mixed reject also reopens P1 |
+| P1 Spec / Design+Plan | `opus-1m-high` | interactive | spec/design doc + decisions + checklist (light only) | Gate 2 reject reopens P1; light-flow P7 design/mixed reject also reopens P1 |
 | P2 Spec Gate | `codex-high` | gate | verdict + optional feedback sidecars | reopen P1 |
-| P3 Plan | `sonnet-high` | interactive | plan + checklist | Gate 4 reject reopens P3 |
+| P3 Plan | `sonnet-1m-high` | interactive | plan + checklist | Gate 4 reject reopens P3 |
 | P4 Plan Gate | `codex-high` | gate | verdict + optional feedback sidecars | reopen P3 |
-| P5 Implement | `sonnet-high` | interactive | git commits | P6 fail reopens P5; P7 full-flow reject reopens P5; light-flow impl reject reopens P5 |
+| P5 Implement | `sonnet-1m-high` | interactive | git commits | P6 fail reopens P5; P7 full-flow reject reopens P5; light-flow impl reject reopens P5 |
 | P6 Verify | fixed script | automated shell | eval report + verify sidecars | fail reopens P5; retry limit 3 |
 | P7 Eval Gate | `codex-high` | gate | verdict + optional feedback sidecars | full: reopen P5; light: reopen P5 or P1 based on scope |
 
@@ -141,6 +149,8 @@ If a gate phase is explicitly mapped to a Claude preset, harness instead runs a 
 By default, Codex subprocesses run inside `<runDir>/codex-home/` with only `auth.json` symlinked in.
 This avoids inheriting unrelated user-level `CODEX_HOME` conventions.
 `--codex-no-isolate` disables that safeguard.
+
+If your Claude Code environment does not support 1M context, keep using the legacy non-1M Claude presets from the model picker or change the defaults in `src/config.ts` in your own fork.
 
 ---
 

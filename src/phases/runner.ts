@@ -598,7 +598,7 @@ export async function handleGateReject(
     state.verifyRetries = 0;
   }
 
-  const retryLimit = getGateRetryLimit(state.flow);
+  const retryLimit = getGateRetryLimit(state.flow, phase);
   const retryCount = state.gateRetries[String(phase)];
   const targetInteractive = getGateRejectReopenTarget(state, phase, scope);
 
@@ -690,7 +690,7 @@ export async function handleGateEscalation(
   inputManager: InputManager,
   logger: SessionLogger,
 ): Promise<void> {
-  const retryLimit = getGateRetryLimit(state.flow);
+  const retryLimit = getGateRetryLimit(state.flow, phase);
   printWarning(`Gate ${phase} retry limit reached (${retryLimit})`);
 
   const choice = await promptChoice(

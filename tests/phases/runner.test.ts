@@ -1310,6 +1310,45 @@ describe('handleGatePhase — gate_verdict(REJECT) + gate_retry emission', () =>
   });
 });
 
+describe('handleGateReject — per-gate retry limits (Task 4)', () => {
+  it('light flow Gate 2: escalates after 3 rejects (not 5)', async () => {
+    const dir = makeTmpDir();
+    const state = createInitialState('test-run', '/tasks/test.md', 'base', false, false, 'light');
+    state.gateRetries['2'] = 3;
+    state.phases['2'] = 'pending';
+    state.currentPhase = 2;
+
+    vi.mocked(promptChoice).mockResolvedValueOnce('Q');
+
+    await handleGateReject(
+      2, 'bad design', undefined, 3,
+      state, HDIR, dir, CWD, createNoOpInputManager(), new NoopLogger(),
+    );
+
+    // promptChoice called → escalation was triggered (retryCount >= retryLimit for gate 2)
+    expect(promptChoice).toHaveBeenCalled();
+  });
+
+  it('light flow Gate 7: does NOT escalate after 3 rejects (limit is 5)', async () => {
+    const dir = makeTmpDir();
+    const state = createInitialState('test-run', '/tasks/test.md', 'base', false, false, 'light');
+    state.gateRetries['7'] = 3;
+    state.phases['7'] = 'pending';
+    state.currentPhase = 7;
+
+    vi.mocked(promptChoice).mockReset();
+
+    await handleGateReject(
+      7, 'bad eval', undefined, 3,
+      state, HDIR, dir, CWD, createNoOpInputManager(), new NoopLogger(),
+    );
+
+    // promptChoice NOT called → no escalation (retry 4/5 still under limit)
+    expect(promptChoice).not.toHaveBeenCalled();
+    expect(state.currentPhase).toBe(1);  // P7 REJECT → P1 reopen (light ADR-4)
+  });
+});
+
 describe('handleGatePhase — gate_error emission', () => {
   it('emits gate_error when runner is defined', async () => {
     const runDir = makeTmpDir();
@@ -1825,7 +1864,7 @@ describe('light flow — runPhaseLoop (spec §4 + ADR-1/ADR-4/ADR-14)', () => {
     vi.mocked(runVerifyPhase).mockReset();
   });
 
-  it('skips phases 2/3/4 and advances from phase 1 directly to phase 5', async () => {
+  it('P2 gate APPROVES, skips phases 3/4, advances from phase 1 through P2 to phase 5', async () => {
     const runDir = makeTmpDir();
     const state = makeLightState({ currentPhase: 1 });
     const logger = new NoopLogger();
@@ -1840,20 +1879,28 @@ describe('light flow — runPhaseLoop (spec §4 + ADR-1/ADR-4/ADR-14)', () => {
       return { status: 'completed', attemptId: aid } as any;
     });
     vi.mocked(runVerifyPhase).mockResolvedValueOnce({ type: 'pass' } as any);
+    // Gate 2 APPROVE (P2 is now active in light flow)
     vi.mocked(runGatePhase).mockResolvedValueOnce({
       type: 'verdict', verdict: 'APPROVE', comments: '', rawOutput: '',
       runner: 'codex', durationMs: 1, tokensTotal: 0, promptBytes: 0,
-      codexSessionId: 'x', recoveredFromSidecar: false,
+      codexSessionId: 'x2', recoveredFromSidecar: false,
+      resumedFrom: null, resumeFallback: false,
+    } as any);
+    // Gate 7 APPROVE
+    vi.mocked(runGatePhase).mockResolvedValueOnce({
+      type: 'verdict', verdict: 'APPROVE', comments: '', rawOutput: '',
+      runner: 'codex', durationMs: 1, tokensTotal: 0, promptBytes: 0,
+      codexSessionId: 'x7', recoveredFromSidecar: false,
       resumedFrom: null, resumeFallback: false,
     } as any);
 
     await runPhaseLoop(state, HDIR, runDir, CWD, createNoOpInputManager(), logger, { value: false });
 
-    expect(state.phases['2']).toBe('skipped');
+    expect(state.phases['2']).toBe('completed');  // P2 now active and approved
     expect(state.phases['3']).toBe('skipped');
     expect(state.phases['4']).toBe('skipped');
     expect(state.status).toBe('completed');
-    // handleInteractivePhase must have been invoked for 1 and 5 only
+    // runInteractivePhase invoked for phases 1 and 5 only (P2 uses runGatePhase)
     const invokedPhases = vi.mocked(runInteractivePhase).mock.calls.map((c: any) => c[0]);
     expect(invokedPhases).toEqual([1, 5]);
   });

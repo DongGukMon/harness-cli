@@ -176,13 +176,13 @@ describe('startCommand', () => {
     expect(state.loggingEnabled).toBe(false);
   });
 
-  it('--light writes state.json with flow="light" and phases 2/3/4 skipped', async () => {
+  it('--light writes state.json with flow="light", P2 pending, phases 3/4 skipped', async () => {
     await startCommand('dummy task', { light: true, root: repo.path });
     const harnessDir = join(repo.path, '.harness');
     const runId = readFileSync(join(harnessDir, 'current-run'), 'utf-8').trim();
     const state = JSON.parse(readFileSync(join(harnessDir, runId, 'state.json'), 'utf-8'));
     expect(state.flow).toBe('light');
-    expect(state.phases['2']).toBe('skipped');
+    expect(state.phases['2']).toBe('pending');  // P2 now active in light flow
     expect(state.phases['3']).toBe('skipped');
     expect(state.phases['4']).toBe('skipped');
     expect(state.artifacts.plan).toBe('');

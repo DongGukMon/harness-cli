@@ -216,8 +216,8 @@ describe('createInitialState (updated)', () => {
 
   it('initializes phasePresets from PHASE_DEFAULTS', () => {
     const state = createInitialState('run-1', 'task', 'abc123', false);
-    expect(state.phasePresets['1']).toBe('opus-high');
-    expect(state.phasePresets['5']).toBe('sonnet-high');
+    expect(state.phasePresets['1']).toBe('opus-1m-high');
+    expect(state.phasePresets['5']).toBe('sonnet-1m-high');
   });
 
   it('initializes phaseReopenFlags to false', () => {
@@ -236,9 +236,14 @@ describe('migrateState', () => {
   it('backfills missing phasePresets', () => {
     const raw = { runId: 'test' };
     const migrated = migrateState(raw);
-    for (const key of ['1', '2', '3', '4', '5', '7']) {
-      expect(migrated.phasePresets[key]).toBe(PHASE_DEFAULTS[Number(key)]);
-    }
+    expect(migrated.phasePresets).toMatchObject({
+      '1': 'opus-high',
+      '2': 'codex-high',
+      '3': 'sonnet-high',
+      '4': 'codex-high',
+      '5': 'sonnet-high',
+      '7': 'codex-high',
+    });
   });
 
   it('backfills individual missing phase keys', () => {
@@ -252,6 +257,13 @@ describe('migrateState', () => {
     const migrated = migrateState(raw);
     expect(migrated.phasePresets['1']).toBe('opus-high');
     expect(migrated.phasePresets['2']).toBe('codex-high');
+  });
+
+  it('legacy migration backfills missing presets to non-1M defaults for old runs', () => {
+    const migrated = migrateState({ runId: 'legacy-run' });
+    expect(migrated.phasePresets['1']).toBe('opus-high');
+    expect(migrated.phasePresets['3']).toBe('sonnet-high');
+    expect(migrated.phasePresets['5']).toBe('sonnet-high');
   });
 
   it('preserves opus-max (now a real max-effort preset) across migration', () => {
@@ -306,11 +318,11 @@ describe('flow + carryoverFeedback (light-flow spec)', () => {
     expect(state.phases['4']).toBe('pending');
   });
 
-  it('createInitialState with flow="light" marks phases 2/3/4 as "skipped"', () => {
+  it('createInitialState with flow="light" marks phases 3/4 as "skipped", P2 as "pending"', () => {
     const state = createInitialState('r1', 't', 'base', false, false, 'light');
     expect(state.flow).toBe('light');
     expect(state.phases['1']).toBe('pending');
-    expect(state.phases['2']).toBe('skipped');
+    expect(state.phases['2']).toBe('pending');  // P2 now active in light flow
     expect(state.phases['3']).toBe('skipped');
     expect(state.phases['4']).toBe('skipped');
     expect(state.phases['5']).toBe('pending');
@@ -337,6 +349,13 @@ describe('flow + carryoverFeedback (light-flow spec)', () => {
     expect(migrated.carryoverFeedback).toBeNull();
   });
 
+  it('legacy light-flow migration backfills non-1M Claude defaults for saved runs', () => {
+    const migrated = migrateState({ runId: 'legacy-light', flow: 'light' });
+    expect(migrated.phasePresets['1']).toBe('opus-high');
+    expect(migrated.phasePresets['5']).toBe('sonnet-high');
+    expect(migrated.phasePresets['7']).toBe('codex-high');
+  });
+
   it('carryoverFeedback survives writeState → readState round-trip', () => {
     const dir = makeTmpDir();
     tmpDirs.push(dir);
@@ -349,6 +368,29 @@ describe('flow + carryoverFeedback (light-flow spec)', () => {
     writeState(dir, state);
     const restored = readState(dir);
     expect(restored?.carryoverFeedback).toEqual(state.carryoverFeedback);
+  });
+});
+
+describe('light flow P2 activation (ADR-19 — forward-only)', () => {
+  it('createInitialState light produces phases["2"]==="pending"', () => {
+    const state = createInitialState('r', 'task', 'base', false, false, 'light');
+    expect(state.phases['2']).toBe('pending');
+    expect(state.phases['3']).toBe('skipped');
+    expect(state.phases['4']).toBe('skipped');
+  });
+
+  it('createInitialState full is unchanged (phases["2"]==="pending")', () => {
+    const state = createInitialState('r', 'task', 'base', false);
+    expect(state.phases['2']).toBe('pending');
+  });
+
+  it('migrateState preserves phases["2"]==="skipped" from a pre-change light run (ADR-19)', () => {
+    const legacyRaw = JSON.parse(
+      JSON.stringify(createInitialState('r', 'task', 'base', false, false, 'light'))
+    );
+    legacyRaw.phases['2'] = 'skipped'; // simulate a run from before this change shipped
+    const migrated = migrateState(legacyRaw);
+    expect(migrated.phases['2']).toBe('skipped');
   });
 });
 
@@ -375,8 +417,8 @@ describe('getRequiredPhaseKeys (ADR-5 / inner.ts propagation)', () => {
   it('full flow returns 1/2/3/4/5/7', () => {
     expect([...getRequiredPhaseKeys('full')]).toEqual(['1', '2', '3', '4', '5', '7']);
   });
-  it('light flow returns 1/5/7 only', () => {
-    expect([...getRequiredPhaseKeys('light')]).toEqual(['1', '5', '7']);
+  it('light flow returns 1/2/5/7', () => {
+    expect([...getRequiredPhaseKeys('light')]).toEqual(['1', '2', '5', '7']);
   });
 });
 

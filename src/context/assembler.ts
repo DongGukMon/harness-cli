@@ -88,6 +88,18 @@ Severity: P0/P1=Critical(블록), P2=Important, P3=Suggestion.
 Note: 이 플로우에는 별도의 plan 아티팩트가 없다. plan 부재를 finding으로 올리지 말 것.
 `;
 
+const FIVE_AXIS_DESIGN_GATE_LIGHT = `
+## Five-Axis Evaluation (Phase 2 — design gate, light flow)
+평가 대상은 결합 design spec (spec + Implementation Plan 섹션이 한 문서에 있음). 4축 적용:
+1. Correctness — 요구사항/비요구사항/경계조건/성공기준 명시; plan 섹션이 spec 요구사항을 커버?
+2. Architecture — 태스크 분해가 수직 슬라이스이고 의존성 순서가 명확?
+3. Readability — 섹션 구성이 명확하고 모호 표현이 없는가?
+4. Scope — 단일 구현 세션으로 분해 가능한 크기? 여러 독립 프로젝트 섞이지 않음?
+
+Additional required check: spec MUST contain an explicit '## Open Questions' section. Missing/empty-without-rationale → P1.
+Note: light flow에는 별도 plan 아티팩트가 없다. plan 파일 부재를 finding으로 올리지 말 것. 구현(Phase 5) 아직 수행되지 않음 — 구현 관련 이슈는 Phase 7에서 다룬다.
+`;
+
 function reviewerContractForGate7(flow: FlowMode): string {
   return REVIEWER_CONTRACT_BASE + (flow === 'light' ? FIVE_AXIS_EVAL_GATE_LIGHT : FIVE_AXIS_EVAL_GATE_FULL);
 }
@@ -254,6 +266,15 @@ function runGit(cmd: string, cwd: string): string {
 
 function buildLifecycleContext(phase: 2 | 4 | 7, flow: FlowMode = 'full'): string {
   if (phase === 2) {
+    if (flow === 'light') {
+      return (
+        '<harness_lifecycle>\n' +
+        'This is Gate 2 of a 5-phase light harness lifecycle (P1 design → P2 pre-impl review → P5 impl → P6 verify → P7 eval). ' +
+        'The combined design spec contains the Implementation Plan section; there is no separate plan artifact. ' +
+        'Implementation has not yet been produced.\n' +
+        '</harness_lifecycle>\n\n'
+      );
+    }
     return (
       '<harness_lifecycle>\n' +
       'This is Gate 2 of a 7-phase harness lifecycle. You are reviewing ONLY the <spec> artifact. ' +
@@ -274,7 +295,7 @@ function buildLifecycleContext(phase: 2 | 4 | 7, flow: FlowMode = 'full'): strin
   if (flow === 'light') {
     return (
       '<harness_lifecycle>\n' +
-      'This is Gate 7 of a 4-phase light harness lifecycle (P1 design → P5 impl → P6 verify → P7 eval). ' +
+      'This is Gate 7 of a 5-phase light harness lifecycle (P1 design → P2 pre-impl review → P5 impl → P6 verify → P7 eval). ' +
       'The combined design spec contains the Implementation Plan section; there is no separate plan artifact. ' +
       'This is the terminal review — if APPROVE, the run is complete.\n' +
       '</harness_lifecycle>\n\n'
@@ -293,6 +314,14 @@ function buildLifecycleContext(phase: 2 | 4 | 7, flow: FlowMode = 'full'): strin
 function buildGatePromptPhase2(state: HarnessState, cwd: string): string | { error: string } {
   const specResult = readArtifactContent(state.artifacts.spec, cwd);
   if ('error' in specResult) return specResult;
+
+  if (state.flow === 'light') {
+    return (
+      REVIEWER_CONTRACT_BASE + FIVE_AXIS_DESIGN_GATE_LIGHT +
+      buildLifecycleContext(2, 'light') +
+      `<spec>\n${specResult.content}\n</spec>\n`
+    );
+  }
 
   return (
     REVIEWER_CONTRACT_BY_GATE[2] +

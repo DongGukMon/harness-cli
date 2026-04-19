@@ -1,6 +1,6 @@
 ---
 name: harness-phase-5-implement
-description: Use during harness-cli Phase 5 to implement the plan with harness invariants (commits, context management, git discipline).
+description: Use during phase-harness Phase 5 to implement the plan with harness invariants (commits, context management, git discipline).
 ---
 
 # harness Phase 5 — Implementation
@@ -33,7 +33,7 @@ superpowers가 커버하지 않는 두 원칙을 지킨다:
 - Context management: @{{playbookDir}}/context-engineering.md
 - Git workflow: @{{playbookDir}}/git-workflow-and-versioning.md
 
-*(`{{playbookDir}}`는 harness-cli 설치 디렉터리(dist 또는 src) 내부의 `playbooks/` 경로로 assembler가 해결한다.)*
+*(`{{playbookDir}}`는 phase-harness 설치 디렉터리(dist 또는 src) 내부의 `playbooks/` 경로로 assembler가 해결한다.)*
 
 ## Process
 0. **(Scaffolding only — prevention-first gitignore)** 구현을 시작하기 전에 대상 언어·프레임워크의 표준 `.gitignore` 엔트리(예: `__pycache__/`, `.pytest_cache/`, `.venv/`, `node_modules/`, `dist/`, `build/`, `.DS_Store`)를 프로젝트 루트 `.gitignore`에 보강한다. 기존 `.gitignore`가 이미 해당 엔트리를 포함하면 no-op. 이 변경은 `chore: add standard gitignore entries` 등 **독립된 scaffolding commit**으로 두고, impl 커밋과 섞지 않는다. Sentinel 직전에 `git status --porcelain`을 셀프 체크해 tracked 파일이 전부 커밋된 상태인지 확인한다. 하네스에 자동 recovery가 있어도 이 단계는 효율성과 로그 가독성 측면에서 값어치가 있다.

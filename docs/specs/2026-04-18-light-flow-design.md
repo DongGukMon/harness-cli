@@ -6,6 +6,8 @@
 - Related decisions: [.harness/2026-04-18-light-flow/decisions.md](../../.harness/2026-04-18-light-flow/decisions.md)
 - 구현 범위: **본 스펙은 설계만 다룬다. 실제 구현은 별도 세션에서 진행.**
 
+> **See also:** `docs/specs/2026-04-19-untitled-2-design.md` — activates Phase 2 Codex review (ADR-15/16/17/18/19/20) for light runs. ADR-4 (P1 reopen on P7 REJECT) is unchanged.
+
 ---
 
 ## Context & Decisions
