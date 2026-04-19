@@ -323,16 +323,6 @@ export async function handleInteractivePhase(
     }
   }
 
-  // Record the current-launch preset for future resume eligibility.
-  if (preset?.runner === 'claude') {
-    state.phaseClaudeSessions[String(phase) as '1' | '3' | '5'] = {
-      runner: 'claude',
-      model: preset.model,
-      effort: preset.effort,
-    };
-    writeState(runDir, state);
-  }
-
   const phaseStartTs = Date.now();
   const reopenFromGate = isReopen ? (state.phaseReopenSource[String(phase)] ?? undefined) : undefined;
 
@@ -342,15 +332,6 @@ export async function handleInteractivePhase(
     preset?.runner === 'claude'
       ? readClaudeSessionUsage({ sessionId: attemptId, cwd, phaseStartTs })
       : undefined;
-
-  logger.logEvent({
-    event: 'phase_start',
-    phase,
-    attemptId,
-    reopenFromGate,
-    preset,
-    ...(claudeResumeSessionId !== null ? { claudeResumeSessionId } : {}),
-  });
 
   let watchdogTimer: NodeJS.Timeout | null = null;
   const clearWatchdog = (): void => {
@@ -392,6 +373,25 @@ export async function handleInteractivePhase(
           (sentinelPurgeErr instanceof Error ? ` (cause: ${sentinelPurgeErr.message})` : ''),
       );
     }
+
+    // Lineage atomic commit (R7/D5b): sentinel purge passed — persist both fields together.
+    state.phaseAttemptId[String(phase)] = attemptId;
+    if (preset?.runner === 'claude') {
+      state.phaseClaudeSessions[String(phase) as '1' | '3' | '5'] = {
+        runner: 'claude',
+        model: preset.model,
+        effort: preset.effort,
+      };
+    }
+    writeState(runDir, state);
+    logger.logEvent({
+      event: 'phase_start',
+      phase,
+      attemptId,
+      reopenFromGate,
+      preset,
+      ...(claudeResumeSessionId !== null ? { claudeResumeSessionId } : {}),
+    });
 
     const result = await runInteractivePhase(phase, state, harnessDir, runDir, cwd, attemptId, resume);
     clearWatchdog();
