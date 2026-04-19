@@ -17,6 +17,13 @@ description: Use during harness-cli Phase 1 to brainstorm and write a spec that 
 - Task spec: @{{task_path}}
 {{#if feedback_path}}
 - Previous gate-2 feedback (반드시 반영): @{{feedback_path}}
+
+  **Feedback triage (P1-only 정책)** — 각 comment에 대해:
+  1. **P1 (blocker)**: 반드시 반영한다.
+  2. **P2**: inline 반영이 ≤2 line edit이면 지금 수정한다. 그 외에는 spec 문서의 `## Deferred` 섹션에 1-2 line 항목으로 기록하고 진행한다.
+  3. **severity 라벨 누락된 comment**: blocker 가정으로 처리한다. 단, 구조 변경이나 spec 재구성이 필요하다고 판단되면 이번 pass에서 inline 재구조화하지 말고 `## Deferred`로 보낸다.
+
+  `## Deferred` 섹션이 spec에 없으면 파일 끝에 `## Deferred` 헤딩을 새로 만든 뒤 1-2 line 항목을 append한다. unlabeled comment라도 구조 변경이 필요하면 같은 경로로 defer한다.
 {{/if}}
 
 ## Process
@@ -28,7 +35,8 @@ description: Use during harness-cli Phase 1 to brainstorm and write a spec that 
    - `"After spec is written, proceed immediately to step 2 (decisions log) below"`
 2. Decision log를 `{{decisions_path}}`에 작성한다. spec의 "Context & Decisions" 섹션과 **중복되지 않도록** 각 결정의 *trade-off*와 *고려된 대안*을 기록한다.
 3. 필요 시 `git add` + `git commit`. 커밋 메시지: `spec: <subject>`.
-4. **가장 마지막에** `.harness/{{runId}}/phase-1.done`을 생성하고 내용으로 `{{phaseAttemptId}}` 한 줄만 기록한다.
+4. **Pre-sentinel self-audit** — sentinel 쓰기 직전, 방금 작성한 spec을 다시 읽고 spec의 `## Success Criteria` / `## Invariants` 섹션과 대조한다. grep 또는 정규식 스캔 규칙이 적혀 있으면 모두 직접 확인하고, hit이 있으면 gate로 넘기지 말고 이번 pass에서 바로 수정한다. 각 gate round는 대략 40× local grep 비용이므로 여기서 먼저 정리한다. 수정이 있었다면 한 번 더 같은 검증을 반복(rerun)하고 clean 상태를 확인한 뒤에만 sentinel 단계로 이동한다.
+5. **가장 마지막에** `.harness/{{runId}}/phase-1.done`을 생성하고 내용으로 `{{phaseAttemptId}}` 한 줄만 기록한다.
 
 ## Invariants
 - sentinel 파일 생성 이후 하네스가 다음 단계로 넘어간다. 추가 작업 금지.
