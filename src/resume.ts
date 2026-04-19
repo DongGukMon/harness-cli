@@ -478,10 +478,9 @@ export function completeInteractivePhaseFromFreshSentinel(
 ): boolean {
   try {
     if (phase === 1 || phase === 3) {
-      // Check artifact existence + non-empty + mtime >= phaseOpenedAt
+      // Check artifact existence + non-empty (reopen-aware: no mtime staleness check — see ADR-13)
       const artifactKeys = getPhaseArtifactFiles(state.flow, phase);
       if (artifactKeys.length === 0) return false;
-      const openedAt = state.phaseOpenedAt[String(phase)];
 
       for (const key of artifactKeys) {
         const relPath = state.artifacts[key];
@@ -490,7 +489,6 @@ export function completeInteractivePhaseFromFreshSentinel(
         if (!existsSync(absPath)) return false;
         const stat = statSync(absPath);
         if (stat.size === 0) return false;
-        if (openedAt !== null && Math.floor(stat.mtimeMs) < openedAt) return false;
       }
 
       // Light + phase 1: checklist schema + '## Implementation Plan' header
