@@ -108,7 +108,17 @@ Session meta: `~/.harness/sessions/<hash>/<runId>/{events.jsonl, meta.json, summ
 
 ## 풀 프로세스 호출
 
-개발 전체 사이클은 `/harness` 스킬로 실행. 내부 phase 순서·gate 규약은 전역 규칙 `harness-lifecycle` 섹션 참조.
+> ⚠️ **`/harness` 슬래시 커맨드는 절대 호출 금지.** 전역 `~/.claude/skills/harness/`는 2026-04-19 삭제됨. 호출 시도 시 skill not found. **`harness-cli` CLI 자체는 dogfood로 계속 사용한다** — `/harness` 스킬만 제거되고 CLI는 정규 워크플로의 일부다.
 
-경량 4-phase 플로우는 `harness start --light "<task>"` 로 활성화한다. 상세한 동작은
-`docs/HOW-IT-WORKS.md`의 "Light Flow" 섹션과 `docs/specs/2026-04-18-light-flow-design.md`를 참조.
+개발 라이프사이클은 `harness-cli` 자체를 dogfood로 실행한다:
+
+```bash
+pnpm build                                    # 현 브랜치 변경분을 dist에 반영 (필수)
+harness run --enable-logging "<task>"         # 7-phase 풀 플로우
+# 또는 경량:
+harness start --light "<task>"                # 4-phase 경량 (P1 → P5 → P6 → P7)
+```
+
+빌드 없이는 dist가 갱신되지 않으므로 소스 수정 직후엔 **항상 `pnpm build`** — 그 뒤 CLI 실행 결과가 실제 변경분을 반영한다. 내부 phase 순서·gate 규약·자율 모드 정책(Codex 3 reject → 4회째 강제 통과)은 전역 규칙 `harness-lifecycle` 섹션 참조.
+
+경량 플로우 설계 상세는 `docs/HOW-IT-WORKS.md`의 "Light Flow" 섹션 + `docs/specs/2026-04-18-light-flow-design.md` 참조.
