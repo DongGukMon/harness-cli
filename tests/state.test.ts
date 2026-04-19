@@ -273,12 +273,23 @@ describe('migrateState', () => {
     expect(migrated.phasePresets['2']).toBe('codex-high');
   });
 
-  it('renames legacy opus-max to opus-xhigh on any phase (same lineage)', () => {
-    const raw = { phasePresets: { '1': 'opus-max', '3': 'sonnet-high', '5': 'opus-max' } };
+  it('preserves opus-max (now a real max-effort preset) across migration', () => {
+    // Post-2026-04-19: 'opus-max' is the Opus 4.7 effort=max preset. Legacy
+    // rewrite-to-opus-xhigh was dropped because it would silently downgrade
+    // new users' explicit `opus-max` selections on resume.
+    const raw = { phasePresets: { '1': 'opus-max', '3': 'sonnet-high', '5': 'opus-xhigh' } };
     const migrated = migrateState(raw);
-    expect(migrated.phasePresets['1']).toBe('opus-xhigh');
+    expect(migrated.phasePresets['1']).toBe('opus-max');
     expect(migrated.phasePresets['3']).toBe('sonnet-high');
     expect(migrated.phasePresets['5']).toBe('opus-xhigh');
+  });
+
+  it('preserves sonnet-max and opus-xhigh as distinct effort tiers', () => {
+    const raw = { phasePresets: { '1': 'opus-xhigh', '3': 'sonnet-max', '5': 'sonnet-max' } };
+    const migrated = migrateState(raw);
+    expect(migrated.phasePresets['1']).toBe('opus-xhigh');
+    expect(migrated.phasePresets['3']).toBe('sonnet-max');
+    expect(migrated.phasePresets['5']).toBe('sonnet-max');
   });
 
   it('backfills lastWorkspacePid and phaseReopenFlags', () => {

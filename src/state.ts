@@ -63,13 +63,12 @@ export function migrateState(raw: any): HarnessState {
   if (!raw.phasePresets || typeof raw.phasePresets !== 'object') {
     raw.phasePresets = {};
   }
-  // Legacy rename: 'opus-max' → 'opus-xhigh' (same lineage; id only). Apply
-  // before the unknown-id reset below so existing runs retain user intent.
-  for (const phaseKey of Object.keys(raw.phasePresets)) {
-    if (raw.phasePresets[phaseKey] === 'opus-max') {
-      raw.phasePresets[phaseKey] = 'opus-xhigh';
-    }
-  }
+  // Note: the legacy `opus-max` → `opus-xhigh` migration (PR #22) was dropped
+  // when the catalog re-introduced a real `opus-max` preset pinned to Opus 4.7
+  // effort=`max`. Any state.json from before PR #22 that stored `opus-max`
+  // now resolves to that real max-effort preset (i.e. resume cost may increase
+  // vs. the PR #22 intent of xHigh). Users who want the old xHigh behavior on
+  // resume must explicitly re-select `opus-xhigh` via `promptModelConfig`.
   for (const phase of REQUIRED_PHASE_KEYS) {
     const presetId = raw.phasePresets[phase];
     if (!presetId || !MODEL_PRESETS.find(p => p.id === presetId)) {

@@ -241,7 +241,19 @@ Focus review on changes within the harness ranges above.
 
 Each interactive phase (1, 3, 5) and each gate phase (2, 4, 7) has a configurable model preset. Phase 6 (automated shell verification) has no AI model. At the start of every `harness run` or `harness resume`, the CLI presents a model-selection UI (via `promptModelConfig()` in `src/ui.ts`) that lets the user assign a preset to each remaining phase before any phase work begins.
 
-Available presets are defined in `MODEL_PRESETS` in `src/config.ts`: `opus-xhigh` (Claude Opus 4.7 / xHigh effort — kept as an opt-in for deliberately heavy specs; renamed from legacy `opus-max`), `opus-high` (Claude Opus 4.7 / high — the default for Phase 1 as of 2026-04-18), `sonnet-high`, `codex-high` (Codex gpt-5.4 / high effort), and `codex-medium`. Default per-phase assignments come from `PHASE_DEFAULTS` in the same file (phase 1 defaults to `opus-high`, phases 3 and 5 to `sonnet-high`, gates 2/4/7 to `codex-high`). The model shown in each phase table above is the default preset; users can override per-phase at run start — select `opus-xhigh` when the task genuinely warrants xHigh reasoning. Selections are persisted in `state.phasePresets` and survive resume; `migrateState()` in `src/state.ts` backfills defaults for older state files that predate the preset system (legacy `opus-max` entries are renamed to `opus-xhigh` on load).
+Available presets are defined in `MODEL_PRESETS` in `src/config.ts`. They cover the full Anthropic 2026-04 effort axes plus a Codex axis:
+
+| id | runner | model | effort |
+|---|---|---|---|
+| `opus-max` | claude | `claude-opus-4-7` | `max` |
+| `opus-xhigh` | claude | `claude-opus-4-7` | `xHigh` |
+| `opus-high` | claude | `claude-opus-4-7` | `high` |
+| `sonnet-max` | claude | `claude-sonnet-4-6` | `max` |
+| `sonnet-high` | claude | `claude-sonnet-4-6` | `high` |
+| `codex-high` | codex | `gpt-5.4` | `high` |
+| `codex-medium` | codex | `gpt-5.4` | `medium` |
+
+Opus 4.7 exposes three distinct tiers (`high < xHigh < max`); Sonnet 4.6 exposes two (`high < max` — there is no xHigh on that axis). Default per-phase assignments come from `PHASE_DEFAULTS` (phase 1 → `opus-high`, phases 3 and 5 → `sonnet-high`, gates 2/4/7 → `codex-high`). The model shown in each phase table above is the default preset; users can override per-phase at run start — pick `opus-xhigh`, `opus-max`, or `sonnet-max` when the task genuinely warrants the extra reasoning. Selections are persisted in `state.phasePresets` and survive resume; `migrateState()` in `src/state.ts` backfills defaults for older state files that predate the preset system. The legacy `opus-max` → `opus-xhigh` rewrite (PR #22) was dropped on 2026-04-19 when `opus-max` became a real max-effort preset — older state.json from before PR #22 that still holds `opus-max` now resumes at the real max tier.
 
 ---
 
