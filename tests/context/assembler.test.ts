@@ -411,6 +411,135 @@ describe('buildGatePromptPhase7 — flow-aware (ADR-12)', () => {
   });
 });
 
+// ─── Complexity signal: Phase 3 assembler wiring ─────────────────────────────
+
+describe('complexity signal — Phase 3 prompt injection', () => {
+  afterEach(() => {
+    __resetComplexityWarning();
+  });
+
+  function writeSpec(repoRoot: string, body: string): string {
+    const relPath = 'docs/specs/fixture-complexity.md';
+    const abs = path.join(repoRoot, relPath);
+    fs.mkdirSync(path.dirname(abs), { recursive: true });
+    fs.writeFileSync(abs, body);
+    return relPath;
+  }
+
+  function makePhase3State(repoRoot: string, specBody: string): { state: HarnessState; harnessDir: string } {
+    const specRel = writeSpec(repoRoot, specBody);
+    const state = makeState({
+      phaseAttemptId: { '1': null, '3': 'attempt-phase3-complex', '5': null },
+      artifacts: {
+        spec: specRel,
+        decisionLog: '.harness/my-run/decisions.md',
+        plan: 'docs/plans/fixture.md',
+        checklist: '.harness/my-run/checklist.json',
+        evalReport: 'docs/process/evals/fixture-eval.md',
+      },
+    });
+    // harnessDir resolves spec via join(harnessDir, '..', relPath) → repoRoot
+    const harnessDir = path.join(repoRoot, '.harness');
+    return { state, harnessDir };
+  }
+
+  it('Small spec → Phase 3 prompt contains Small directive stanza', () => {
+    const tmp = makeTmpDir();
+    const { state, harnessDir } = makePhase3State(
+      tmp,
+      '# Fixture\n\n## Complexity\n\nSmall — ~100 LoC CLI\n\n## Rest\n',
+    );
+    const prompt = assembleInteractivePrompt(3, state, harnessDir);
+    expect(prompt).toContain('<complexity_directive>');
+    expect(prompt).toContain('classified **Small**');
+    expect(prompt).toContain('at most 3 tasks');
+  });
+
+  it('Medium spec → Phase 3 prompt has NO directive stanza', () => {
+    const tmp = makeTmpDir();
+    const { state, harnessDir } = makePhase3State(
+      tmp,
+      '# Fixture\n\n## Complexity\n\nMedium\n',
+    );
+    const prompt = assembleInteractivePrompt(3, state, harnessDir);
+    expect(prompt).not.toContain('<complexity_directive>');
+    expect(prompt).not.toContain('classified **Small**');
+    expect(prompt).not.toContain('classified **Large**');
+  });
+
+  it('Large spec → Phase 3 prompt contains Large directive stanza', () => {
+    const tmp = makeTmpDir();
+    const { state, harnessDir } = makePhase3State(
+      tmp,
+      '# Fixture\n\n## Complexity\n\nLarge — multi-file refactor\n',
+    );
+    const prompt = assembleInteractivePrompt(3, state, harnessDir);
+    expect(prompt).toContain('<complexity_directive>');
+    expect(prompt).toContain('classified **Large**');
+    expect(prompt).toContain('vertical slices');
+  });
+
+  it('missing spec file → no directive stanza + single stderr warn', () => {
+    const tmp = makeTmpDir();
+    const state = makeState({
+      phaseAttemptId: { '1': null, '3': 'attempt-phase3-complex', '5': null },
+      artifacts: {
+        spec: 'docs/specs/does-not-exist.md',
+        decisionLog: '.harness/my-run/decisions.md',
+        plan: 'docs/plans/fixture.md',
+        checklist: '.harness/my-run/checklist.json',
+        evalReport: 'docs/process/evals/fixture-eval.md',
+      },
+    });
+    const harnessDir = path.join(tmp, '.harness');
+    const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      const prompt = assembleInteractivePrompt(3, state, harnessDir);
+      expect(prompt).not.toContain('<complexity_directive>');
+      const warnCalls = stderrSpy.mock.calls.filter(
+        (c) => typeof c[0] === 'string' && (c[0] as string).includes('Complexity signal'),
+      );
+      expect(warnCalls.length).toBe(1);
+    } finally {
+      stderrSpy.mockRestore();
+    }
+  });
+
+  it('spec missing the Complexity section → directive empty + warn', () => {
+    const tmp = makeTmpDir();
+    const { state, harnessDir } = makePhase3State(
+      tmp,
+      '# Fixture\n\nNo complexity header anywhere.\n',
+    );
+    const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      const prompt = assembleInteractivePrompt(3, state, harnessDir);
+      expect(prompt).not.toContain('<complexity_directive>');
+      const warnCalls = stderrSpy.mock.calls.filter(
+        (c) => typeof c[0] === 'string' && (c[0] as string).includes('Complexity signal'),
+      );
+      expect(warnCalls.length).toBe(1);
+    } finally {
+      stderrSpy.mockRestore();
+    }
+  });
+
+  it('Phase 1 prompt is NOT affected (directive only injects at Phase 3)', () => {
+    const tmp = makeTmpDir();
+    const { state, harnessDir } = makePhase3State(
+      tmp,
+      '# Fixture\n\n## Complexity\n\nSmall\n',
+    );
+    // Switch attemptId so Phase 1 is callable
+    const phase1State: HarnessState = {
+      ...state,
+      phaseAttemptId: { '1': 'attempt-phase1', '3': null, '5': null },
+    };
+    const prompt = assembleInteractivePrompt(1, phase1State, harnessDir);
+    expect(prompt).not.toContain('<complexity_directive>');
+  });
+});
+
 // ─── Complexity signal: parser ───────────────────────────────────────────────
 
 describe('complexity signal — parser', () => {

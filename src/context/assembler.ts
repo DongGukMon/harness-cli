@@ -456,6 +456,24 @@ export function assembleInteractivePrompt(
   // dev: src/context/playbooks/ ; dist: dist/src/context/playbooks/
   const playbookDir = path.join(__dirname, 'playbooks');
 
+  // Phase 3 complexity directive: parse the spec's `## Complexity` signal and
+  // inject the matching stanza. Read errors / missing section → empty directive
+  // (buildComplexityDirective emits a single stderr warn per process).
+  let complexityDirective = '';
+  if (phase === 3) {
+    const specAbs = path.isAbsolute(state.artifacts.spec)
+      ? state.artifacts.spec
+      : path.join(harnessDir, '..', state.artifacts.spec);
+    let specText: string | null = null;
+    try {
+      specText = fs.readFileSync(specAbs, 'utf-8');
+    } catch {
+      specText = null;
+    }
+    const level = specText !== null ? parseComplexitySignal(specText) : null;
+    complexityDirective = buildComplexityDirective(level);
+  }
+
   const vars: Record<string, string | undefined> = {
     task_path: taskMdPath,
     spec_path: state.artifacts.spec,
@@ -468,6 +486,7 @@ export function assembleInteractivePrompt(
     feedback_paths: feedbackPathsList.length > 0 ? feedbackPathsList : undefined,
     harnessDir,
     playbookDir,
+    complexity_directive: complexityDirective,
   };
 
   // Light flow: phase 1 and 5 use self-contained light templates (no wrapper skill).
