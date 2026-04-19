@@ -17,6 +17,7 @@ export class NoopLogger implements SessionLogger {
   hasBootstrapped(): boolean { return true; }
   hasEmittedSessionOpen(): boolean { return true; }
   getStartedAt(): number { return Date.now(); }
+  getEventsPath(): string | null { return null; }
 }
 
 export interface FileSessionLoggerOptions {
@@ -73,6 +74,7 @@ export class FileSessionLogger implements SessionLogger {
   hasBootstrapped(): boolean { return this.bootstrapped; }
   hasEmittedSessionOpen(): boolean { return this.sessionOpenEmitted; }
   getStartedAt(): number { return this.cachedStartedAt ?? Date.now(); }
+  getEventsPath(): string | null { return this.eventsPath; }
 
   writeMeta(partial: Partial<SessionMeta> & { task: string }): void {
     if (this.disabled) return;

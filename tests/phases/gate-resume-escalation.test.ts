@@ -7,7 +7,7 @@ import type { HarnessState } from '../../src/types.js';
 import { createInitialState, writeState } from '../../src/state.js';
 import { NoopLogger } from '../../src/logger.js';
 import { InputManager } from '../../src/input.js';
-import { GATE_RETRY_LIMIT } from '../../src/config.js';
+import { GATE_RETRY_LIMIT_FULL as GATE_RETRY_LIMIT } from '../../src/config.js';
 
 vi.mock('../../src/ui.js', () => ({
   promptChoice: vi.fn(),
@@ -80,6 +80,7 @@ describe('resume gate escalation replay', () => {
     await handleGateEscalation(
       2,
       'P1: keep the reviewer body raw',
+      undefined,
       2,
       liveState,
       liveRunDir,

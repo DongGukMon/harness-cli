@@ -1,13 +1,13 @@
 import fs from 'fs';
 import path from 'path';
 import { randomUUID } from 'crypto';
-import type { HarnessState, PendingAction, PhaseNumber, InteractivePhase, GatePhase, SessionLogger } from '../types.js';
+import type { HarnessState, PendingAction, PhaseNumber, InteractivePhase, GatePhase, Scope, SessionLogger } from '../types.js';
 import type { InputManager } from '../input.js';
 import {
-  GATE_RETRY_LIMIT,
   GATE_TIMEOUT_MS,
   VERIFY_RETRY_LIMIT,
   TERMINAL_PHASE,
+  getGateRetryLimit,
   getPhaseArtifactFiles,
   getPresetById,
   getReopenTarget,
@@ -78,6 +78,17 @@ function nextPhase(phase: number): number {
 }
 
 export const WATCHDOG_DELAY_MS = 30_000;
+
+function getGateRejectReopenTarget(
+  state: HarnessState,
+  phase: GatePhase,
+  scope?: Scope,
+): InteractivePhase {
+  if (state.flow === 'light' && phase === 7 && scope === 'impl') {
+    return 5;
+  }
+  return getReopenTarget(state.flow, phase);
+}
 
 // ─── Sidecar cleanup helpers ──────────────────────────────────────────────────
 
@@ -539,7 +550,7 @@ export async function handleGatePhase(
           preset: gatePresetMeta,
         });
       }
-      await handleGateReject(phase, result.comments, retryIndex, state, harnessDir, runDir, cwd, inputManager, logger);
+      await handleGateReject(phase, result.comments, result.scope, retryIndex, state, harnessDir, runDir, cwd, inputManager, logger);
     }
   } else {
     // Error path. Redirect guard was already applied above.
@@ -568,6 +579,7 @@ export async function handleGatePhase(
 export async function handleGateReject(
   phase: GatePhase,
   comments: string,
+  scope: Scope | undefined,
   retryIndex: number,
   state: HarnessState,
   _harnessDir: string,
@@ -586,16 +598,17 @@ export async function handleGateReject(
     state.verifyRetries = 0;
   }
 
+  const retryLimit = getGateRetryLimit(state.flow);
   const retryCount = state.gateRetries[String(phase)];
-  const targetInteractive = getReopenTarget(state.flow, phase);
+  const targetInteractive = getGateRejectReopenTarget(state, phase, scope);
 
-  printWarning(`Gate ${phase} REJECTED (retry ${retryCount}/${GATE_RETRY_LIMIT})`);
+  printWarning(`Gate ${phase} REJECTED (retry ${retryCount}/${retryLimit})`);
   if (comments) {
     printInfo(`Feedback:\n${comments}`);
   }
 
-  if (retryCount < GATE_RETRY_LIMIT || state.autoMode) {
-    if (retryCount >= GATE_RETRY_LIMIT && state.autoMode) {
+  if (retryCount < retryLimit || state.autoMode) {
+    if (retryCount >= retryLimit && state.autoMode) {
       // Auto-mode force pass (no gate_retry event — force_pass covers this path)
       await forcePassGate(phase, state, runDir, cwd, 'auto', logger);
       return;
@@ -615,7 +628,7 @@ export async function handleGateReject(
       phase,
       retryIndex,
       retryCount: retryIndex + 1,
-      retryLimit: GATE_RETRY_LIMIT,
+      retryLimit,
       feedbackPath,
       feedbackBytes,
       feedbackPreview,
@@ -662,13 +675,14 @@ export async function handleGateReject(
     writeState(runDir, state);
   } else {
     // Escalation
-    await handleGateEscalation(phase, comments, retryIndex, state, runDir, cwd, inputManager, logger);
+    await handleGateEscalation(phase, comments, scope, retryIndex, state, runDir, cwd, inputManager, logger);
   }
 }
 
 export async function handleGateEscalation(
   phase: GatePhase,
   comments: string,
+  scope: Scope | undefined,
   retryIndex: number,
   state: HarnessState,
   runDir: string,
@@ -676,10 +690,11 @@ export async function handleGateEscalation(
   inputManager: InputManager,
   logger: SessionLogger,
 ): Promise<void> {
-  printWarning(`Gate ${phase} retry limit reached (${GATE_RETRY_LIMIT})`);
+  const retryLimit = getGateRetryLimit(state.flow);
+  printWarning(`Gate ${phase} retry limit reached (${retryLimit})`);
 
   const choice = await promptChoice(
-    `Gate ${phase} has been rejected ${GATE_RETRY_LIMIT} times. What would you like to do?`,
+    `Gate ${phase} has been rejected ${retryLimit} times. What would you like to do?`,
     [
       { key: 'C', label: 'Continue (reset retries, reopen)' },
       { key: 'S', label: 'Skip (force-pass)' },
@@ -704,7 +719,7 @@ export async function handleGateEscalation(
     state.gateRetries[String(phase)] = 0;
     if (phase === 7) state.verifyRetries = 0;
 
-    const targetInteractive = getReopenTarget(state.flow, phase);
+    const targetInteractive = getGateRejectReopenTarget(state, phase, scope);
     const feedbackPath = saveGateFeedback(runDir, phase, comments, retryIndex, cycleIndex);
     const feedbackPaths = [feedbackPath];
     if (phase === 7) {
@@ -747,7 +762,7 @@ export async function handleGateEscalation(
     await forcePassGate(phase, state, runDir, cwd, 'user', logger);
   } else {
     // Quit
-    const targetInteractive = getReopenTarget(state.flow, phase);
+    const targetInteractive = getGateRejectReopenTarget(state, phase, scope);
     const key = String(phase) as '2' | '4' | '7';
     const cycleIndex = state.gateEscalationCycles?.[key] ?? 0;
     const feedbackPath = saveGateFeedback(runDir, phase, comments, retryIndex, cycleIndex);
@@ -756,6 +771,7 @@ export async function handleGateEscalation(
       targetPhase: phase as PhaseNumber,
       sourcePhase: targetInteractive as PhaseNumber,
       feedbackPaths: [feedbackPath],
+      scope,
     };
     state.status = 'paused';
     state.pauseReason = 'gate-escalation';

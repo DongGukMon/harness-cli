@@ -1,10 +1,11 @@
 import fs from 'fs';
-import { join } from 'path';
+import path, { join } from 'path';
 import { createInterface } from 'readline';
 import { getGitRoot } from '../git.js';
 import { updateLockPid, readLock, releaseLock } from '../lock.js';
 import { findHarnessRoot, clearCurrentRun } from '../root.js';
 import { readState, writeState, invalidatePhaseSessionsOnPresetChange, invalidatePhaseSessionsOnJump } from '../state.js';
+import { startFooterTicker } from './footer-ticker.js';
 import { runPhaseLoop } from '../phases/runner.js';
 import { registerSignalHandlers } from '../signal.js';
 import { killSession, killWindow, selectWindow, splitPane, paneExists, selectPane } from '../tmux.js';
@@ -192,6 +193,13 @@ export async function innerCommand(runId: string, options: InnerOptions = {}): P
 
   // Step 5.10: Enter phase loop mode
   inputManager.enterPhaseLoop();
+  const stateJsonPath = path.join(runDir, 'state.json');
+  const footerTimer = startFooterTicker({
+    logger,
+    stateJsonPath,
+    intervalMs: 1000,
+  });
+  process.on('SIGWINCH', footerTimer.forceTick);
 
   // 6. Run phase loop
   try {
@@ -200,6 +208,8 @@ export async function innerCommand(runId: string, options: InnerOptions = {}): P
     else if (state.status === 'paused') sessionEndStatus = 'paused';
     else sessionEndStatus = 'interrupted';
   } finally {
+    footerTimer.stop();
+    process.removeListener('SIGWINCH', footerTimer.forceTick);
     logger.logEvent({ event: 'session_end', status: sessionEndStatus, totalWallMs: Date.now() - logger.getStartedAt() });
     logger.finalizeSummary(state);
     logger.close();

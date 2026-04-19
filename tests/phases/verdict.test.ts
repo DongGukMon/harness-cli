@@ -1,5 +1,81 @@
 import { describe, it, expect } from 'vitest';
-import { extractCodexMetadata } from '../../src/phases/verdict.js';
+import { buildGateResult, extractCodexMetadata, parseVerdict } from '../../src/phases/verdict.js';
+
+describe('parseVerdict', () => {
+  it('parses REJECT with Scope: impl', () => {
+    const result = parseVerdict('## Verdict\nREJECT\nScope: impl\n\n## Comments\n- x\n');
+    expect(result).toMatchObject({ verdict: 'REJECT', scope: 'impl' });
+  });
+
+  it('parses REJECT with Scope: design and Scope: mixed', () => {
+    expect(parseVerdict('## Verdict\nREJECT\nScope: design\n')?.scope).toBe('design');
+    expect(parseVerdict('## Verdict\nREJECT\nScope: mixed\n')?.scope).toBe('mixed');
+  });
+
+  it('treats lowercase scope tag as valid', () => {
+    const result = parseVerdict('## Verdict\nREJECT\nscope: impl\n');
+    expect(result?.scope).toBe('impl');
+  });
+
+  it('omits scope when Scope line is missing or invalid', () => {
+    expect(parseVerdict('## Verdict\nREJECT\n')?.scope).toBeUndefined();
+    expect(parseVerdict('## Verdict\nREJECT\nScope: bogus\n')?.scope).toBeUndefined();
+  });
+
+  it('ignores scope lines on APPROVE', () => {
+    const result = parseVerdict('## Verdict\nAPPROVE\nScope: impl\n');
+    expect(result).toMatchObject({ verdict: 'APPROVE' });
+    expect(result?.scope).toBeUndefined();
+  });
+
+  it('parses scope inside Comments after Verdict, even across later headings', () => {
+    const result = parseVerdict([
+      'Intro',
+      '## Verdict',
+      'REJECT',
+      '## Comments',
+      '- Issue',
+      'Scope: impl',
+      '## Summary',
+      'Needs work',
+    ].join('\n'));
+    expect(result?.scope).toBe('impl');
+  });
+
+  it('does not parse scope lines that appear only before ## Verdict', () => {
+    const result = parseVerdict([
+      'Scope: impl',
+      '## Comments',
+      '- note',
+      '## Verdict',
+      'REJECT',
+      '## Summary',
+      'Needs work',
+    ].join('\n'));
+    expect(result?.scope).toBeUndefined();
+  });
+
+  it('returns null when ## Verdict is missing, even if Scope: impl is present', () => {
+    const result = parseVerdict([
+      '## Comments',
+      '- malformed output',
+      'Scope: impl',
+      '## Summary',
+      'Needs work',
+    ].join('\n'));
+    expect(result).toBeNull();
+  });
+});
+
+describe('buildGateResult', () => {
+  it('threads parsed scope through GateOutcome', () => {
+    const result = buildGateResult(0, '## Verdict\nREJECT\nScope: impl\n', '');
+    expect(result.type).toBe('verdict');
+    if (result.type === 'verdict') {
+      expect(result.scope).toBe('impl');
+    }
+  });
+});
 
 describe('extractCodexMetadata', () => {
   it('parses tokens used and session id', () => {

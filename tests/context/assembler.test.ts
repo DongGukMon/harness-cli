@@ -2,7 +2,13 @@ import { describe, it, expect, afterEach, vi } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { assembleInteractivePrompt, assembleGatePrompt } from '../../src/context/assembler.js';
+import {
+  assembleInteractivePrompt,
+  assembleGatePrompt,
+  parseComplexitySignal,
+  buildComplexityDirective,
+  __resetComplexityWarning,
+} from '../../src/context/assembler.js';
 import { createInitialState } from '../../src/state.js';
 import type { HarnessState } from '../../src/types.js';
 
@@ -147,6 +153,26 @@ describe('Phase 5 interactive prompt', () => {
     expect(prompt).toContain('phase-5.done');
     expect(prompt).toContain('attempt-phase5');
   });
+
+  it('mandates standard gitignore scaffolding (Slice 3 step 0)', () => {
+    const state = makeState({
+      phaseAttemptId: { '1': null, '3': null, '5': 'aid' },
+    });
+    const prompt = assembleInteractivePrompt(5, state, '/tmp/harness');
+    // Step 0 language + the canonical commit name used in the dogfood contract
+    expect(prompt).toContain('chore: add standard gitignore entries');
+    expect(prompt).toContain('git status --porcelain');
+    expect(prompt).toMatch(/__pycache__\//);
+  });
+
+  it('generalizes the reopen invariant (rev-invariant artifacts OK)', () => {
+    const state = makeState({
+      phaseAttemptId: { '1': null, '3': null, '5': 'aid' },
+    });
+    const prompt = assembleInteractivePrompt(5, state, '/tmp/harness');
+    expect(prompt).toMatch(/Reopen 시 artifact를 변경하지 않아도/);
+    expect(prompt).toMatch(/sentinel attemptId/);
+  });
 });
 
 describe('Phase 1/3/5 HARNESS FLOW CONSTRAINT stanza', () => {
@@ -196,6 +222,8 @@ describe('Gate 2 prompt', () => {
     expect(typeof result).toBe('string');
     const prompt = result as string;
     expect(prompt).toContain('Every comment must cite a specific location');
+    expect(prompt).toContain('Scope tagging (REJECT only)');
+    expect(prompt).toContain('Scope: design | impl | mixed');
   });
 
   it('includes scope rules that forbid external conventions and not-yet-produced artifacts', () => {
@@ -402,5 +430,383 @@ describe('buildGatePromptPhase7 — flow-aware (ADR-12)', () => {
     if (typeof result !== 'string') throw new Error('expected string');
     expect(result).toContain('spec + plan + eval report + diff');
     expect(result).toContain('7-phase harness lifecycle');
+  });
+});
+
+// ─── Complexity signal: Phase 3 assembler wiring ─────────────────────────────
+
+describe('complexity signal — Phase 3 prompt injection', () => {
+  afterEach(() => {
+    __resetComplexityWarning();
+  });
+
+  function writeSpec(repoRoot: string, body: string): string {
+    const relPath = 'docs/specs/fixture-complexity.md';
+    const abs = path.join(repoRoot, relPath);
+    fs.mkdirSync(path.dirname(abs), { recursive: true });
+    fs.writeFileSync(abs, body);
+    return relPath;
+  }
+
+  function makePhase3State(repoRoot: string, specBody: string): { state: HarnessState; harnessDir: string } {
+    const specRel = writeSpec(repoRoot, specBody);
+    const state = makeState({
+      phaseAttemptId: { '1': null, '3': 'attempt-phase3-complex', '5': null },
+      artifacts: {
+        spec: specRel,
+        decisionLog: '.harness/my-run/decisions.md',
+        plan: 'docs/plans/fixture.md',
+        checklist: '.harness/my-run/checklist.json',
+        evalReport: 'docs/process/evals/fixture-eval.md',
+      },
+    });
+    // harnessDir resolves spec via join(harnessDir, '..', relPath) → repoRoot
+    const harnessDir = path.join(repoRoot, '.harness');
+    return { state, harnessDir };
+  }
+
+  it('Small spec → Phase 3 prompt contains Small directive stanza', () => {
+    const tmp = makeTmpDir();
+    const { state, harnessDir } = makePhase3State(
+      tmp,
+      '# Fixture\n\n## Complexity\n\nSmall — ~100 LoC CLI\n\n## Rest\n',
+    );
+    const prompt = assembleInteractivePrompt(3, state, harnessDir);
+    expect(prompt).toContain('<complexity_directive>');
+    expect(prompt).toContain('classified **Small**');
+    expect(prompt).toContain('at most 3 tasks');
+  });
+
+  it('Medium spec → Phase 3 prompt has NO directive stanza', () => {
+    const tmp = makeTmpDir();
+    const { state, harnessDir } = makePhase3State(
+      tmp,
+      '# Fixture\n\n## Complexity\n\nMedium\n',
+    );
+    const prompt = assembleInteractivePrompt(3, state, harnessDir);
+    expect(prompt).not.toContain('<complexity_directive>');
+    expect(prompt).not.toContain('classified **Small**');
+    expect(prompt).not.toContain('classified **Large**');
+  });
+
+  it('Large spec → Phase 3 prompt contains Large directive stanza', () => {
+    const tmp = makeTmpDir();
+    const { state, harnessDir } = makePhase3State(
+      tmp,
+      '# Fixture\n\n## Complexity\n\nLarge — multi-file refactor\n',
+    );
+    const prompt = assembleInteractivePrompt(3, state, harnessDir);
+    expect(prompt).toContain('<complexity_directive>');
+    expect(prompt).toContain('classified **Large**');
+    expect(prompt).toContain('vertical slices');
+  });
+
+  it('missing spec file → no directive stanza + single stderr warn', () => {
+    const tmp = makeTmpDir();
+    const state = makeState({
+      phaseAttemptId: { '1': null, '3': 'attempt-phase3-complex', '5': null },
+      artifacts: {
+        spec: 'docs/specs/does-not-exist.md',
+        decisionLog: '.harness/my-run/decisions.md',
+        plan: 'docs/plans/fixture.md',
+        checklist: '.harness/my-run/checklist.json',
+        evalReport: 'docs/process/evals/fixture-eval.md',
+      },
+    });
+    const harnessDir = path.join(tmp, '.harness');
+    const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      const prompt = assembleInteractivePrompt(3, state, harnessDir);
+      expect(prompt).not.toContain('<complexity_directive>');
+      const warnCalls = stderrSpy.mock.calls.filter(
+        (c) => typeof c[0] === 'string' && (c[0] as string).includes('Complexity signal'),
+      );
+      expect(warnCalls.length).toBe(1);
+    } finally {
+      stderrSpy.mockRestore();
+    }
+  });
+
+  it('spec missing the Complexity section → directive empty + warn', () => {
+    const tmp = makeTmpDir();
+    const { state, harnessDir } = makePhase3State(
+      tmp,
+      '# Fixture\n\nNo complexity header anywhere.\n',
+    );
+    const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      const prompt = assembleInteractivePrompt(3, state, harnessDir);
+      expect(prompt).not.toContain('<complexity_directive>');
+      const warnCalls = stderrSpy.mock.calls.filter(
+        (c) => typeof c[0] === 'string' && (c[0] as string).includes('Complexity signal'),
+      );
+      expect(warnCalls.length).toBe(1);
+    } finally {
+      stderrSpy.mockRestore();
+    }
+  });
+
+  it('non-ENOENT I/O error from readFileSync propagates (spec R4: only swallow ENOENT)', () => {
+    // Spec R4: "fs.readFileSync(specPath, 'utf-8') (swallow ENOENT → treat as
+    // null parse)." Unexpected read errors (EACCES, EIO, …) must NOT silently
+    // downgrade to Medium — they indicate real infrastructure failure.
+    const tmp = makeTmpDir();
+    const { state, harnessDir } = makePhase3State(
+      tmp,
+      '# Fixture\n\n## Complexity\n\nSmall\n',
+    );
+    const readSpy = vi.spyOn(fs, 'readFileSync').mockImplementation(((
+      ...args: unknown[]
+    ) => {
+      const p = args[0];
+      if (typeof p === 'string' && p.endsWith('fixture-complexity.md')) {
+        const err = new Error('permission denied') as NodeJS.ErrnoException;
+        err.code = 'EACCES';
+        throw err;
+      }
+      // Fall through to the real implementation for template + skill reads.
+      return (fs.readFileSync as unknown as (...a: unknown[]) => unknown).call(
+        fs,
+        ...args,
+      ) as string;
+    }) as typeof fs.readFileSync);
+    try {
+      expect(() => assembleInteractivePrompt(3, state, harnessDir)).toThrow(
+        /permission denied|EACCES/,
+      );
+    } finally {
+      readSpy.mockRestore();
+    }
+  });
+
+  it('Phase 1 prompt is NOT affected (directive only injects at Phase 3)', () => {
+    const tmp = makeTmpDir();
+    const { state, harnessDir } = makePhase3State(
+      tmp,
+      '# Fixture\n\n## Complexity\n\nSmall\n',
+    );
+    // Switch attemptId so Phase 1 is callable
+    const phase1State: HarnessState = {
+      ...state,
+      phaseAttemptId: { '1': 'attempt-phase1', '3': null, '5': null },
+    };
+    const prompt = assembleInteractivePrompt(1, phase1State, harnessDir);
+    expect(prompt).not.toContain('<complexity_directive>');
+  });
+});
+
+// ─── Complexity signal: parser ───────────────────────────────────────────────
+
+describe('complexity signal — parser', () => {
+  it.each([
+    ['Small', 'small'],
+    ['small', 'small'],
+    ['SMALL', 'small'],
+    ['Medium', 'medium'],
+    ['medium', 'medium'],
+    ['MEDIUM', 'medium'],
+    ['Large', 'large'],
+    ['large', 'large'],
+    ['LARGE', 'large'],
+  ])('case-insensitive token %s → %s', (token, expected) => {
+    const spec = `# Title\n\n## Complexity\n\n${token}\n\n## Next\n`;
+    expect(parseComplexitySignal(spec)).toBe(expected);
+  });
+
+  it.each([
+    ['Small — ~300 LoC single-file CLI', 'small'],
+    ['Medium — touches 8 files', 'medium'],
+    ['Large - major refactor', 'large'],
+  ])('accepts inline rationale after token (%s)', (line, expected) => {
+    const spec = `## Complexity\n\n${line}\n`;
+    expect(parseComplexitySignal(spec)).toBe(expected);
+  });
+
+  it('returns null when section missing', () => {
+    expect(parseComplexitySignal('# Title\n\nJust prose, no Complexity header.\n')).toBeNull();
+  });
+
+  it('returns null when section present but body is empty', () => {
+    expect(parseComplexitySignal('## Complexity\n\n\n## Next\n')).toBeNull();
+  });
+
+  it('returns null for unknown tokens', () => {
+    expect(parseComplexitySignal('## Complexity\n\nExtraLarge\n')).toBeNull();
+    expect(parseComplexitySignal('## Complexity\n\n3\n')).toBeNull();
+  });
+
+  it('skips leading blank lines before the token', () => {
+    expect(parseComplexitySignal('## Complexity\n\n\n\n  \n\nMedium\n')).toBe('medium');
+  });
+
+  it('does not match "## Complexity:" (header must stand alone)', () => {
+    // R2 is strict: `^##\s+Complexity\s*$`. Trailing colon or rationale on the
+    // header line itself is rejected; authors put rationale on the next line.
+    // Neither of these has a bare "## Complexity" header, so both return null.
+    expect(parseComplexitySignal('## Complexity: Small\n\nSmall\n')).toBeNull();
+    expect(parseComplexitySignal('## Complexity: Small\n\n')).toBeNull();
+  });
+
+  it('returns null when the spec contains two `## Complexity` sections (spec Goal 1: "exactly one")', () => {
+    // Spec Goals item 1: "Phase 1 spec must contain exactly one ## Complexity
+    // section." Duplicate headers — even with identical bodies — are an author
+    // error and must not silently pass.
+    const twoHeaders =
+      '# Title\n\n## Complexity\n\nSmall\n\n## Other\n\n## Complexity\n\nLarge\n';
+    expect(parseComplexitySignal(twoHeaders)).toBeNull();
+
+    const twoHeadersSameBody =
+      '## Complexity\n\nSmall\n\n## Complexity\n\nSmall\n';
+    expect(parseComplexitySignal(twoHeadersSameBody)).toBeNull();
+  });
+});
+
+// ─── Complexity signal: directive builder ─────────────────────────────────────
+
+describe('complexity signal — directive builder', () => {
+  afterEach(() => {
+    __resetComplexityWarning();
+  });
+
+  it('Small emits a non-empty stanza instructing task-count ceiling + no pseudocode', () => {
+    const out = buildComplexityDirective('small');
+    expect(out).toContain('<complexity_directive>');
+    expect(out).toContain('</complexity_directive>');
+    expect(out).toMatch(/classified \*\*Small\*\*/);
+    expect(out).toMatch(/at most 3 tasks/i);
+    expect(out).toMatch(/per-function pseudocode/i);
+    expect(out.endsWith('\n')).toBe(true);
+  });
+
+  it('Large emits a non-empty stanza instructing slice discipline + ADR capture', () => {
+    const out = buildComplexityDirective('large');
+    expect(out).toContain('<complexity_directive>');
+    expect(out).toMatch(/classified \*\*Large\*\*/);
+    expect(out).toMatch(/vertical slices/i);
+    expect(out).toMatch(/ADR/);
+  });
+
+  it('Medium returns empty string (no behavioral drift)', () => {
+    expect(buildComplexityDirective('medium')).toBe('');
+  });
+
+  it('null returns empty string and emits a single stderr warning per process', () => {
+    const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      expect(buildComplexityDirective(null)).toBe('');
+      expect(buildComplexityDirective(null)).toBe('');
+      expect(buildComplexityDirective(null)).toBe('');
+      // Only one warn despite 3 calls
+      const warnCalls = stderrSpy.mock.calls.filter(
+        (c) => typeof c[0] === 'string' && (c[0] as string).includes('Complexity signal'),
+      );
+      expect(warnCalls.length).toBe(1);
+    } finally {
+      stderrSpy.mockRestore();
+    }
+  });
+
+  it('exact-snapshot — Small directive matches spec R3 byte-for-byte (drift guard)', () => {
+    // Spec R3 declares the directive text is normative ("exact directive text
+    // is part of this spec; tests snapshot these strings"). Freeze it.
+    expect(buildComplexityDirective('small')).toBe(
+      '<complexity_directive>\n' +
+        'This task is classified **Small**. Keep the plan to **at most 3 tasks**. ' +
+        'Do not emit per-function pseudocode or ASCII diagrams. Prefer bundling related edits in one task over splitting them. ' +
+        'Keep `checklist.json` to at most 4 `checks` entries — typecheck + test + build is usually enough.\n' +
+        '</complexity_directive>\n',
+    );
+  });
+
+  it('exact-snapshot — Large directive matches spec R3 byte-for-byte (drift guard)', () => {
+    expect(buildComplexityDirective('large')).toBe(
+      '<complexity_directive>\n' +
+        'This task is classified **Large**. Decompose into clear vertical slices with explicit dependency order. ' +
+        'Capture architecturally-relevant decisions as short ADR blurbs inline in the plan. Standard depth otherwise.\n' +
+        '</complexity_directive>\n',
+    );
+  });
+
+  it('__resetComplexityWarning re-arms the warning', () => {
+    const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      buildComplexityDirective(null);
+      __resetComplexityWarning();
+      buildComplexityDirective(null);
+      const warnCalls = stderrSpy.mock.calls.filter(
+        (c) => typeof c[0] === 'string' && (c[0] as string).includes('Complexity signal'),
+      );
+      expect(warnCalls.length).toBe(2);
+    } finally {
+      stderrSpy.mockRestore();
+    }
+  });
+});
+
+// ─── Complexity signal: E2E across the three buckets ─────────────────────────
+
+describe('complexity signal — E2E', () => {
+  afterEach(() => {
+    __resetComplexityWarning();
+  });
+
+  function assemblePhase3WithBucket(body: string): string {
+    const tmp = makeTmpDir();
+    const relPath = 'docs/specs/fixture-e2e.md';
+    const abs = path.join(tmp, relPath);
+    fs.mkdirSync(path.dirname(abs), { recursive: true });
+    fs.writeFileSync(abs, body);
+    const state = makeState({
+      phaseAttemptId: { '1': null, '3': 'attempt-e2e', '5': null },
+      artifacts: {
+        spec: relPath,
+        decisionLog: '.harness/my-run/decisions.md',
+        plan: 'docs/plans/fixture.md',
+        checklist: '.harness/my-run/checklist.json',
+        evalReport: 'docs/process/evals/fixture-eval.md',
+      },
+    });
+    const harnessDir = path.join(tmp, '.harness');
+    return assembleInteractivePrompt(3, state, harnessDir);
+  }
+
+  it('renders all three buckets with the expected stanza presence + ordering', () => {
+    const small = assemblePhase3WithBucket('# Fixture\n\n## Complexity\n\nSmall\n');
+    __resetComplexityWarning();
+    const medium = assemblePhase3WithBucket('# Fixture\n\n## Complexity\n\nMedium\n');
+    __resetComplexityWarning();
+    const large = assemblePhase3WithBucket('# Fixture\n\n## Complexity\n\nLarge\n');
+
+    // Bucket-specific markers present/absent.
+    expect(small).toContain('classified **Small**');
+    expect(small).toContain('at most 3 tasks');
+    expect(medium).not.toContain('<complexity_directive>');
+    expect(medium).not.toContain('classified **Small**');
+    expect(medium).not.toContain('classified **Large**');
+    expect(large).toContain('classified **Large**');
+    expect(large).toContain('vertical slices');
+
+    // Cross-bucket length regression: Medium (empty directive) is strictly
+    // shorter than both Small and Large (non-empty directives), and the two
+    // non-empty directives are similarly sized.
+    expect(medium.length).toBeLessThan(small.length);
+    expect(medium.length).toBeLessThan(large.length);
+    expect(Math.abs(small.length - large.length)).toBeLessThan(500);
+  });
+
+  it('unknown complexity token falls back to Medium rendering (empty directive + single warn)', () => {
+    const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      const out = assemblePhase3WithBucket('# Fixture\n\n## Complexity\n\nExtraLarge\n');
+      expect(out).not.toContain('<complexity_directive>');
+      expect(out).not.toContain('classified **Small**');
+      expect(out).not.toContain('classified **Large**');
+      const warnCalls = stderrSpy.mock.calls.filter(
+        (c) => typeof c[0] === 'string' && (c[0] as string).includes('Complexity signal'),
+      );
+      expect(warnCalls.length).toBe(1);
+    } finally {
+      stderrSpy.mockRestore();
+    }
   });
 });

@@ -55,6 +55,15 @@ function currentPgid(): number {
   return parseInt(pgidStr, 10);
 }
 
+function canUsePs(): boolean {
+  try {
+    currentPgid();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // ─── tests ───────────────────────────────────────────────────────────────────
 
 describe('acquireLock', () => {
@@ -197,7 +206,7 @@ describe('acquireLock', () => {
   });
 
   // Test 13: childPid PGID alive → active (even if cliPid dead)
-  it('treats live childPid PGID as active even when cliPid is dead', () => {
+  (canUsePs() ? it : it.skip)('treats live childPid PGID as active even when cliPid is dead', () => {
     const harnessDir = makeHarnessDir();
     const pgid = currentPgid(); // alive PGID
 

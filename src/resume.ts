@@ -14,9 +14,27 @@ import {
 } from './phases/runner.js';
 import { InputManager } from './input.js';
 import { NoopLogger } from './logger.js';
-import { GATE_RETRY_LIMIT, getPhaseArtifactFiles } from './config.js';
+import { getGateRetryLimit, getPhaseArtifactFiles } from './config.js';
 import { isValidChecklistSchema } from './phases/checklist.js';
+import { tryAutoRecoverDirtyTree, writeDirtyTreeDiagnostic } from './phases/dirty-tree.js';
 import type { HarnessState, PhaseNumber } from './types.js';
+
+/** Inline Complexity-section check (spec R5); mirrors `interactive.ts`. */
+function specHasValidComplexity(specBody: string): boolean {
+  // Spec Goal 1: "exactly one `## Complexity` section." Count matches first.
+  const allHeaders = specBody.match(/^##\s+Complexity\s*$/gm);
+  if (!allHeaders || allHeaders.length !== 1) return false;
+  const headerMatch = specBody.match(/^##\s+Complexity\s*$/m);
+  if (!headerMatch) return false;
+  const offset = (headerMatch.index ?? 0) + headerMatch[0].length;
+  const remainder = specBody.slice(offset);
+  for (const rawLine of remainder.split('\n')) {
+    const line = rawLine.trim();
+    if (line === '') continue;
+    return /^(small|medium|large)\b/i.test(line);
+  }
+  return false;
+}
 
 /** Create a no-op InputManager for use in resumeRun (deferred refactor: inputManager passed by inner.ts in future). */
 function createNoOpInputManager(): InputManager {
@@ -92,7 +110,8 @@ async function recoverGeneralState(
     const completed = completeInteractivePhaseFromFreshSentinel(
       phase as PhaseNumber,
       state,
-      cwd
+      cwd,
+      runDir,
     );
     if (completed) {
       state.phases[phaseKey] = 'completed';
@@ -124,7 +143,8 @@ async function recoverGeneralState(
           const completed = completeInteractivePhaseFromFreshSentinel(
             phase as PhaseNumber,
             state,
-            cwd
+            cwd,
+            runDir,
           );
           if (completed) {
             state.phases[phaseKey] = 'completed';
@@ -472,14 +492,14 @@ function updateExternalCommitsDetected(state: HarnessState, cwd: string, runDir:
 export function completeInteractivePhaseFromFreshSentinel(
   phase: PhaseNumber,
   state: HarnessState,
-  cwd: string
+  cwd: string,
+  runDir: string,
 ): boolean {
   try {
     if (phase === 1 || phase === 3) {
-      // Check artifact existence + non-empty + mtime >= phaseOpenedAt
+      // Check artifact existence + non-empty (reopen-aware: no mtime staleness check — see ADR-13)
       const artifactKeys = getPhaseArtifactFiles(state.flow, phase);
       if (artifactKeys.length === 0) return false;
-      const openedAt = state.phaseOpenedAt[String(phase)];
 
       for (const key of artifactKeys) {
         const relPath = state.artifacts[key];
@@ -488,10 +508,23 @@ export function completeInteractivePhaseFromFreshSentinel(
         if (!existsSync(absPath)) return false;
         const stat = statSync(absPath);
         if (stat.size === 0) return false;
-        if (openedAt !== null && Math.floor(stat.mtimeMs) < openedAt) return false;
       }
 
-      // Light + phase 1: checklist schema + '## Implementation Plan' header
+      // Phase 1 (both full + light flows): spec must contain a valid
+      // `## Complexity` section (spec R5).
+      if (phase === 1) {
+        const specAbs = isAbsolute(state.artifacts.spec)
+          ? state.artifacts.spec
+          : join(cwd, state.artifacts.spec);
+        try {
+          const body = readFileSync(specAbs, 'utf-8');
+          if (!specHasValidComplexity(body)) return false;
+        } catch {
+          return false;
+        }
+      }
+
+      // Light + phase 1: checklist schema + '## Open Questions' + '## Implementation Plan' headers
       if (state.flow === 'light' && phase === 1) {
         const checklistAbs = isAbsolute(state.artifacts.checklist)
           ? state.artifacts.checklist
@@ -527,15 +560,35 @@ export function completeInteractivePhaseFromFreshSentinel(
     }
 
     if (phase === 5) {
-      // Phase 5 completion contract: at least 1 commit since implRetryBase + clean tree
+      // Symmetric with validatePhaseArtifacts: tolerate ignorable residuals via
+      // auto-recovery (unless strictTree), then enforce the completion contract.
+      let status = execSync('git status --porcelain', { cwd, encoding: 'utf-8' }).trim();
+      if (status !== '') {
+        if (state.strictTree) {
+          writeDirtyTreeDiagnostic(runDir, 'strict-tree', status);
+          return false;
+        }
+        try {
+          const recovery = tryAutoRecoverDirtyTree(cwd, state.runId);
+          if (recovery.outcome === 'blocked') {
+            writeDirtyTreeDiagnostic(runDir, 'blocked', recovery.blockers.join('\n'));
+            return false;
+          }
+          status = '';
+        } catch (err) {
+          writeDirtyTreeDiagnostic(
+            runDir,
+            'blocked',
+            `${status}\n\n(auto-recovery threw: ${(err as Error).message})`,
+          );
+          return false;
+        }
+      }
       const head = getHead(cwd);
       if (head === state.implRetryBase) {
         // No commits since implRetryBase — fails completion contract
         return false;
       }
-      // Working tree must be clean
-      const status = execSync('git status --porcelain', { cwd, encoding: 'utf-8' }).trim();
-      if (status !== '') return false;
       state.implCommit = head;
       return true;
     }
@@ -671,7 +724,8 @@ async function replayPendingAction(
           const completed = completeInteractivePhaseFromFreshSentinel(
             action.targetPhase,
             state,
-            cwd
+            cwd,
+            runDir,
           );
           if (completed) {
             state.pendingAction = null;
@@ -753,11 +807,12 @@ async function replayPendingAction(
         const gatePhase = action.targetPhase as 2 | 4 | 7;
         const retryIndex = Math.max(
           0,
-          (state.gateRetries[String(gatePhase)] ?? GATE_RETRY_LIMIT) - 1,
+          (state.gateRetries[String(gatePhase)] ?? getGateRetryLimit(state.flow)) - 1,
         );
         await handleGateEscalation(
           gatePhase,
           comments,
+          action.scope,
           retryIndex,
           state,
           runDir,

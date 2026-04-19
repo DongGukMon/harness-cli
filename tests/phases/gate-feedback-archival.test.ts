@@ -7,7 +7,7 @@ import type { GatePhaseResult, HarnessState } from '../../src/types.js';
 import { createInitialState } from '../../src/state.js';
 import { NoopLogger } from '../../src/logger.js';
 import { InputManager } from '../../src/input.js';
-import { GATE_RETRY_LIMIT } from '../../src/config.js';
+import { GATE_RETRY_LIMIT_FULL as GATE_RETRY_LIMIT } from '../../src/config.js';
 
 vi.mock('../../src/phases/gate.js', () => ({
   runGatePhase: vi.fn(),
@@ -74,6 +74,7 @@ describe('gate feedback archival', () => {
     await handleGateReject(
       2,
       'first reject',
+      undefined,
       0,
       state,
       runDir,
@@ -89,6 +90,7 @@ describe('gate feedback archival', () => {
     await handleGateReject(
       2,
       'second reject',
+      undefined,
       1,
       state,
       runDir,
@@ -105,6 +107,7 @@ describe('gate feedback archival', () => {
     await handleGateReject(
       2,
       'third reject',
+      undefined,
       2,
       state,
       runDir,
@@ -181,6 +184,7 @@ describe('gate feedback archival', () => {
     await handleGateEscalation(
       7,
       'phase 7 escalation',
+      undefined,
       2,
       state,
       runDir,
@@ -204,6 +208,7 @@ describe('gate feedback archival', () => {
     await handleGateReject(
       7,
       'phase 7 next cycle',
+      undefined,
       0,
       state,
       runDir,

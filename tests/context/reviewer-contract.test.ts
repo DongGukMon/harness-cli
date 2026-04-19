@@ -85,6 +85,9 @@ describe('REVIEWER_CONTRACT_BY_GATE', () => {
       expect(prompt).toMatch(/## Comments/);
       expect(prompt).toMatch(/## Summary/);
       expect(prompt).toMatch(/APPROVE only if zero P0\/P1/);
+      expect(prompt).toContain('Scope tagging (REJECT only)');
+      expect(prompt).toContain('Scope: design | impl | mixed');
+      expect(prompt).toContain('Phase 7 eval gate 에서만 dispatch');
     }
   });
 });

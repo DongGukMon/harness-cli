@@ -33,6 +33,13 @@ One to two sentences.
 
 Rules: APPROVE only if zero P0/P1 findings. Every comment must cite a specific location.
 
+Scope tagging (REJECT only) — REJECT verdict 에는 \`Scope: design | impl | mixed\` 한 줄을 반드시 포함한다.
+  - design: spec/plan 재구조화 가 필요한 이슈 (요구사항 오해, 아키텍처 결함, 누락된 비요구사항).
+  - impl: 구현 단계 에서 해결 가능한 이슈 (tests, naming, edge cases, dead code, 컴파일/테스트 실패).
+  - mixed: 양쪽 모두 손대야 하는 이슈.
+APPROVE 일 때는 Scope 라인을 생략한다.
+이 규약은 Phase 7 eval gate 에서만 dispatch 에 영향을 준다 (다른 gate 는 무시).
+
 Scope rules:
 - Review ONLY the artifacts provided in this prompt (e.g. <spec>, <plan>, <eval_report>, <diff>).
 - Do NOT apply personal or workspace-level conventions (commit-message formats, naming rules, protocols) unless they are explicitly cited in the provided artifacts.
@@ -89,6 +96,72 @@ const REVIEWER_CONTRACT_BY_GATE: Record<2 | 4, string> = {
   2: REVIEWER_CONTRACT_BASE + FIVE_AXIS_SPEC_GATE,
   4: REVIEWER_CONTRACT_BASE + FIVE_AXIS_PLAN_GATE,
 };
+
+// ─── Complexity signal (spec R2/R3) ──────────────────────────────────────────
+//
+// Phase 1 spec must contain a `## Complexity` section whose first non-blank
+// body line is Small/Medium/Large (case-insensitive). Phase 3 assembler parses
+// this and injects a per-bucket directive into the plan-writing prompt.
+// Medium / parse-failure paths are empty-string fallbacks (preserve today's
+// behavior). Parse failure emits exactly one stderr warn per process.
+
+let complexityWarningEmitted = false;
+
+export function __resetComplexityWarning(): void {
+  complexityWarningEmitted = false;
+}
+
+export function parseComplexitySignal(
+  specText: string,
+): 'small' | 'medium' | 'large' | null {
+  // Spec Goal 1: "Phase 1 spec must contain exactly one `## Complexity`
+  // section." Duplicate headers are rejected (author error) — not silently
+  // reduced to the first one.
+  const allHeaders = specText.match(/^##\s+Complexity\s*$/gm);
+  if (!allHeaders || allHeaders.length !== 1) return null;
+  const headerMatch = specText.match(/^##\s+Complexity\s*$/m);
+  if (!headerMatch) return null;
+  const offset = (headerMatch.index ?? 0) + headerMatch[0].length;
+  const remainder = specText.slice(offset);
+  const lines = remainder.split('\n');
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (line === '') continue;
+    const tokenMatch = line.match(/^(small|medium|large)\b/i);
+    return tokenMatch
+      ? (tokenMatch[1].toLowerCase() as 'small' | 'medium' | 'large')
+      : null;
+  }
+  return null;
+}
+
+const SMALL_DIRECTIVE =
+  '<complexity_directive>\n' +
+  'This task is classified **Small**. Keep the plan to **at most 3 tasks**. ' +
+  'Do not emit per-function pseudocode or ASCII diagrams. Prefer bundling related edits in one task over splitting them. ' +
+  'Keep `checklist.json` to at most 4 `checks` entries — typecheck + test + build is usually enough.\n' +
+  '</complexity_directive>\n';
+
+const LARGE_DIRECTIVE =
+  '<complexity_directive>\n' +
+  'This task is classified **Large**. Decompose into clear vertical slices with explicit dependency order. ' +
+  'Capture architecturally-relevant decisions as short ADR blurbs inline in the plan. Standard depth otherwise.\n' +
+  '</complexity_directive>\n';
+
+export function buildComplexityDirective(
+  level: 'small' | 'medium' | 'large' | null,
+): string {
+  if (level === 'small') return SMALL_DIRECTIVE;
+  if (level === 'large') return LARGE_DIRECTIVE;
+  if (level === 'medium') return '';
+  if (!complexityWarningEmitted) {
+    process.stderr.write(
+      '⚠️  Complexity signal missing or invalid in spec; defaulting to Medium.\n',
+    );
+    complexityWarningEmitted = true;
+  }
+  return '';
+}
 
 function readTemplateFile(filename: string): string {
   const templatePath = path.join(__dirname, 'prompts', filename);
@@ -395,6 +468,30 @@ export function assembleInteractivePrompt(
   // dev: src/context/playbooks/ ; dist: dist/src/context/playbooks/
   const playbookDir = path.join(__dirname, 'playbooks');
 
+  // Phase 3 complexity directive: parse the spec's `## Complexity` signal and
+  // inject the matching stanza. Spec R4: swallow ENOENT (missing file → null
+  // parse → Medium fallback + warn); any other I/O error (EACCES, EIO, …) is
+  // unexpected and must surface, not silently downgrade to Medium.
+  let complexityDirective = '';
+  if (phase === 3) {
+    const specAbs = path.isAbsolute(state.artifacts.spec)
+      ? state.artifacts.spec
+      : path.join(harnessDir, '..', state.artifacts.spec);
+    let specText: string | null = null;
+    try {
+      specText = fs.readFileSync(specAbs, 'utf-8');
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === 'ENOENT') {
+        specText = null;
+      } else {
+        throw err;
+      }
+    }
+    const level = specText !== null ? parseComplexitySignal(specText) : null;
+    complexityDirective = buildComplexityDirective(level);
+  }
+
   const vars: Record<string, string | undefined> = {
     task_path: taskMdPath,
     spec_path: state.artifacts.spec,
@@ -407,6 +504,7 @@ export function assembleInteractivePrompt(
     feedback_paths: feedbackPathsList.length > 0 ? feedbackPathsList : undefined,
     harnessDir,
     playbookDir,
+    complexity_directive: complexityDirective,
   };
 
   // Light flow: phase 1 and 5 use self-contained light templates (no wrapper skill).
