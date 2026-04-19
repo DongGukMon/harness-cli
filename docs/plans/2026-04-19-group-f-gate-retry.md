@@ -1,74 +1,82 @@
 # Gate Retry Policy Implementation Plan
 
-> **For implementers:** `superpowers:writing-plans` is not available in this session, so this file is written manually but follows the same execution contract: vertical slices, explicit acceptance criteria, and concrete verification commands.
+> `superpowers:writing-plans` is not available in this session, so this plan is written manually with the same contract: vertical slices, concrete acceptance criteria, and executable verification.
 
 **Spec:** `docs/specs/2026-04-19-group-f-gate-retry-design.md`
 
 **Decision log:** `.harness/2026-04-19-group-f-gate-retry/decisions.md`
 
-**Goal:** Add a scope-aware fast-path for light-flow Gate 7 REJECTs, raise the light-flow retry budget to 5 while keeping full-flow at 3, and preserve existing behavior for every other gate/flow combination.
+**Previous gate feedback incorporated:** `.harness/2026-04-19-group-f-gate-retry/gate-4-feedback.md`
 
-**Architecture:** Keep the change in the existing gate pipeline layers only. Reviewer contract lives in `src/context/assembler.ts`, scope extraction in `src/phases/verdict.ts`, flow-aware retry policy in `src/config.ts`, and reopen dispatch in `src/phases/runner.ts`. Do not touch runner backends under `src/runners/*`.
+**Goal:** Add a scope-aware light-flow Gate 7 fast-path for `REJECT + Scope: impl`, split gate retry limits by flow (`full=3`, `light=5`), and keep every other gate/flow path behaviorally unchanged.
+
+**Architecture guardrails:**
+- Keep all logic inside the existing prompt/parser/runner/config layers: `src/context/assembler.ts`, `src/phases/verdict.ts`, `src/phases/runner.ts`, `src/config.ts`, `src/types.ts`.
+- Do not change `src/runners/*` or `src/context/playbooks/*`.
+- Treat this as a vertical slice: contract -> parser/types -> retry policy -> dispatch -> docs/regression.
 
 **Open question disposition for this plan:**
-- `Q1` / `Q4` resolved: keep `scope` runtime-only and do **not** extend `events.jsonl` in this slice. Post-ship measurement will use persisted `gate-7-raw.txt` verdict artifacts, which keeps this PR schema-neutral and aligned with spec R5.
-- `Q2` resolved: implement `GATE_RETRY_LIMIT_LIGHT = 5` and `GATE_RETRY_LIMIT_FULL = 3` exactly as specified.
-- `Q3` explicitly deferred: no hard rollback threshold is added in this PR. Follow-up dogfooding should inspect Gate 7 raw verdicts for false fast-paths before any policy rollback.
-- `Q5` resolved: remove the old `GATE_RETRY_LIMIT` export rather than keeping a deprecated alias.
+- `Q1` / `Q4` resolved in this slice: keep `scope` runtime-only and do not change `events.jsonl`. Post-ship measurement will sample the persisted Gate 7 verdict-raw artifact (`.harness/<runId>/gate-7-raw.txt`) rather than adding `gate_verdict.scope`.
+- `Q2` resolved exactly as specified: `GATE_RETRY_LIMIT_LIGHT = 5`, `GATE_RETRY_LIMIT_FULL = 3`.
+- `Q3` explicitly deferred: no rollback threshold is encoded in code or docs here; follow-up dogfooding should inspect Gate 7 verdict-raw artifacts for false fast-paths.
+- `Q5` resolved exactly as specified: remove `GATE_RETRY_LIMIT` rather than keeping a deprecated alias.
 
-**Execution note:** No UI or visual asset changes are in scope, so no screenshot/visual verification task is required.
+**Execution note:** There are no UI or visual changes in scope, so the checklist does not need a screenshot/manual-visual check.
 
 ## File Map
 
 | File | Action | Responsibility |
 |---|---|---|
-| `src/context/assembler.ts` | Modify | Add the REJECT-only scope-tagging contract to `REVIEWER_CONTRACT_BASE`. |
-| `src/types.ts` | Modify | Introduce `Scope` type and add optional `scope` to `GateOutcome`. |
-| `src/phases/verdict.ts` | Modify | Parse `Scope:` from the `## Verdict`-to-EOF scan window and thread it through `buildGateResult`. |
-| `src/config.ts` | Modify | Replace the single retry constant with full/light constants plus `getGateRetryLimit(flow)`. |
+| `src/context/assembler.ts` | Modify | Add the REJECT-only scope-tagging stanza to `REVIEWER_CONTRACT_BASE`. |
+| `src/types.ts` | Modify | Add `Scope` and thread optional `scope` through `GateOutcome`. |
+| `src/phases/verdict.ts` | Modify | Parse `Scope:` from the `## Verdict`-to-EOF scan window and return it only for REJECT verdicts. |
+| `src/config.ts` | Modify | Replace the single retry constant with flow-aware constants plus `getGateRetryLimit(flow)`. |
 | `src/phases/runner.ts` | Modify | Use flow-aware retry limits and add the light+gate7+`scope=impl` reopen override. |
-| `tests/context/reviewer-contract.test.ts` | Modify | Assert the shared contract includes the new scope-tagging stanza. |
-| `tests/phases/gate.test.ts` | Modify | Add parser coverage for the scope extraction contract and fallbacks. |
-| `tests/config.test.ts` | Add | Cover `getGateRetryLimit('full'|'light')`. |
-| `tests/phases/runner.test.ts` | Modify | Cover fast-path reopen behavior, fallback behavior, and `gate_retry.retryLimit` emission. |
-| `CLAUDE.md` | Modify | Update the open-issues note for retry-storm status after this policy lands. |
-| `docs/HOW-IT-WORKS.md` | Modify | Document light-flow Gate 7 scope-aware reopen behavior and retry-limit split. |
+| `tests/context/assembler.test.ts` | Modify | Assert the shared reviewer contract includes the new scope-tagging stanza. |
+| `tests/phases/verdict.test.ts` | Modify | Add the spec-mandated `parseVerdict()` cases here so parser coverage lives in the canonical file named by the spec. |
+| `tests/config.test.ts` | Add or modify | Cover `getGateRetryLimit('full') === 3` and `getGateRetryLimit('light') === 5`. |
+| `tests/phases/runner.test.ts` | Modify | Cover fast-path routing, fallback routing, session/sidecar resets, and `gate_retry.retryLimit` emission. |
+| `CLAUDE.md` | Modify | Update the retry-storm/open-issues note to reflect the shipped mitigation. |
+| `docs/HOW-IT-WORKS.md` | Modify | Document the Gate 7 scope-aware reopen rule, retry-limit split, and raw-artifact measurement choice. |
 
-## Task 1: Add Scope Tagging Contract And Verdict Parsing
+## Task 1: Add The Scope Contract, Type, And Verdict Parser
 
 **Files:**
 - `src/context/assembler.ts`
 - `src/types.ts`
 - `src/phases/verdict.ts`
-- `tests/context/reviewer-contract.test.ts`
-- `tests/phases/gate.test.ts`
+- `tests/context/assembler.test.ts`
+- `tests/phases/verdict.test.ts`
 
-- [ ] Add `export type Scope = 'design' | 'impl' | 'mixed'` in `src/types.ts` and extend `GateOutcome` with `scope?: Scope`.
-- [ ] Extend `REVIEWER_CONTRACT_BASE` with the exact REJECT-only scope-tagging stanza from spec R1, including the note that only Phase 7 dispatch is affected.
-- [ ] Update `parseVerdict` so it still finds the verdict token exactly as today, but now also scans from the line after `## Verdict` through EOF for the first case-insensitive `Scope: design|impl|mixed` match. Ignore scope on APPROVE and leave it `undefined` on missing/invalid tokens.
-- [ ] Update `buildGateResult` to return the parsed `scope` on verdict results so runner logic can consume it without reparsing raw output.
-- [ ] Add parser tests for:
-  - REJECT + `Scope: impl|design|mixed`
-  - lowercase `scope: impl`
-  - missing `Scope:`
-  - invalid `Scope: bogus`
+- [ ] Add `export type Scope = 'design' | 'impl' | 'mixed'` and extend `GateOutcome` with `scope?: Scope`.
+- [ ] Extend `REVIEWER_CONTRACT_BASE` with the exact REJECT-only scope-tagging stanza from spec R1, including the note that only Phase 7 dispatch uses the signal.
+- [ ] Update `parseVerdict()` to keep its existing verdict detection, then scan from the line after `## Verdict` through EOF for the first case-insensitive `Scope: design|impl|mixed` match.
+- [ ] Ignore `Scope:` on APPROVE, and leave `scope` undefined for missing or invalid tokens so the fallback route stays backward-compatible.
+- [ ] Thread the parsed `scope` through `buildGateResult()` so runner code can consume it without reparsing stdout.
+- [ ] Add or migrate parser coverage into `tests/phases/verdict.test.ts` for:
+  - REJECT + `Scope: impl`
+  - REJECT + `Scope: design`
+  - REJECT + `Scope: mixed`
+  - REJECT + lowercase `scope: impl`
+  - REJECT + missing `Scope:`
+  - REJECT + invalid `Scope: bogus`
   - APPROVE + `Scope: impl` ignored
-  - `Scope:` inside `## Comments` after `## Verdict`
-  - `Scope:` before `## Verdict` only
-- [ ] Add a reviewer-contract assertion that the shared prompt preamble contains the scope-tagging rules.
+  - REJECT + `Scope:` inside `## Comments` after `## Verdict`
+  - REJECT + `Scope:` only before `## Verdict`
+- [ ] Add an assembler assertion that the shared reviewer prompt includes the new scope-tagging rules once via `REVIEWER_CONTRACT_BASE`.
 
 **Acceptance criteria:**
-- Every gate prompt includes the scope-tagging rule once via `REVIEWER_CONTRACT_BASE`.
+- Every gate prompt includes the scope-tagging rule via the shared base contract.
 - `parseVerdict()` returns `scope` only for REJECT verdicts with a valid token in the allowed scan window.
-- Missing or malformed scope tokens remain backward-compatible (`scope === undefined`).
+- Missing or malformed scope tokens still behave like the old implementation (`scope === undefined`).
 
 **Verification:**
 
 ```bash
-node_modules/.bin/vitest run tests/context/reviewer-contract.test.ts tests/phases/gate.test.ts
+/Users/daniel/.grove/github.com/DongGukMon/harness-cli/worktrees/gate-retry-policy/node_modules/.bin/vitest run tests/context/assembler.test.ts tests/phases/verdict.test.ts
 ```
 
-## Task 2: Make Retry Limits Flow-Aware
+## Task 2: Make Gate Retry Limits Flow-Aware
 
 **Files:**
 - `src/config.ts`
@@ -77,20 +85,20 @@ node_modules/.bin/vitest run tests/context/reviewer-contract.test.ts tests/phase
 - `tests/phases/runner.test.ts`
 
 - [ ] Replace `GATE_RETRY_LIMIT` with `GATE_RETRY_LIMIT_FULL = 3`, `GATE_RETRY_LIMIT_LIGHT = 5`, and `getGateRetryLimit(flow)`.
-- [ ] Update every runtime use in `src/phases/runner.ts` to call `getGateRetryLimit(state.flow)` for warning text, retry gating, force-pass threshold, escalation text, and `gate_retry.retryLimit`.
-- [ ] Remove imports/usages of the legacy constant from tests and replace them with the new helper or explicit full/light expectations.
-- [ ] Add `tests/config.test.ts` with the two canonical assertions: full returns 3, light returns 5.
-- [ ] Extend runner/event tests so `gate_retry.retryLimit` is asserted as `5` for light flow and `3` for full flow.
+- [ ] Replace every `GATE_RETRY_LIMIT` read in `src/phases/runner.ts` with `getGateRetryLimit(state.flow)` so retry gating, warning text, escalation text, force-pass behavior, and `gate_retry.retryLimit` all use the effective limit.
+- [ ] Remove legacy constant imports/usages from tests and switch them to the new helper or explicit full/light expectations.
+- [ ] Add `tests/config.test.ts` coverage for the two canonical cases: full returns 3, light returns 5.
+- [ ] Extend runner logging assertions so `gate_retry.retryLimit` is `5` for light flow and `3` for full flow.
 
 **Acceptance criteria:**
-- No production code path uses the removed `GATE_RETRY_LIMIT` symbol.
-- Light flow gets a 5-attempt budget; full flow remains at 3.
-- `gate_retry` events emit the effective flow-specific limit without schema changes.
+- No production code path still depends on the removed `GATE_RETRY_LIMIT` symbol.
+- Full flow remains at 3 retries; light flow uses 5 retries.
+- `gate_retry` events emit the effective limit without any schema change.
 
 **Verification:**
 
 ```bash
-node_modules/.bin/vitest run tests/config.test.ts tests/phases/runner.test.ts
+/Users/daniel/.grove/github.com/DongGukMon/harness-cli/worktrees/gate-retry-policy/node_modules/.bin/vitest run tests/config.test.ts tests/phases/runner.test.ts
 ```
 
 ## Task 3: Route Light Gate 7 `scope=impl` Rejects Back To Phase 5
@@ -99,74 +107,76 @@ node_modules/.bin/vitest run tests/config.test.ts tests/phases/runner.test.ts
 - `src/phases/runner.ts`
 - `tests/phases/runner.test.ts`
 
-- [ ] Thread `result.scope` from `handleGatePhase` into `handleGateReject`, extending the runner-side function signature once instead of reparsing `rawOutput` in dispatch code.
-- [ ] In `handleGateReject`, compute the default reopen target via `getReopenTarget(state.flow, phase)` and then override it only when `state.flow === 'light' && phase === 7 && scope === 'impl'`.
-- [ ] Preserve the existing light-flow Gate 7 reset behavior in both light Gate 7 reopen cases: reset phases 5 and 6 to pending, invalidate `phaseCodexSessions['7']`, delete Gate 7 sidecars, and create `carryoverFeedback` for Phase 5 delivery.
-- [ ] Ensure the fast-path does **not** touch `state.phases['1']`; that is the behavioral change under test.
-- [ ] Keep all other combinations on the legacy route:
+- [ ] Thread `result.scope` from the gate result into `handleGateReject()` instead of reparsing raw output in dispatch code.
+- [ ] Compute the normal reopen target with `getReopenTarget(state.flow, phase)` and override it only when `state.flow === 'light' && phase === 7 && scope === 'impl'`.
+- [ ] Preserve the existing light Gate 7 reset mechanics in both reopen routes: Phase 5 pending, Phase 6 pending, Gate 7 session cleared, Gate 7 sidecars deleted, and `carryoverFeedback.deliverToPhase === 5`.
+- [ ] Ensure the fast-path does not modify `state.phases['1']`; that is the behavior change under test.
+- [ ] Keep all other combinations on the old route:
   - light + gate 7 + `scope=design`
   - light + gate 7 + `scope=mixed`
   - light + gate 7 + `scope=undefined`
   - full + gate 7 + any scope
-  - gate 2 / gate 4 regardless of scope
-- [ ] Add runner integration tests for the five spec-mandated cases plus one `gate_retry` emission assertion for a light-flow reject.
+  - gate 2 or gate 4 regardless of scope
+- [ ] Add runner tests for the five spec-mandated routing cases plus the light/full `gate_retry.retryLimit` assertions.
 
 **Acceptance criteria:**
 - Only light-flow Gate 7 REJECTs with `scope === 'impl'` reopen Phase 5 directly.
-- All fallback paths remain behaviorally identical to pre-change routing.
-- Carryover feedback and gate-session invalidation still happen on light Gate 7 REJECTs.
+- All fallback paths stay behaviorally identical to the pre-change routing.
+- Carryover feedback, sidecar cleanup, and Gate 7 session invalidation still happen on light Gate 7 REJECTs.
 
 **Verification:**
 
 ```bash
-node_modules/.bin/vitest run tests/phases/runner.test.ts -t "handleGateReject|gate_retry"
+/Users/daniel/.grove/github.com/DongGukMon/harness-cli/worktrees/gate-retry-policy/node_modules/.bin/vitest run tests/phases/runner.test.ts -t "handleGateReject|gate_retry"
 ```
 
-## Task 4: Update Operator Docs And Record The Measurement Strategy
+## Task 4: Update Operator Docs And Record The Measurement Choice
 
 **Files:**
 - `CLAUDE.md`
 - `docs/HOW-IT-WORKS.md`
 
-- [ ] Update `CLAUDE.md` issue tracking so the retry-storm item reflects the new shipped mitigation: scope-aware light Gate 7 reopen plus a larger light retry budget.
-- [ ] Update the Light Flow documentation in `docs/HOW-IT-WORKS.md` so it explicitly states:
+- [ ] Update `CLAUDE.md` so the retry-storm issue entry reflects the shipped mitigation: light Gate 7 scope-aware reopen plus a light-only retry budget of 5.
+- [ ] Update `docs/HOW-IT-WORKS.md` so the light-flow section states:
   - Gate 7 REJECT with `Scope: impl` reopens Phase 5
   - Gate 7 REJECT with `Scope: design|mixed|missing` still reopens Phase 1
-  - light flow uses a retry limit of 5 while full flow stays at 3
-- [ ] Add one short note in docs that rollout analysis for scope quality uses persisted Gate 7 raw verdict artifacts, not `events.jsonl`, so the runtime/event schema remains unchanged in this slice.
+  - light flow uses retry limit 5 while full flow remains 3
+- [ ] Document the chosen Q1/Q4 answer explicitly: rollout analysis samples the persisted Gate 7 verdict-raw artifact (`gate-7-raw.txt`) instead of extending `events.jsonl`.
+- [ ] Keep Q3 called out as deferred so operators do not infer a codified rollback threshold that does not exist.
 
 **Acceptance criteria:**
-- Operator-facing docs describe the new routing rule without implying any `events.jsonl` schema change.
-- The plan’s Q1/Q4 decision is reflected in repo documentation instead of being left implicit.
+- Operator-facing docs describe the routing split without implying any `events.jsonl` schema change.
+- The measurement source is named consistently with the spec and concretized with the run-dir artifact path.
 
 **Verification:**
 
 ```bash
-rg -n "Scope: impl|retry limit of 5|Gate 7 REJECT|raw verdict" CLAUDE.md docs/HOW-IT-WORKS.md
+/usr/bin/grep -nE "Scope: impl|Phase 7 REJECT|retry limit (of )?5|verdict-raw|gate-7-raw\.txt" CLAUDE.md docs/HOW-IT-WORKS.md
 ```
 
-## Task 5: Run Final Regression Pass And Ship
+## Task 5: Run Final Regression Pass And Prepare Handoff
 
-**Files:** none beyond outputs generated by the build.
+**Files:** none beyond generated build output.
 
-- [ ] Run the focused regression suites for parser, config, contract, and runner behavior.
-- [ ] Run the full test suite.
-- [ ] Run `tsc --noEmit`.
-- [ ] Run the production build so `dist/` stays current for harness consumers.
-- [ ] Review `git diff --stat` to confirm the change stays inside the file map above.
-- [ ] Commit with a `plan:` subject only if Phase 3 output needs to be snapshotted before handoff.
+- [ ] Run the focused regression suites for contract, parser, config, and runner routing.
+- [ ] Run the full Vitest suite.
+- [ ] Run TypeScript no-emit validation.
+- [ ] Run the real production build entrypoint with `pnpm build` so the plan verifies the exact spec acceptance criterion.
+- [ ] Confirm the resulting diff stays inside the file map above.
+- [ ] Commit with a `plan:` message only if a snapshot is needed for handoff; otherwise leave the worktree uncommitted.
 
 **Acceptance criteria:**
-- Focused tests, full tests, typecheck, and build all pass.
-- No live harness smoke run is required for this slice; integration coverage is sufficient for dispatch correctness.
-- Any post-merge rollout monitoring uses Gate 7 raw verdict artifacts and is explicitly outside this implementation PR.
+- Focused tests, full tests, typecheck, and `pnpm build` all pass.
+- No extra event schema work or live harness smoke run is required for this slice.
+- Post-ship monitoring remains an operational follow-up based on Gate 7 verdict-raw artifacts.
 
 **Verification:**
 
 ```bash
-node_modules/.bin/vitest run
-node_modules/.bin/tsc --noEmit
-node_modules/.bin/tsc && node scripts/copy-assets.mjs
+/Users/daniel/.grove/github.com/DongGukMon/harness-cli/worktrees/gate-retry-policy/node_modules/.bin/vitest run tests/context/assembler.test.ts tests/phases/verdict.test.ts tests/config.test.ts tests/phases/runner.test.ts
+/Users/daniel/.grove/github.com/DongGukMon/harness-cli/worktrees/gate-retry-policy/node_modules/.bin/vitest run
+/Users/daniel/.grove/github.com/DongGukMon/harness-cli/worktrees/gate-retry-policy/node_modules/.bin/tsc --noEmit
+pnpm build
 git diff --stat
 ```
 
@@ -178,11 +188,11 @@ git diff --stat
 4. Task 4
 5. Task 5
 
-Task 1 must land before Task 3 because runner dispatch consumes parsed `scope`. Task 2 is independent of Task 1 in code shape, but keep it before Task 3 so the runner edits happen once. Task 4 can be prepared in parallel but should merge after behavior is final. Task 5 is final only.
+Task 1 must land before Task 3 because runner dispatch consumes parsed `scope`. Task 2 should land before Task 3 so `src/phases/runner.ts` is edited once for both retry policy and routing. Task 4 can be prepared in parallel once the Task 1/3 behavior is stable. Task 5 is last.
 
 ## Out Of Scope / Explicit Defers
 
 - Do not add `scope` to `gate_verdict` or any other event in this slice.
-- Do not alter full-flow reopen policy beyond replacing the retry-limit lookup.
-- Do not change `src/runners/*`, `src/context/playbooks/*`, or introduce CLI flags/env overrides for retry limits.
-- Do not codify a rollback threshold in code or docs yet; revisit after dogfood data exists.
+- Do not change full-flow reopen behavior beyond using `getGateRetryLimit(state.flow)`.
+- Do not change `src/runners/*`, `src/context/playbooks/*`, or add CLI/env overrides for retry limits.
+- Do not encode a rollback threshold in code or docs yet; revisit after dogfood data exists.
