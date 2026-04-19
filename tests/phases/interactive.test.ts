@@ -412,7 +412,7 @@ describe('validatePhaseArtifacts — Phase 1', () => {
     const decPath = path.join(cwd, state.artifacts.decisionLog);
     fs.mkdirSync(path.dirname(specPath), { recursive: true });
     fs.mkdirSync(path.dirname(decPath), { recursive: true });
-    fs.writeFileSync(specPath, '# Spec content');
+    fs.writeFileSync(specPath, '# Spec content\n\n## Complexity\n\nMedium\n');
     fs.writeFileSync(decPath, '# Decisions');
 
     const result = validatePhaseArtifacts(1, state, cwd);
@@ -463,11 +463,55 @@ describe('validatePhaseArtifacts — Phase 1', () => {
     const decPath = path.join(cwd, state.artifacts.decisionLog);
     fs.mkdirSync(path.dirname(specPath), { recursive: true });
     fs.mkdirSync(path.dirname(decPath), { recursive: true });
-    fs.writeFileSync(specPath, '# Spec');
+    fs.writeFileSync(specPath, '# Spec\n\n## Complexity\n\nMedium\n');
     fs.writeFileSync(decPath, '# Decisions');
 
     const result = validatePhaseArtifacts(1, state, cwd);
     expect(result).toBe(false);
+  });
+
+  // ── Complexity validator cases (spec R5: applies to full + light flows) ──
+
+  it('rejects full-flow spec missing the "## Complexity" section', () => {
+    const cwd = makeTmpDir();
+    const state = makeState({
+      phaseOpenedAt: { '1': Math.floor(Date.now() / 1000) * 1000 - 5000, '3': null, '5': null },
+    });
+    const specPath = path.join(cwd, state.artifacts.spec);
+    const decPath = path.join(cwd, state.artifacts.decisionLog);
+    fs.mkdirSync(path.dirname(specPath), { recursive: true });
+    fs.mkdirSync(path.dirname(decPath), { recursive: true });
+    fs.writeFileSync(specPath, '# Spec content\n\nno complexity header\n');
+    fs.writeFileSync(decPath, '# Decisions');
+    expect(validatePhaseArtifacts(1, state, cwd)).toBe(false);
+  });
+
+  it('rejects full-flow spec with invalid Complexity token (e.g. "ExtraLarge")', () => {
+    const cwd = makeTmpDir();
+    const state = makeState({
+      phaseOpenedAt: { '1': Math.floor(Date.now() / 1000) * 1000 - 5000, '3': null, '5': null },
+    });
+    const specPath = path.join(cwd, state.artifacts.spec);
+    const decPath = path.join(cwd, state.artifacts.decisionLog);
+    fs.mkdirSync(path.dirname(specPath), { recursive: true });
+    fs.mkdirSync(path.dirname(decPath), { recursive: true });
+    fs.writeFileSync(specPath, '# Spec\n\n## Complexity\n\nExtraLarge\n');
+    fs.writeFileSync(decPath, '# Decisions');
+    expect(validatePhaseArtifacts(1, state, cwd)).toBe(false);
+  });
+
+  it('accepts full-flow spec with Large bucket + rationale', () => {
+    const cwd = makeTmpDir();
+    const state = makeState({
+      phaseOpenedAt: { '1': Math.floor(Date.now() / 1000) * 1000 - 5000, '3': null, '5': null },
+    });
+    const specPath = path.join(cwd, state.artifacts.spec);
+    const decPath = path.join(cwd, state.artifacts.decisionLog);
+    fs.mkdirSync(path.dirname(specPath), { recursive: true });
+    fs.mkdirSync(path.dirname(decPath), { recursive: true });
+    fs.writeFileSync(specPath, '# Spec\n\n## Complexity\n\nLarge — multi-file refactor\n');
+    fs.writeFileSync(decPath, '# Decisions');
+    expect(validatePhaseArtifacts(1, state, cwd)).toBe(true);
   });
 });
 
@@ -617,7 +661,7 @@ describe('validatePhaseArtifacts — light + phase 1 extras (ADR-13)', () => {
     state.artifacts.decisionLog = path.join(tmp, 'decisions.md');
     state.artifacts.checklist = path.join(tmp, 'checklist.json');
     fs.writeFileSync(state.artifacts.spec,
-      '# T\n## Context & Decisions\n\n## Open Questions\n없음\n\n## Implementation Plan\n- t\n');
+      '# T\n## Context & Decisions\n\n## Complexity\n\nSmall\n\n## Open Questions\n없음\n\n## Implementation Plan\n- t\n');
     fs.writeFileSync(state.artifacts.decisionLog, '# D\n');
     fs.writeFileSync(state.artifacts.checklist,
       JSON.stringify({ checks: [{ name: 'n', command: 'true' }] }));
@@ -631,7 +675,7 @@ describe('validatePhaseArtifacts — light + phase 1 extras (ADR-13)', () => {
     state.artifacts.decisionLog = path.join(tmp, 'decisions.md');
     state.artifacts.checklist = path.join(tmp, 'checklist.json');
     fs.writeFileSync(state.artifacts.spec,
-      '# T\n## Context & Decisions\n\n## Implementation Plan\n- t\n');
+      '# T\n## Context & Decisions\n\n## Complexity\n\nSmall\n\n## Implementation Plan\n- t\n');
     fs.writeFileSync(state.artifacts.decisionLog, '# D\n');
     fs.writeFileSync(state.artifacts.checklist,
       JSON.stringify({ checks: [{ name: 'n', command: 'true' }] }));
@@ -645,7 +689,7 @@ describe('validatePhaseArtifacts — light + phase 1 extras (ADR-13)', () => {
     state.artifacts.decisionLog = path.join(tmp, 'decisions.md');
     state.artifacts.checklist = path.join(tmp, 'checklist.json');
     fs.writeFileSync(state.artifacts.spec,
-      '# T\n## Context & Decisions\n\n## Open Questions\n없음\n');
+      '# T\n## Context & Decisions\n\n## Complexity\n\nSmall\n\n## Open Questions\n없음\n');
     fs.writeFileSync(state.artifacts.decisionLog, '# D\n');
     fs.writeFileSync(state.artifacts.checklist,
       JSON.stringify({ checks: [{ name: 'n', command: 'true' }] }));
@@ -659,9 +703,23 @@ describe('validatePhaseArtifacts — light + phase 1 extras (ADR-13)', () => {
     state.artifacts.decisionLog = path.join(tmp, 'decisions.md');
     state.artifacts.checklist = path.join(tmp, 'checklist.json');
     fs.writeFileSync(state.artifacts.spec,
-      '# T\n## Context & Decisions\n\n## Open Questions\n없음\n\n## Implementation Plan\n- t\n');
+      '# T\n## Context & Decisions\n\n## Complexity\n\nSmall\n\n## Open Questions\n없음\n\n## Implementation Plan\n- t\n');
     fs.writeFileSync(state.artifacts.decisionLog, '# D\n');
     fs.writeFileSync(state.artifacts.checklist, '{"checks":[]}');
+    expect(validatePhaseArtifacts(1, state, tmp)).toBe(false);
+  });
+
+  it('rejects a light combined doc that lacks the "## Complexity" header', () => {
+    const tmp = makeTmpDir();
+    const state = makeState({ flow: 'light', phaseOpenedAt: { '1': 0, '3': null, '5': null } });
+    state.artifacts.spec = path.join(tmp, 'spec.md');
+    state.artifacts.decisionLog = path.join(tmp, 'decisions.md');
+    state.artifacts.checklist = path.join(tmp, 'checklist.json');
+    fs.writeFileSync(state.artifacts.spec,
+      '# T\n## Context & Decisions\n\n## Open Questions\n없음\n\n## Implementation Plan\n- t\n');
+    fs.writeFileSync(state.artifacts.decisionLog, '# D\n');
+    fs.writeFileSync(state.artifacts.checklist,
+      JSON.stringify({ checks: [{ name: 'n', command: 'true' }] }));
     expect(validatePhaseArtifacts(1, state, tmp)).toBe(false);
   });
 });

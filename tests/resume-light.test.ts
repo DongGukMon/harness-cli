@@ -53,7 +53,7 @@ describe('completeInteractivePhaseFromFreshSentinel — light + phase 1 extras (
     state.artifacts.decisionLog = path.join(tmp, 'decisions.md');
     state.artifacts.checklist = path.join(tmp, 'checklist.json');
     fs.writeFileSync(state.artifacts.spec,
-      '# T\n## Open Questions\n없음\n\n## Implementation Plan\n- t\n');
+      '# T\n## Complexity\n\nSmall\n\n## Open Questions\n없음\n\n## Implementation Plan\n- t\n');
     fs.writeFileSync(state.artifacts.decisionLog, '# D\n');
     fs.writeFileSync(state.artifacts.checklist,
       JSON.stringify({ checks: [{ name: 'n', command: 'true' }] }));
@@ -69,7 +69,7 @@ describe('completeInteractivePhaseFromFreshSentinel — light + phase 1 extras (
     state.artifacts.decisionLog = path.join(tmp, 'decisions.md');
     state.artifacts.checklist = path.join(tmp, 'checklist.json');
     fs.writeFileSync(state.artifacts.spec,
-      '# T\n## Implementation Plan\n- t\n');
+      '# T\n## Complexity\n\nSmall\n\n## Implementation Plan\n- t\n');
     fs.writeFileSync(state.artifacts.decisionLog, '# D\n');
     fs.writeFileSync(state.artifacts.checklist,
       JSON.stringify({ checks: [{ name: 'n', command: 'true' }] }));
@@ -83,7 +83,7 @@ describe('completeInteractivePhaseFromFreshSentinel — light + phase 1 extras (
     state.artifacts.decisionLog = path.join(tmp, 'decisions.md');
     state.artifacts.checklist = path.join(tmp, 'checklist.json');
     fs.writeFileSync(state.artifacts.spec,
-      '# T\n## Open Questions\n없음\n');
+      '# T\n## Complexity\n\nSmall\n\n## Open Questions\n없음\n');
     fs.writeFileSync(state.artifacts.decisionLog, '# D\n');
     fs.writeFileSync(state.artifacts.checklist,
       JSON.stringify({ checks: [{ name: 'n', command: 'true' }] }));
@@ -97,9 +97,23 @@ describe('completeInteractivePhaseFromFreshSentinel — light + phase 1 extras (
     state.artifacts.decisionLog = path.join(tmp, 'decisions.md');
     state.artifacts.checklist = path.join(tmp, 'checklist.json');
     fs.writeFileSync(state.artifacts.spec,
-      '# T\n## Open Questions\n없음\n\n## Implementation Plan\n- t\n');
+      '# T\n## Complexity\n\nSmall\n\n## Open Questions\n없음\n\n## Implementation Plan\n- t\n');
     fs.writeFileSync(state.artifacts.decisionLog, '# D\n');
     fs.writeFileSync(state.artifacts.checklist, '{"checks":[]}');
+    expect(completeInteractivePhaseFromFreshSentinel(1, state, tmp)).toBe(false);
+  });
+
+  it('rejects a light combined doc that lacks the "## Complexity" header', () => {
+    const tmp = makeTmpDir();
+    const state = makeState();
+    state.artifacts.spec = path.join(tmp, 'spec.md');
+    state.artifacts.decisionLog = path.join(tmp, 'decisions.md');
+    state.artifacts.checklist = path.join(tmp, 'checklist.json');
+    fs.writeFileSync(state.artifacts.spec,
+      '# T\n## Open Questions\n없음\n\n## Implementation Plan\n- t\n');
+    fs.writeFileSync(state.artifacts.decisionLog, '# D\n');
+    fs.writeFileSync(state.artifacts.checklist,
+      JSON.stringify({ checks: [{ name: 'n', command: 'true' }] }));
     expect(completeInteractivePhaseFromFreshSentinel(1, state, tmp)).toBe(false);
   });
 });

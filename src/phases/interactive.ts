@@ -12,6 +12,25 @@ import { assembleInteractivePrompt } from '../context/assembler.js';
 import { runClaudeInteractive } from '../runners/claude.js';
 import { isValidChecklistSchema } from './checklist.js';
 
+/**
+ * Inline Complexity-section check (spec R5). Kept here instead of importing
+ * from assembler.ts so interactive.test.ts's `vi.mock('../context/assembler.js')`
+ * can't wipe it out. Logic mirrors `parseComplexitySignal` in assembler.ts —
+ * if either drifts, the E2E tests in assembler.test.ts should catch it.
+ */
+function specHasValidComplexity(specBody: string): boolean {
+  const headerMatch = specBody.match(/^##\s+Complexity\s*$/m);
+  if (!headerMatch) return false;
+  const offset = (headerMatch.index ?? 0) + headerMatch[0].length;
+  const remainder = specBody.slice(offset);
+  for (const rawLine of remainder.split('\n')) {
+    const line = rawLine.trim();
+    if (line === '') continue;
+    return /^(small|medium|large)\b/i.test(line);
+  }
+  return false;
+}
+
 export interface InteractiveResult {
   status: 'completed' | 'failed';
 }
@@ -124,7 +143,21 @@ export function validatePhaseArtifacts(
       if (!isValidChecklistSchema(checklistPath)) return false;
     }
 
-    // Light + phase 1: checklist schema + '## Implementation Plan' header
+    // Phase 1 (both full + light flows): spec must contain a valid
+    // `## Complexity` section with one of Small/Medium/Large (spec R5).
+    if (phase === 1) {
+      const specPath = path.isAbsolute(state.artifacts.spec)
+        ? state.artifacts.spec
+        : path.join(cwd, state.artifacts.spec);
+      try {
+        const body = fs.readFileSync(specPath, 'utf-8');
+        if (!specHasValidComplexity(body)) return false;
+      } catch {
+        return false;
+      }
+    }
+
+    // Light + phase 1: checklist schema + '## Open Questions' + '## Implementation Plan' headers
     if (state.flow === 'light' && phase === 1) {
       const checklistPath = path.isAbsolute(state.artifacts.checklist)
         ? state.artifacts.checklist
