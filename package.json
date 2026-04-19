@@ -1,6 +1,6 @@
 {
   "name": "phase-harness",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "AI agent harness orchestrator — multi-phase brainstorm/spec/plan/implement/verify lifecycle with gate reviews",
   "type": "module",
   "bin": { "phase-harness": "./dist/bin/harness.js" },
@@ -22,7 +22,7 @@
     "node": ">=18.0.0"
   },
   "scripts": {
-    "build": "tsc && node scripts/copy-assets.mjs",
+    "build": "tsc -p tsconfig.build.json && node scripts/copy-assets.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "tsc --noEmit",
