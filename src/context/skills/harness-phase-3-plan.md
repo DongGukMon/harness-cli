@@ -20,9 +20,15 @@ Phase 4에서 Codex가 다음 축으로 평가한다:
 {{/if}}
 
 ## Process
+0. **Respect the complexity signal.** 프롬프트 최상단에 `<complexity_directive>` stanza가 주입되어 있으면 그 지시를 먼저 내재화한다:
+   - **Small** → plan은 최대 3 tasks, per-function 의사코드·ASCII diagram 금지, `checklist.json`은 4개 이하 `checks`로 제한 (typecheck + test + build 조합이 통상 충분). 관련 edit은 한 task로 번들링.
+   - **Large** → vertical slice 단위로 분해 + dependency 순서 명시 + architecturally-relevant 결정은 짧은 ADR blurb으로 plan 내 inline 기록. Depth는 표준과 동일.
+   - **Medium / 직접 stanza 없음** → 표준 depth. 추가 제약 없음.
+   spec의 `## Complexity` 값이 assembler의 directive와 일치해야 한다. 불일치·누락 상황이면 Medium으로 fallback한 경고가 stderr에 찍혀있을 것 — `superpowers:writing-plans` 시작 전에 본 stanza를 1회 명시적으로 읽고 반영 계획을 세운 뒤 다음 step으로 진행.
 1. `superpowers:writing-plans` 스킬을 invoke한다. 다음 오버라이드를 전달한다:
    - `"Save plan to exact path: {{plan_path}} (do not use the skill's default location)"`
    - `"After the plan is written, you MUST ALSO produce a machine-readable eval checklist at {{checklist_path}} (see step 2 below). This is non-negotiable — Phase 6 verify reads it."`
+   - `"Obey the <complexity_directive> stanza injected above (Small → ≤3 tasks; Large → ADR blurbs; Medium → standard). The ceiling on tasks / pseudocode is not a suggestion."`
 2. Eval checklist를 `{{checklist_path}}`에 **정확히 다음 JSON 스키마**로 저장한다:
    ```json
    {
@@ -43,6 +49,7 @@ Phase 4에서 Codex가 다음 축으로 평가한다:
 - plan 파일 경로는 `{{plan_path}}` 고정.
 - checklist JSON 스키마 위반 시 `scripts/harness-verify.sh`가 실패. 스키마 정확히 준수.
 - Plan은 spec의 "Open Questions" 항목을 태스크 레벨에서 해소하거나 명시적으로 defer해야 함.
+- `<complexity_directive>` 지시는 non-optional. Small 분류에서 3 tasks 초과 / per-function 의사코드 삽입은 gate 리뷰어가 P1으로 잡을 근거가 된다.
 
 **HARNESS FLOW CONSTRAINT**: 이 세션은 orchestrated harness 라이프사이클 내부에서 실행된다. 다음 phase에서 Codex 기반 독립 reviewer가 산출물을 검토한다(gate). 따라서:
 - `advisor()` 툴을 호출하지 말 것. 외부 리뷰가 이미 예약되어 있다.
