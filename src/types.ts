@@ -185,6 +185,17 @@ export interface ClaudeTokens {
 
 // --- Session Logging Events ---
 
+export type RenderCallsite =
+  | 'loop-top'
+  | 'interactive-redirect'
+  | 'interactive-complete'
+  | 'gate-redirect'
+  | 'gate-approve'
+  | 'verify-complete'
+  | 'verify-redirect'
+  | 'terminal-failed'
+  | 'terminal-complete';
+
 // Distributive Omit: applies Omit to each member of a union separately,
 // preserving discriminated-union specificity (needed for LogEvent variants).
 export type DistributiveOmit<T, K extends keyof any> = T extends any ? Omit<T, K> : never;
@@ -248,7 +259,7 @@ export type LogEvent =
       event: 'ui_render';
       phase: number;
       phaseStatus: PhaseStatus;
-      callsite: string;
+      callsite: RenderCallsite;
     })
   | (LogEventBase & { event: 'session_end'; status: 'completed' | 'paused' | 'interrupted'; totalWallMs: number });
 
