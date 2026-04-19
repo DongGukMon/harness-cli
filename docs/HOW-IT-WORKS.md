@@ -108,15 +108,33 @@ Current timeout constants (`src/config.ts`):
 
 ### Claude interactive phases
 
-When the selected preset runner is `claude`, harness launches Claude inside the tmux workspace pane and pins the Claude session to the current `phaseAttemptId`:
+When the selected preset runner is `claude`, harness launches Claude inside the tmux workspace pane and pins the Claude session to the current `phaseAttemptId`.
 
+**Fresh launch** (first entry or any fallback):
 ```bash
 claude --session-id <attemptId> --model <model> --effort <effort> @<prompt-file>
 ```
 
-Current behavior:
+**Reopen launch** (same-phase same-session — when all resume conditions are met):
+```bash
+claude --resume <attemptId> --model <model> --effort <effort> @<prompt-file>
+```
+
+Same-phase same-session policy: when a Claude interactive phase is reopened by a gate reject (e.g. P4→P3 reopen), harness reuses the prior Claude session instead of starting a new one. Resume conditions (all must hold):
+1. `phaseReopenFlags[phase] === true` (reopen, not fresh entry)
+2. `phaseAttemptId[phase]` is a non-empty string
+3. `phaseClaudeSessions[phase]` matches the current preset (`model` + `effort`)
+4. `~/.claude/projects/<encodedCwd>/<attemptId>.jsonl` exists on disk
+
+If any condition fails, harness falls back to a fresh session (new UUID, `--session-id`), emitting a single `stderr` warning with the reason (`jsonl missing`, `preset incompatible`, `no prior attempt id`, or `no prior claude session record`).
+
+The last-launched preset for each interactive phase is persisted in `state.phaseClaudeSessions: Record<'1'|'3'|'5', ClaudeSessionInfo | null>` and migrated to `null` on state upgrade.
+
+**Pre-relaunch sentinel purge (hard prerequisite):** Before spawning Claude (on both resume and fresh paths), harness deletes any existing `phase-<N>.done` sentinel and verifies the file is absent. If the file cannot be deleted, the relaunch is aborted and the phase is marked failed. This prevents a prior-attempt sentinel from being mistaken for the current attempt's completion signal when the `attemptId` is reused.
+
+Other behavior:
 - the PID is captured via `claude-<phase>-<attemptId>.pid`
-- Claude token usage is read back from the pinned session JSONL and attached to `phase_end.claudeTokens` when available
+- Claude token usage is read back from the pinned session JSONL and attached to `phase_end.claudeTokens` when available (on resume path, `phaseStartTs` filter restricts aggregation to the current attempt's lines)
 - before launching a new Claude interactive phase, harness tries to stop the previous saved workspace PID to avoid typing into an old Claude prompt
 
 ### Codex interactive phases
@@ -182,6 +200,8 @@ Important fields include:
 - `carryoverFeedback` (light-flow P7 design/mixed rejection handoff)
 - `specCommit`, `planCommit`, `implCommit`, `evalCommit`, `verifiedAtHead`
 - `phaseAttemptId`, `phaseOpenedAt`
+- `phaseCodexSessions` — per-gate Codex session resume lineage
+- `phaseClaudeSessions` — per-interactive Claude session resume lineage (model + effort; `null` until first launch)
 - tmux/session bookkeeping
 - `loggingEnabled`, `codexNoIsolate`
 
