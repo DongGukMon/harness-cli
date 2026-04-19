@@ -325,11 +325,11 @@ describe('flow + carryoverFeedback (light-flow spec)', () => {
     expect(state.phases['4']).toBe('pending');
   });
 
-  it('createInitialState with flow="light" marks phases 2/3/4 as "skipped"', () => {
+  it('createInitialState with flow="light" marks phases 3/4 as "skipped", P2 as "pending"', () => {
     const state = createInitialState('r1', 't', 'base', false, false, 'light');
     expect(state.flow).toBe('light');
     expect(state.phases['1']).toBe('pending');
-    expect(state.phases['2']).toBe('skipped');
+    expect(state.phases['2']).toBe('pending');  // P2 now active in light flow
     expect(state.phases['3']).toBe('skipped');
     expect(state.phases['4']).toBe('skipped');
     expect(state.phases['5']).toBe('pending');
@@ -371,6 +371,29 @@ describe('flow + carryoverFeedback (light-flow spec)', () => {
   });
 });
 
+describe('light flow P2 activation (ADR-19 — forward-only)', () => {
+  it('createInitialState light produces phases["2"]==="pending"', () => {
+    const state = createInitialState('r', 'task', 'base', false, false, 'light');
+    expect(state.phases['2']).toBe('pending');
+    expect(state.phases['3']).toBe('skipped');
+    expect(state.phases['4']).toBe('skipped');
+  });
+
+  it('createInitialState full is unchanged (phases["2"]==="pending")', () => {
+    const state = createInitialState('r', 'task', 'base', false);
+    expect(state.phases['2']).toBe('pending');
+  });
+
+  it('migrateState preserves phases["2"]==="skipped" from a pre-change light run (ADR-19)', () => {
+    const legacyRaw = JSON.parse(
+      JSON.stringify(createInitialState('r', 'task', 'base', false, false, 'light'))
+    );
+    legacyRaw.phases['2'] = 'skipped'; // simulate a run from before this change shipped
+    const migrated = migrateState(legacyRaw);
+    expect(migrated.phases['2']).toBe('skipped');
+  });
+});
+
 describe('getPhaseArtifactFiles (ADR-13)', () => {
   it('full + phase 1 → spec + decisionLog', () => {
     expect(getPhaseArtifactFiles('full', 1)).toEqual(['spec', 'decisionLog']);
@@ -394,8 +417,8 @@ describe('getRequiredPhaseKeys (ADR-5 / inner.ts propagation)', () => {
   it('full flow returns 1/2/3/4/5/7', () => {
     expect([...getRequiredPhaseKeys('full')]).toEqual(['1', '2', '3', '4', '5', '7']);
   });
-  it('light flow returns 1/5/7 only', () => {
-    expect([...getRequiredPhaseKeys('light')]).toEqual(['1', '5', '7']);
+  it('light flow returns 1/2/5/7', () => {
+    expect([...getRequiredPhaseKeys('light')]).toEqual(['1', '2', '5', '7']);
   });
 });
 
