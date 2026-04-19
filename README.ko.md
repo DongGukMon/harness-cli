@@ -23,16 +23,18 @@
 이 기본값은 런타임에 바꿀 수 있습니다. `harness start` / `harness resume`를 실행할 때마다, 남아 있는 non-verify phase들에 대해 모델 preset 선택 UI가 먼저 뜹니다.
 
 현재 내장 preset:
+- `opus-1m-max`, `opus-1m-xhigh`, `opus-1m-high`
+- `sonnet-1m-max`, `sonnet-1m-high`
 - `opus-max`, `opus-xhigh`, `opus-high`
 - `sonnet-max`, `sonnet-high`
 - `codex-high`, `codex-medium`
 
 기본 phase 매핑:
-- Phase 1 → `opus-high`
+- Phase 1 → `opus-1m-high`
 - Phase 2 → `codex-high`
-- Phase 3 → `sonnet-high`
+- Phase 3 → `sonnet-1m-high`
 - Phase 4 → `codex-high`
-- Phase 5 → `sonnet-high`
+- Phase 5 → `sonnet-1m-high`
 - Phase 7 → `codex-high`
 
 ---
@@ -101,6 +103,7 @@ Harness는 git working tree를 기준으로 동작하며, phase 경계에서 art
 - verify script는 먼저 설치된 패키지 내부 경로에서 찾고, 없으면 `~/.claude/scripts/harness-verify.sh`를 레거시 fallback으로 사용합니다.
 - interactive phase를 Codex preset으로 바꾸면, 해당 phase도 Codex CLI로 실행됩니다.
 - 기본적으로 Codex phase는 실제 `codex` CLI를 사용하고, `<runDir>/codex-home` 격리 환경에서 실행됩니다. 사용자 전역 `CODEX_HOME` 동작이 필요할 때만 `--codex-no-isolate`를 사용하세요.
+- 새 run은 이제 Claude phase 기본값으로 `*-1m-*` preset을 사용합니다. Claude Code 환경에서 1M context를 쓸 수 없다면, 모델 선택 단계에서 기존 non-1M preset으로 직접 바꾸거나 자체 포크의 `src/config.ts` 기본값을 수정하세요.
 
 ---
 

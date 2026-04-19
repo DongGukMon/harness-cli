@@ -32,6 +32,11 @@ P1 design+plan → P5 implement → P6 verify → P7 eval gate
 
 | id | runner | model | effort |
 |---|---|---|---|
+| `opus-1m-max` | claude | `claude-opus-4-7[1m]` | `max` |
+| `opus-1m-xhigh` | claude | `claude-opus-4-7[1m]` | `xHigh` |
+| `opus-1m-high` | claude | `claude-opus-4-7[1m]` | `high` |
+| `sonnet-1m-max` | claude | `claude-sonnet-4-6[1m]` | `max` |
+| `sonnet-1m-high` | claude | `claude-sonnet-4-6[1m]` | `high` |
 | `opus-max` | claude | `claude-opus-4-7` | `max` |
 | `opus-xhigh` | claude | `claude-opus-4-7` | `xHigh` |
 | `opus-high` | claude | `claude-opus-4-7` | `high` |
@@ -41,11 +46,12 @@ P1 design+plan → P5 implement → P6 verify → P7 eval gate
 | `codex-medium` | codex | `gpt-5.4` | `medium` |
 
 기본 매핑:
-- full flow: P1 `opus-high`, P2 `codex-high`, P3 `sonnet-high`, P4 `codex-high`, P5 `sonnet-high`, P7 `codex-high`
-- light flow: P1 `opus-high`, P5 `sonnet-high`, P7 `codex-high`
+- full flow: P1 `opus-1m-high`, P2 `codex-high`, P3 `sonnet-1m-high`, P4 `codex-high`, P5 `sonnet-1m-high`, P7 `codex-high`
+- light flow: P1 `opus-1m-high`, P5 `sonnet-1m-high`, P7 `codex-high`
 
 사용자는 `harness start` / `harness resume` 때 모든 non-verify phase preset을 바꿀 수 있고,
 선택값은 `state.phasePresets`에 저장됩니다.
+기존 saved run은 자동으로 1M 기본값으로 마이그레이션되지 않고, 새로 만드는 run에만 1M 기본값이 자동 적용됩니다.
 
 ---
 
@@ -81,11 +87,11 @@ light flow 특이사항:
 
 | Phase | 기본 preset | runner 유형 | 주요 산출물 | reject/fail 시 |
 |---|---|---|---|---|
-| P1 Spec / Design+Plan | `opus-high` | interactive | spec/design 문서 + decisions + checklist(light) | Gate 2 reject 시 P1 재오픈, light P7 design/mixed reject도 P1 재오픈 |
+| P1 Spec / Design+Plan | `opus-1m-high` | interactive | spec/design 문서 + decisions + checklist(light) | Gate 2 reject 시 P1 재오픈, light P7 design/mixed reject도 P1 재오픈 |
 | P2 Spec Gate | `codex-high` | gate | verdict + feedback sidecar | P1 재오픈 |
-| P3 Plan | `sonnet-high` | interactive | plan + checklist | Gate 4 reject 시 P3 재오픈 |
+| P3 Plan | `sonnet-1m-high` | interactive | plan + checklist | Gate 4 reject 시 P3 재오픈 |
 | P4 Plan Gate | `codex-high` | gate | verdict + feedback sidecar | P3 재오픈 |
-| P5 Implement | `sonnet-high` | interactive | git commits | P6 fail, full-flow P7 reject, light-flow impl reject 시 P5 재오픈 |
+| P5 Implement | `sonnet-1m-high` | interactive | git commits | P6 fail, full-flow P7 reject, light-flow impl reject 시 P5 재오픈 |
 | P6 Verify | 고정 스크립트 | 자동 셸 | eval report + verify sidecar | fail 시 P5 재오픈, retry limit 3 |
 | P7 Eval Gate | `codex-high` | gate | verdict + feedback sidecar | full은 P5, light는 scope에 따라 P5 또는 P1 |
 
@@ -141,6 +147,8 @@ gate phase를 Claude preset으로 강제로 매핑한 경우에만 `claude --pri
 기본적으로 Codex subprocess는 `<runDir>/codex-home/` 안에서 실행되고, 그 안에는 `auth.json`만 symlink됩니다.
 이렇게 해야 사용자 전역 `CODEX_HOME` 규칙이 런타임에 섞여들지 않습니다.
 `--codex-no-isolate`는 이 안전장치를 끕니다.
+
+Claude Code 환경에서 1M context를 사용할 수 없다면, 모델 선택기에서 기존 non-1M Claude preset을 계속 사용하거나 자체 포크의 `src/config.ts` 기본값을 바꾸면 됩니다.
 
 ---
 
