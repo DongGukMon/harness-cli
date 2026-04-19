@@ -43,7 +43,7 @@ export function findHarnessRoot(explicitRoot?: string, cwd?: string): string {
 
   throw new Error(
     "Not in a git repository and no `.harness/` directory found.\n" +
-    "Run 'harness start' inside a git repo, or use --root <dir> to specify a location."
+    "Run 'phase-harness start' inside a git repo, or use --root <dir> to specify a location."
   );
 }
 
@@ -82,7 +82,7 @@ export function resolveRunId(harnessDir: string, explicitRunId?: string): string
   const current = getCurrentRun(harnessDir);
   if (current === null) {
     throw new Error(
-      "No active run. Use 'harness start' to start a new run or 'harness list' to see all runs."
+      "No active run. Use 'phase-harness start' to start a new run or 'phase-harness list' to see all runs."
     );
   }
 

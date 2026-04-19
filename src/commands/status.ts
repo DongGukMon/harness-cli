@@ -15,7 +15,7 @@ export async function statusCommand(options: StatusOptions = {}): Promise<void> 
   const runId = getCurrentRun(harnessDir);
 
   if (runId === null) {
-    process.stderr.write("No active run. Use 'harness list' to see all runs.\n");
+    process.stderr.write("No active run. Use 'phase-harness list' to see all runs.\n");
     process.exit(1);
   }
 

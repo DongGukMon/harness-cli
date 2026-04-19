@@ -24,7 +24,7 @@ export async function jumpCommand(phaseArg: string, options: JumpOptions = {}): 
   const harnessDir = findHarnessRoot(options.root);
   const runId = getCurrentRun(harnessDir);
   if (runId === null) {
-    process.stderr.write("No active run. Use 'harness list' to see all runs.\n");
+    process.stderr.write("No active run. Use 'phase-harness list' to see all runs.\n");
     process.exit(1);
   }
 
@@ -70,5 +70,5 @@ export async function jumpCommand(phaseArg: string, options: JumpOptions = {}): 
   // No active inner — write pending-action only (ADR-9)
   const pendingPath = join(runDir, 'pending-action.json');
   writeFileSync(pendingPath, JSON.stringify({ action: 'jump', phase: N }));
-  process.stderr.write(`Jump to phase ${N} saved. Will apply on next 'harness resume'.\n`);
+  process.stderr.write(`Jump to phase ${N} saved. Will apply on next 'phase-harness resume'.\n`);
 }

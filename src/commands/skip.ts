@@ -15,7 +15,7 @@ export async function skipCommand(options: SkipOptions = {}): Promise<void> {
   const harnessDir = findHarnessRoot(options.root);
   const runId = getCurrentRun(harnessDir);
   if (runId === null) {
-    process.stderr.write("No active run. Use 'harness list' to see all runs.\n");
+    process.stderr.write("No active run. Use 'phase-harness list' to see all runs.\n");
     process.exit(1);
   }
 
@@ -28,7 +28,7 @@ export async function skipCommand(options: SkipOptions = {}): Promise<void> {
 
   // 2. Validate run.status
   if (state.status === 'paused') {
-    process.stderr.write(`Cannot skip: run is paused. Use 'harness resume' first.\n`);
+    process.stderr.write(`Cannot skip: run is paused. Use 'phase-harness resume' first.\n`);
     process.exit(1);
   }
   if (state.status === 'completed') {
@@ -54,5 +54,5 @@ export async function skipCommand(options: SkipOptions = {}): Promise<void> {
   // No active inner — write pending-action only (ADR-9: no lock acquire)
   const pendingPath = join(runDir, 'pending-action.json');
   writeFileSync(pendingPath, JSON.stringify({ action: 'skip' }));
-  process.stderr.write(`Skip action saved. Will apply on next 'harness resume'.\n`);
+  process.stderr.write(`Skip action saved. Will apply on next 'phase-harness resume'.\n`);
 }

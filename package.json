@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "description": "AI agent harness orchestrator — multi-phase brainstorm/spec/plan/implement/verify lifecycle with gate reviews",
   "type": "module",
-  "bin": { "harness": "./dist/bin/harness.js" },
+  "bin": { "phase-harness": "./dist/bin/harness.js" },
   "files": [
     "dist",
     "scripts/harness-verify.sh",
