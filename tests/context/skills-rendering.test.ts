@@ -35,6 +35,15 @@ function stubState(tmp: string): HarnessState {
 let tmp: string;
 beforeEach(() => { tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'sk-')); });
 
+function renderPrompt(
+  phase: 1 | 3 | 5,
+  mutate?: (state: HarnessState) => void,
+): string {
+  const state = stubState(tmp);
+  mutate?.(state);
+  return assembleInteractivePrompt(phase, state, '/tmp/harness');
+}
+
 describe('assembleInteractivePrompt wrapper skill inline', () => {
   it('phase 1 — inlines harness-phase-1-spec wrapper with vars rendered', () => {
     const state = stubState(tmp);
@@ -139,6 +148,239 @@ describe('BUG-B regression — HARNESS FLOW CONSTRAINT survives thin binding', (
     expect(prompt).toContain('HARNESS FLOW CONSTRAINT');
     expect(prompt).toContain('advisor()');
     expect(prompt).toContain('독립 reviewer');
+  });
+});
+
+describe('self-audit + feedback triage rendering', () => {
+  it('phase 1 — self-audit step present in Process', () => {
+    const prompt = renderPrompt(1);
+    expect(prompt).toMatch(/## Process[\s\S]*Pre-sentinel self-audit/);
+  });
+
+  it('phase 1 — self-audit references spec success criteria, regex scan, and rerun-until-clean before sentinel', () => {
+    const prompt = renderPrompt(1);
+    expect(prompt).toMatch(/spec[\s\S]*Success Criteria[\s\S]*Invariants/);
+    expect(prompt).toMatch(/grep[\s\S]*정규식|정규식[\s\S]*grep/);
+    expect(prompt).toMatch(/한 번 더 같은 검증을 반복|rerun/);
+    expect(prompt).toMatch(/sentinel 쓰기 직전/);
+  });
+
+  it('phase 1 — triage block is absent without feedback_path', () => {
+    const prompt = renderPrompt(1);
+    expect(prompt).not.toMatch(/P1-only 정책/);
+    expect(prompt).not.toMatch(/## Deferred/);
+  });
+
+  it('phase 1 — triage block renders P1-only policy, Deferred fallback, and unlabeled-structural defer path when feedback_path is set', () => {
+    const prompt = renderPrompt(1, (state) => {
+      state.pendingAction = {
+        type: 'reopen_phase',
+        targetPhase: 1,
+        sourcePhase: 2,
+        feedbackPaths: ['/tmp/phase-1-feedback.md'],
+      };
+    });
+    expect(prompt).toMatch(/P1-only 정책/);
+    expect(prompt).toMatch(/없으면[\s\S]*파일 끝[\s\S]*## Deferred/);
+    expect(prompt).toMatch(/severity 라벨 누락/);
+    expect(prompt).toMatch(/구조 변경[\s\S]*## Deferred/);
+  });
+
+  it('phase 3 — self-audit step present in Process', () => {
+    const prompt = renderPrompt(3);
+    expect(prompt).toMatch(/## Process[\s\S]*Pre-sentinel self-audit/);
+  });
+
+  it('phase 3 — self-audit compares the plan and checklist against spec rules, then reruns until clean before sentinel', () => {
+    const prompt = renderPrompt(3);
+    expect(prompt).toMatch(/plan[\s\S]*spec[\s\S]*Success Criteria[\s\S]*Invariants/);
+    expect(prompt).toMatch(/eval checklist[\s\S]*grep-rule|grep-rule[\s\S]*eval checklist/);
+    expect(prompt).toMatch(/한 번 더 같은 검증을 반복|rerun/);
+    expect(prompt).toMatch(/sentinel 쓰기 직전/);
+  });
+
+  it('phase 3 — triage block is absent without feedback_path', () => {
+    const prompt = renderPrompt(3);
+    expect(prompt).not.toMatch(/P1-only 정책/);
+    expect(prompt).not.toMatch(/구조 변경[\s\S]*## Deferred/);
+  });
+
+  it('phase 3 — triage block renders P1-only policy, Deferred fallback, and unlabeled-structural defer path when feedback_path is set', () => {
+    const prompt = renderPrompt(3, (state) => {
+      state.pendingAction = {
+        type: 'reopen_phase',
+        targetPhase: 3,
+        sourcePhase: 4,
+        feedbackPaths: ['/tmp/phase-3-feedback.md'],
+      };
+    });
+    expect(prompt).toMatch(/P1-only 정책/);
+    expect(prompt).toMatch(/없으면[\s\S]*파일 끝[\s\S]*## Deferred/);
+    expect(prompt).toMatch(/severity 라벨 누락/);
+    expect(prompt).toMatch(/구조 변경[\s\S]*## Deferred/);
+  });
+
+  it('phase 5 — self-audit step present in Process', () => {
+    const prompt = renderPrompt(5);
+    expect(prompt).toMatch(/## Process[\s\S]*Pre-sentinel self-audit/);
+  });
+
+  it('phase 5 — self-audit pins baseCommit...HEAD from state.json and treats checklist commands as inspect-only', () => {
+    const prompt = renderPrompt(5);
+    expect(prompt).toMatch(/state\.json[\s\S]*baseCommit/);
+    expect(prompt).toMatch(/baseCommit\.\.\.HEAD/);
+    expect(prompt).toMatch(/inspect-only|실행 금지|실행하지 않음/);
+  });
+
+  it('phase 5 — self-audit reruns until clean before sentinel and degrades with WARN when baseCommit is empty', () => {
+    const prompt = renderPrompt(5);
+    expect(prompt).toMatch(/WARN: skip self-audit|empty baseCommit|빈 .*baseCommit/);
+    expect(prompt).toMatch(/한 번 더 같은 검증을 반복|rerun/);
+    expect(prompt).toMatch(/sentinel 쓰기 직전/);
+  });
+
+  it('phase 5 — self-audit escalates 해결 불가 findings to spec-bug or plan-bug Deferred entries', () => {
+    const prompt = renderPrompt(5);
+    expect(prompt).toMatch(/해결 불가/);
+    expect(prompt).toMatch(/spec-bug:/);
+    expect(prompt).toMatch(/plan-bug:/);
+    expect(prompt).toMatch(/## Deferred/);
+  });
+
+  it('phase 5 — triage block is absent without feedback_paths', () => {
+    const prompt = renderPrompt(5);
+    expect(prompt).not.toMatch(/P1-only 정책 · Phase 5 전용/);
+  });
+
+  it('phase 5 — triage block renders P1-only policy, P2 impl-only boundaries, and the spec/plan restructuring ban', () => {
+    const prompt = renderPrompt(5, (state) => {
+      state.pendingAction = {
+        type: 'reopen_phase',
+        targetPhase: 5,
+        sourcePhase: 7,
+        feedbackPaths: ['/tmp/phase-5-feedback-a.md', '/tmp/phase-5-feedback-b.md'],
+      };
+    });
+    expect(prompt).toMatch(/P1-only 정책/);
+    expect(prompt).toMatch(/Phase 5 전용/);
+    expect(prompt).toMatch(/src\/, tests\/ 등 Phase 5 worktree 변경 범위/);
+    expect(prompt).toMatch(/spec\/plan 재구조화/);
+  });
+
+  it('phase 5 — plan-bug handling is narrow and targeted rather than full plan restructuring', () => {
+    const prompt = renderPrompt(5, (state) => {
+      state.pendingAction = {
+        type: 'reopen_phase',
+        targetPhase: 5,
+        sourcePhase: 7,
+        feedbackPaths: ['/tmp/phase-5-feedback.md'],
+      };
+    });
+    expect(prompt).toMatch(/plan-bug:/);
+    expect(prompt).toMatch(/narrow, targeted 수정|단일 요소만 최소 수정/);
+    expect(prompt).toMatch(/plan 전체 재구조화는 여전히 금지/);
+  });
+
+  it('phase 5 — duplicate issue identity is same file/area plus same requested change', () => {
+    const prompt = renderPrompt(5, (state) => {
+      state.pendingAction = {
+        type: 'reopen_phase',
+        targetPhase: 5,
+        sourcePhase: 7,
+        feedbackPaths: ['/tmp/phase-5-feedback.md'],
+      };
+    });
+    expect(prompt).toMatch(/동일 파일\/영역 \+ 동일 요구 변경\(문구 차이 무관\)/);
+  });
+
+  it('phase 5 — R5a severity resolution renders highest-wins with same-severity dedup', () => {
+    const prompt = renderPrompt(5, (state) => {
+      state.pendingAction = {
+        type: 'reopen_phase',
+        targetPhase: 5,
+        sourcePhase: 7,
+        feedbackPaths: ['/tmp/phase-5-feedback.md'],
+      };
+    });
+    expect(prompt).toMatch(/highest severity wins|highest severity/);
+    expect(prompt).toMatch(/동일 severity면 한 번만 반영|same-severity/);
+  });
+
+  it('phase 5 — spec-bug and plan-bug tags are informational signals only', () => {
+    const prompt = renderPrompt(5, (state) => {
+      state.pendingAction = {
+        type: 'reopen_phase',
+        targetPhase: 5,
+        sourcePhase: 7,
+        feedbackPaths: ['/tmp/phase-5-feedback.md'],
+      };
+    });
+    expect(prompt).toMatch(/informational signal/);
+    expect(prompt).toMatch(/자동 완화는 없다|gate 자동 완화는 없다/);
+  });
+});
+
+describe('cross-phase rendering guards', () => {
+  it.each([1, 3, 5] as const)('phase %i — self-audit explains the 40× local grep rationale', (phase) => {
+    const prompt = renderPrompt(phase);
+    expect(prompt).toMatch(/40× local grep/);
+  });
+
+  it.each([1, 3, 5] as const)('phase %i — self-audit stays immediately before sentinel instructions', (phase) => {
+    const prompt = renderPrompt(phase);
+    expect(prompt).toMatch(/Pre-sentinel self-audit[\s\S]{0,600}sentinel/);
+  });
+
+  it.each([1, 3, 5] as const)('phase %i — triage text includes the missing-Deferred fallback', (phase) => {
+    const prompt = renderPrompt(phase, (state) => {
+      state.pendingAction = {
+        type: 'reopen_phase',
+        targetPhase: phase,
+        sourcePhase: phase === 5 ? 7 : (phase + 1) as 2 | 4,
+        feedbackPaths: [`/tmp/phase-${phase}-feedback-a.md`, `/tmp/phase-${phase}-feedback-b.md`],
+      };
+    });
+    expect(prompt).toMatch(/없으면[\s\S]*파일 끝[\s\S]*## Deferred/);
+  });
+
+  it.each([1, 3] as const)('phase %i — only one feedback file is rendered in single-feedback phases', (phase) => {
+    const prompt = renderPrompt(phase, (state) => {
+      state.pendingAction = {
+        type: 'reopen_phase',
+        targetPhase: phase,
+        sourcePhase: phase === 1 ? 2 : 4,
+        feedbackPaths: [`/tmp/phase-${phase}-feedback-a.md`, `/tmp/phase-${phase}-feedback-b.md`],
+      };
+    });
+    expect(prompt).toContain(`/tmp/phase-${phase}-feedback-a.md`);
+    expect(prompt).not.toContain(`/tmp/phase-${phase}-feedback-b.md`);
+  });
+
+  it('phase 5 — carryoverFeedback missing files are dropped and valid feedback still renders triage', () => {
+    const pendingPath = path.join(tmp, 'phase-5-pending.md');
+    const validCarryoverPath = path.join(tmp, 'phase-5-carryover-valid.md');
+    const missingCarryoverPath = path.join(tmp, 'phase-5-carryover-missing.md');
+    fs.writeFileSync(pendingPath, 'pending');
+    fs.writeFileSync(validCarryoverPath, 'carryover');
+
+    const prompt = renderPrompt(5, (state) => {
+      state.pendingAction = {
+        type: 'reopen_phase',
+        targetPhase: 5,
+        sourcePhase: 7,
+        feedbackPaths: [pendingPath],
+      };
+      state.carryoverFeedback = {
+        sourceGate: 7,
+        deliverToPhase: 5,
+        paths: [missingCarryoverPath, validCarryoverPath],
+      };
+    });
+
+    expect(prompt).toContain(pendingPath);
+    expect(prompt).toContain(validCarryoverPath);
+    expect(prompt).not.toContain(missingCarryoverPath);
+    expect(prompt).toMatch(/P1-only 정책/);
   });
 });
 
