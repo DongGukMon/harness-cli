@@ -96,7 +96,7 @@ The spec explicitly asks the plan phase to absorb Deferred `§6`, `§7`, `§8`, 
   3. Edit `src/context/skills/harness-phase-5-implement.md` to satisfy `R3`, `R3a`, `R5`, `R5a`, and `R6` (`spec` lines 116-122), including the exact `baseCommit...HEAD` pin, the `state.json` lookup, the empty-`baseCommit` graceful-degrade path, the inspect-only checklist rule, the `spec-bug:`/`plan-bug:` escalation channel, and the absorbed Deferred `§11` rerun sentence.
   4. In the same skill, refine the `{{#if feedback_paths}}` block to satisfy `R5a` in full (both halves: (i) "same issue" identity = `동일 파일/영역 + 동일 요구 변경(문구 차이 무관)` per Deferred `§12`; (ii) resolution rule = **highest severity wins; same-severity duplicates collapse to single action**) and to absorb Deferred `§9` (unlabeled structural comments take the same deferred/escalation path).
   5. Re-run the targeted filter until green, then rerun the full rendering test file.
-  Expected verification output: 9 new Phase 5 rendering tests pass; `SC6`, `SC9`, `SC10`, and `SC13-SC21` are all covered without breaking existing invariants.
+  Expected verification output: all listed Phase 5 rendering tests pass; `SC6`, `SC9`, `SC10`, and `SC13-SC21` plus `R5a` are all covered without breaking existing invariants.
   Commit message: `feat(skills): Phase 5 pre-sentinel self-audit + P1-only triage + plan-bug narrow fix`
 
 ### Task 4: Cross-phase rendering guards + carryoverFeedback test
@@ -109,7 +109,7 @@ The spec explicitly asks the plan phase to absorb Deferred `§6`, `§7`, `§8`, 
   4. Add `it('phase 5 — carryoverFeedback missing files are dropped and valid feedback still renders triage', ...)` to absorb Deferred `§7` using `pendingAction.feedbackPaths` plus `carryoverFeedback.paths`.
   5. Keep the wording in new test names and comments aligned to Deferred `§6`: `regex-based rendering/grep tests`, not snapshot terminology.
   6. Re-run `pnpm vitest run tests/context/skills-rendering.test.ts` until green.
-  Expected verification output: 4 new cross-phase rendering tests pass; `INV1-INV5` remain green and the wrapper text is proven at the assembled prompt layer.
+  Expected verification output: all listed cross-phase rendering test groups pass (phase-parametrized `it.each` plus standalone cases); `INV1-INV5` remain green and the wrapper text is proven at the assembled prompt layer.
   Commit message: `test(skills): cross-phase rendering + carryoverFeedback guards`
 
 ### Task 5: Final verify + build
