@@ -235,8 +235,8 @@ describe('createInitialState (updated)', () => {
 
   it('initializes phasePresets from PHASE_DEFAULTS', () => {
     const state = createInitialState('run-1', 'task', 'abc123', false);
-    expect(state.phasePresets['1']).toBe('opus-high');
-    expect(state.phasePresets['5']).toBe('sonnet-high');
+    expect(state.phasePresets['1']).toBe('opus-1m-high');
+    expect(state.phasePresets['5']).toBe('sonnet-1m-high');
   });
 
   it('initializes phaseReopenFlags to false', () => {
@@ -255,9 +255,14 @@ describe('migrateState', () => {
   it('backfills missing phasePresets', () => {
     const raw = { runId: 'test' };
     const migrated = migrateState(raw);
-    for (const key of ['1', '2', '3', '4', '5', '7']) {
-      expect(migrated.phasePresets[key]).toBe(PHASE_DEFAULTS[Number(key)]);
-    }
+    expect(migrated.phasePresets).toMatchObject({
+      '1': 'opus-high',
+      '2': 'codex-high',
+      '3': 'sonnet-high',
+      '4': 'codex-high',
+      '5': 'sonnet-high',
+      '7': 'codex-high',
+    });
   });
 
   it('backfills individual missing phase keys', () => {
@@ -271,6 +276,13 @@ describe('migrateState', () => {
     const migrated = migrateState(raw);
     expect(migrated.phasePresets['1']).toBe('opus-high');
     expect(migrated.phasePresets['2']).toBe('codex-high');
+  });
+
+  it('legacy migration backfills missing presets to non-1M defaults for old runs', () => {
+    const migrated = migrateState({ runId: 'legacy-run' });
+    expect(migrated.phasePresets['1']).toBe('opus-high');
+    expect(migrated.phasePresets['3']).toBe('sonnet-high');
+    expect(migrated.phasePresets['5']).toBe('sonnet-high');
   });
 
   it('preserves opus-max (now a real max-effort preset) across migration', () => {
@@ -354,6 +366,13 @@ describe('flow + carryoverFeedback (light-flow spec)', () => {
     const migrated = migrateState(raw);
     expect(migrated.flow).toBe('light');
     expect(migrated.carryoverFeedback).toBeNull();
+  });
+
+  it('legacy light-flow migration backfills non-1M Claude defaults for saved runs', () => {
+    const migrated = migrateState({ runId: 'legacy-light', flow: 'light' });
+    expect(migrated.phasePresets['1']).toBe('opus-high');
+    expect(migrated.phasePresets['5']).toBe('sonnet-high');
+    expect(migrated.phasePresets['7']).toBe('codex-high');
   });
 
   it('carryoverFeedback survives writeState → readState round-trip', () => {
