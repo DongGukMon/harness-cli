@@ -18,10 +18,10 @@
 
 | File | Action | Responsibility |
 |---|---|---|
-| `src/types.ts` | Modify | Extend `SessionLogger` at `src/types.ts:261-269` with `getEventsPath(): string \| null` per spec §3.4 / §4.3, while using existing `HarnessState.currentPhase`, `phases`, and `gateRetries` at `src/types.ts:39-53` as the source shape that `readStateSlice` narrows. |
+| `src/types.ts` | Modify | Extend `SessionLogger` at `src/types.ts:261-269` with `getEventsPath(): string \| null` per spec §3.4 / §4.3. The footer work reuses the existing `PhaseStatus` definition at `src/types.ts:4` as-is; only `getEventsPath` is added here. |
 | `src/logger.ts` | Modify | Implement `getEventsPath()` on `NoopLogger` (`src/logger.ts:11-20`) and `FileSessionLogger` (`src/logger.ts:31-76`) without changing `finalizeSummary` token behavior at `src/logger.ts:156-220`. |
 | `tests/logger.test.ts` | Modify | Add unit assertions next to `NoopLogger` tests (`tests/logger.test.ts:31-53`) and `FileSessionLogger` constructor/meta tests (`tests/logger.test.ts:55-138`) for the new getter described in spec §4.5(4). |
-| `src/metrics/footer-aggregator.ts` | New | Implement `FooterStateSlice`, `FooterSummary`, `readEventsJsonl`, `readStateSlice`, and `aggregateFooter(events, stateSlice, now)` exactly as specified in spec §4.1, §3.3, §3.6, §3.6.1, §3.7, §3.9, and §8 TODO-G2-P2a/P2b. |
+| `src/metrics/footer-aggregator.ts` | New | Implement `FooterStateSlice`, `FooterSummary`, `readEventsJsonl`, `readStateSlice`, and `aggregateFooter(events, stateSlice, now)` exactly as specified in spec §4.1, §3.3, §3.6, §3.6.1, §3.7, §3.9, and §8 TODO-G2-P2a/P2b, reusing `PhaseStatus` from `src/types.ts:4` instead of redefining the union locally. |
 | `tests/metrics/footer-aggregator.test.ts` | New | Cover the pure aggregator matrix from spec §4.5(1)-(2): gate-live, interactive-live, interactive-idle, phase-6 pairing, resume semantics, sidecar dedup, token-skip cases, empty/no-session-open, valid/missing/malformed/race state reads, `phaseStatus`, and `currentPhase === 8`. |
 | `src/ui.ts` | Modify | Add `formatFooter`, `writeFooterToPane`, and `clearFooterRow` beside the existing control-pane/prompt helpers at `src/ui.ts:33-76` and `src/ui.ts:101-123`, following the stderr-only bottom-row render contract in spec §3.1 / §3.2 / §4.2. |
 | `tests/ui-footer.test.ts` | New | Cover spec §4.5(3): wide footer, compact footer, phase-6 variant, unknown-columns empty string, and exact stderr ANSI sequences for write/clear helpers. |
@@ -47,7 +47,7 @@
 
 ## Plan-Time Clarification Needed
 
-- **Task 6 issue number reservation:** the repo’s currently referenced open-issue numbers in `CLAUDE.md:90-99` top out at `#13`. This plan therefore reserves **Issue #14** for the `gate_error.tokensTotal` reconciliation follow-up. If the tracker advances before implementation lands, keep the wording direction from Task 6 but renumber to the next free issue before opening the follow-up.
+- **Task 6 issue number reservation:** the repo’s currently referenced open-issue numbers in `CLAUDE.md:90-99` top out at `#13`. This plan therefore assumes Task 6 will use the next free issue number at implementation time for the `gate_error.tokensTotal` reconciliation follow-up. Resolve that number by running `gh issue list --state open`, then back-fill the concrete number into both `FOLLOWUPS.md` and the PR body.
 
 ---
 
@@ -185,17 +185,29 @@ The commit body should mention spec §3.4 / §4.3 and should not add `Co-authore
 - Reference: `src/phases/runner.ts:179-217`, `src/phases/runner.ts:382-489`, `src/phases/runner.ts:706-739`, `src/phases/runner.ts:760-845`
 - Reference: `src/config.ts:55`
 
+§3.12 ownership note for Task 2:
+- `readEventsJsonl` owns the malformed-JSON-line silent-skip branch.
+- missing `events.jsonl` on disk is a caller-skip path owned by the ticker in Task 4.
+- `fs.readFileSync(events.jsonl)` throwing is also a caller tick-skip path owned and tested in Task 4 because the aggregator intentionally propagates read failures upward.
+
 - [ ] **Step 1: Write failing pure-aggregator fixtures for gate-live and TODO-G2-P2a.**
 
 Add tests in `tests/metrics/footer-aggregator.test.ts` for:
 - gate live (`currentPhase: 2`, `gateRetries['2'] = 1`, events ending with `phase_end(phase=1)`) -> `attempt === 2`, `phaseRunningElapsedMs` computed from the prior event per spec §3.7
-- gate live with `phaseStatus !== 'in_progress'` -> `phaseRunningElapsedMs === null` per §8 TODO-G2-P2a resolution direction
 
 Use `stateSlice` fixtures rather than touching disk:
 
 ```ts
 { currentPhase: 2, gateRetries: { '2': 1 }, phaseStatus: 'in_progress' }
 ```
+
+- [ ] **Step 1a: Write a failing test for `phaseStatus === 'error'` and `phaseStatus === 'skipped'`.**
+
+Add an explicit aggregator test covering both persisted status values from `src/types.ts:4`:
+- `phaseStatus: 'error'` -> `phaseRunningElapsedMs === null`
+- `phaseStatus: 'skipped'` -> `phaseRunningElapsedMs === null`
+
+This test should prove the gate-elapsed rule is keyed strictly on `phaseStatus === 'in_progress'`, not on a smaller hard-coded subset of statuses.
 
 - [ ] **Step 2: Write failing pure-aggregator fixtures for interactive live and interactive idle.**
 
@@ -254,6 +266,21 @@ Add tests for:
 
 The race case should mimic `writeState`’s temp-write + rename contract from `src/state.ts:14-27`, not a different write mechanism.
 
+- [ ] **Step 7a: Write a failing test for malformed `events.jsonl` line skip with valid neighbors.**
+
+Add a `readEventsJsonl` test where the fixture contains:
+- one valid line
+- one malformed JSON line
+- one following valid line
+
+Assert the malformed line is silently skipped while the surrounding valid events are parsed unchanged. Run:
+
+```bash
+pnpm vitest run tests/metrics/footer-aggregator.test.ts
+```
+
+Expected: red until `readEventsJsonl` implements the malformed-line skip branch from spec §3.12.
+
 - [ ] **Step 8: Prove the new aggregator suite fails before implementation.**
 
 Run:
@@ -264,26 +291,29 @@ pnpm vitest run tests/metrics/footer-aggregator.test.ts
 
 Expected: fail because neither the module nor the new functions exist yet.
 
-- [ ] **Step 9: Implement `readEventsJsonl(path)`.**
+- [ ] **Step 9: Implement `readEventsJsonl(path)` and the malformed-line skip behavior from Step 7a.**
 
 Create `src/metrics/footer-aggregator.ts` and implement:
 - tolerant `events.jsonl` parsing
 - malformed-line skip behavior matching `FileSessionLogger.readEvents()` (`src/logger.ts:253-258`)
 - a `LogEvent[]` return type
 
-Keep it pure and synchronous per spec §4.1 / §3.12.
+Keep it pure and synchronous per spec §4.1 / §3.12. Preserve the branch ownership above:
+- malformed line -> skip in `readEventsJsonl`
+- missing file / `fs.readFileSync` throw -> propagate so the Task 4 ticker caller can skip that tick silently
 
-- [ ] **Step 10: Implement `readStateSlice(stateJsonPath)` with the approved narrow shape.**
+- [ ] **Step 10: Implement `readStateSlice(stateJsonPath)` with the approved narrow shape and `PhaseStatus` reuse.**
 
 `FooterStateSlice` must include:
 
 ```ts
 currentPhase: number;
 gateRetries: Record<string, number>;
-phaseStatus: 'pending' | 'in_progress' | 'completed' | 'failed';
+phaseStatus: PhaseStatus;
 ```
 
 Implementation requirements:
+- import `PhaseStatus` from `../types` in `src/metrics/footer-aggregator.ts`; do not redefine or narrow the union locally
 - derive `phaseStatus` from `state.phases[String(currentPhase)]`
 - return `null` on missing, malformed, or partial JSON
 - return `null` when `currentPhase` is outside `1..7`, including terminal `8`
@@ -318,10 +348,11 @@ Expected: all fixtures pass, including:
 - phase-6 pairing
 - session resume
 - sidecar dedup
+- malformed-line skip with valid neighbors
 - token skips
 - empty/no session-open
 - valid/missing/malformed/race state reads
-- TODO-G2-P2a `phaseStatus`
+- TODO-G2-P2a `phaseStatus`, including explicit `error` / `skipped`
 - TODO-G2-P2b `currentPhase === 8`
 
 - [ ] **Step 13: Commit.**
@@ -413,6 +444,12 @@ The commit body should reference spec §4.2 and the bottom-row stderr decision f
 - New: `tests/commands/footer-ticker.test.ts`
 - Reference: `src/commands/inner.ts:193-208`
 
+§3.12 ownership note for Task 4:
+- missing `events.jsonl` on disk -> skip the tick silently
+- `readStateSlice(stateJsonPath) === null` -> skip the tick silently
+- `process.stderr` not being a usable TTY surface -> skip the tick silently
+- `fs.readFileSync(events.jsonl)` throwing during a scheduled tick -> catch, skip that tick, and let the next tick proceed
+
 - [ ] **Step 1: Write the failing happy-path ticker test with fake timers.**
 
 Add a test that:
@@ -470,6 +507,61 @@ Create `src/commands/footer-ticker.ts` with:
 - `process.stderr.isTTY` / `rows` / `columns` guards
 - `forceTick()` that calls `onTick()` synchronously
 - `stop()` that clears the interval, clears the footer row, removes the exit listener, and becomes idempotent
+
+- [ ] **Step 6a: Write a failing test for missing `events.jsonl` on disk, then make the ticker skip silently.**
+
+Add a ticker test where the logger returns an `events.jsonl` path that does not exist on disk. The scheduled tick must perform zero `stderr.write` calls.
+
+Run:
+
+```bash
+pnpm vitest run tests/commands/footer-ticker.test.ts
+```
+
+Expected: red. Then implement the missing-file skip path in `startFooterTicker`, rerun the same vitest command, and see green.
+
+- [ ] **Step 6b: Write a failing test for `readStateSlice(stateJsonPath) === null`, then make the ticker skip silently.**
+
+Use a fixture where `state.json` is missing, malformed, or observed mid-rename so `readStateSlice(stateJsonPath)` returns `null`. Assert the tick performs zero `stderr.write` calls.
+
+Run:
+
+```bash
+pnpm vitest run tests/commands/footer-ticker.test.ts
+```
+
+Expected: red. Then implement the null-state-slice skip path, rerun the same vitest command, and see green.
+
+- [ ] **Step 6c: Write a failing test for non-TTY or unknown `stderr` dimensions, then make the ticker skip silently.**
+
+Stub either:
+- `process.stderr.isTTY === false`
+- `process.stderr.columns` / `process.stderr.rows` as `undefined` or `0`
+
+Even with valid events plus valid state, assert the tick performs zero `stderr.write` calls.
+
+Run:
+
+```bash
+pnpm vitest run tests/commands/footer-ticker.test.ts
+```
+
+Expected: red. Then implement the non-TTY / unknown-dimensions skip path, rerun the same vitest command, and see green.
+
+- [ ] **Step 6d: Write a failing test for `fs.readFileSync(events.jsonl)` throwing during a scheduled tick, then make the next tick recover.**
+
+Stub the scheduled read so one tick throws from `fs.readFileSync(events.jsonl)`, then restore the file/read stub for the following tick. Assert:
+- the throwing tick is caught
+- there is no crash or unhandled rejection
+- a later tick succeeds and writes the footer normally
+
+Run:
+
+```bash
+pnpm vitest run tests/commands/footer-ticker.test.ts
+```
+
+Expected: red. Then implement catch-and-continue recovery around the scheduled read path, rerun the same vitest command, and see green.
 
 - [ ] **Step 7: Run the scoped ticker suite to green.**
 
@@ -593,13 +685,13 @@ Before touching `FOLLOWUPS.md`, confirm this task is docs-only:
 - `tests/logger.test.ts` stays unchanged for this task
 - the actual reconciliation of `summary.json.totals.gateTokens` vs footer totals remains a separate issue/PR
 
-- [ ] **Step 2: Append the follow-up entry with the reserved issue number and wording direction.**
+- [ ] **Step 2: Append the follow-up entry with the next free issue number at implementation time and the approved wording direction.**
 
-Append a new entry to `FOLLOWUPS.md` under the appropriate priority section, reserving **Issue #14** with wording aligned to spec §3.6.1:
+Run `gh issue list --state open`, determine the next free issue number at implementation time, and append a new entry to `FOLLOWUPS.md` under the appropriate priority section with wording aligned to spec §3.6.1:
 
 Required content direction:
 - filename: `FOLLOWUPS.md`
-- issue number: `#14`
+- issue number: the concrete next free issue number returned by the tracker at implementation time
 - title direction: `summary.json gate token total does not include gate_error.tokensTotal`
 - body direction: the footer intentionally counts `gate_error.tokensTotal`, `FileSessionLogger.finalizeSummary` does not, and reconciling `src/logger.ts:218-220` plus the related logger tests is out of scope for the footer PR
 - explicit note that sidecar dedup semantics from spec §3.6.1 must remain intact when the follow-up lands
@@ -689,7 +781,7 @@ Before opening the PR, include in the PR body:
 - simplifications made (`getEventsPath` getter instead of recomputing session paths; pure aggregator; inert ticker on logging-off)
 - remaining risks from the spec that still apply (`scrollback overwrite window`, `SIGKILL out of scope`)
 - manual smoke evidence from Step 4
-- note that Task 6 recorded Issue `#14` as the follow-up for `gate_error.tokensTotal` reconciliation
+- note that Task 6 recorded the concrete next-free issue number (resolved by `gh issue list --state open`) as the follow-up for `gate_error.tokensTotal` reconciliation
 
 - [ ] **Step 6: Confirm completion criteria before handing off.**
 
@@ -710,12 +802,18 @@ Copied from spec §5, then extended with the carry-forward TODO checks required 
 - [ ] `pnpm vitest run` passes, baseline 617 → ≥ 617 + new tests
 - [ ] `pnpm build` produces dist with no warnings
 - [ ] Aggregator unit tests cover: §3.6 token rules, §3.6.1 sidecar dedup (verdict + error), §3.7 hybrid current-phase / attempt / phase-running-elapsed for gate-live + interactive-live + interactive-idle + phase-6-positional, §3.3 resume semantics, empty events, malformed line skip
+- [ ] Aggregator test proves malformed JSON line is silently skipped (Task 2)
 - [ ] `readStateSlice` unit tests cover: valid / missing / malformed / atomic-rename mid-write race (all non-throwing; failures return `null`)
 - [ ] Formatter tests cover: wide, compact, phase-6 variant, unknown-columns
 - [ ] Logger test asserts `getEventsPath` for both implementations
 - [ ] Ticker integration test asserts: exact ANSI sequence bytes on tick, state-slice-driven rendering, SIGWINCH forceTick, `stop()` clears footer + removes `exit` listener, inert NoopLogger path
+- [ ] Ticker test proves skip on missing `events.jsonl` (Task 4)
+- [ ] Ticker test proves skip on null state slice (Task 4)
+- [ ] Ticker test proves skip on non-TTY / unknown stderr dims (Task 4)
+- [ ] Ticker test proves read-throw recovery (next tick succeeds) (Task 4)
 - [ ] Manual smoke documented in PR body: screenshot or ASCII capture of footer updating across gate + interactive phases, and clean footer after SIGINT
 - [ ] TODO-G2-P2a phaseStatus aggregator test included
+- [ ] Aggregator test covers `phaseStatus === 'error'` and `phaseStatus === 'skipped'` (both -> null running elapsed)
 - [ ] TODO-G2-P2b currentPhase=8 test included
 - [ ] TODO-G2-P1 recorded in `FOLLOWUPS.md` (no `logger.ts` change)
 
@@ -736,7 +834,9 @@ This section is only a planning aid; execute the tasks above, not this matrix.
 | §3.9 phase-6 positional pairing | Task 2, Step 3 |
 | §3.10 wide/compact formatting | Task 3, Step 1 |
 | §3.11 SIGWINCH | Task 4, Step 1; Task 5, Steps 1-4; Final Task Step 4 |
-| §3.12 silent error handling | Task 2, Step 10; Task 4, Step 6 |
+| §3.12 silent error handling | Task 2, Steps 7a + 9; Task 4, Steps 6a-6d |
+| §3.12 malformed line skip | Task 2, Steps 7a + 9 |
+| §3.12 ticker skip paths (missing events / null slice / non-TTY / read-throw) | Task 4, Steps 6a-6d |
 | §3.14 abnormal-exit cleanup | Task 4, Steps 3 + 6; Task 5, Step 4; Final Task Step 4 |
 | §4.5(1) aggregator pure fixtures | Task 2, Steps 1-6 |
 | §4.5(2) `readStateSlice` tests | Task 2, Step 7 |
@@ -747,7 +847,8 @@ This section is only a planning aid; execute the tasks above, not this matrix.
 | §4.5(7) manual smoke | Final Task Step 4 |
 | §4.6 files-touched table | File Map + Tasks 1-5 |
 | §8 TODO-G2-P1 | Task 6 |
-| §8 TODO-G2-P2a | Task 2, Steps 1 + 10 + 11 |
+| §8 TODO-G2-P2a | Task 2, Steps 1 + 1a + 10 + 11 |
+| §8 TODO-G2-P2a phaseStatus type reuse + error/skipped tests | Task 2, Steps 1a + 10 |
 | §8 TODO-G2-P2b | Task 2, Step 7 + Step 10 |
 
 ---
