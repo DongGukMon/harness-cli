@@ -18,6 +18,23 @@ import { getPhaseArtifactFiles } from './config.js';
 import { isValidChecklistSchema } from './phases/checklist.js';
 import type { HarnessState, PhaseNumber } from './types.js';
 
+/** Inline Complexity-section check (spec R5); mirrors `interactive.ts`. */
+function specHasValidComplexity(specBody: string): boolean {
+  // Spec Goal 1: "exactly one `## Complexity` section." Count matches first.
+  const allHeaders = specBody.match(/^##\s+Complexity\s*$/gm);
+  if (!allHeaders || allHeaders.length !== 1) return false;
+  const headerMatch = specBody.match(/^##\s+Complexity\s*$/m);
+  if (!headerMatch) return false;
+  const offset = (headerMatch.index ?? 0) + headerMatch[0].length;
+  const remainder = specBody.slice(offset);
+  for (const rawLine of remainder.split('\n')) {
+    const line = rawLine.trim();
+    if (line === '') continue;
+    return /^(small|medium|large)\b/i.test(line);
+  }
+  return false;
+}
+
 /** Create a no-op InputManager for use in resumeRun (deferred refactor: inputManager passed by inner.ts in future). */
 function createNoOpInputManager(): InputManager {
   return new InputManager();
@@ -493,7 +510,21 @@ export function completeInteractivePhaseFromFreshSentinel(
         if (openedAt !== null && Math.floor(stat.mtimeMs) < openedAt) return false;
       }
 
-      // Light + phase 1: checklist schema + '## Implementation Plan' header
+      // Phase 1 (both full + light flows): spec must contain a valid
+      // `## Complexity` section (spec R5).
+      if (phase === 1) {
+        const specAbs = isAbsolute(state.artifacts.spec)
+          ? state.artifacts.spec
+          : join(cwd, state.artifacts.spec);
+        try {
+          const body = readFileSync(specAbs, 'utf-8');
+          if (!specHasValidComplexity(body)) return false;
+        } catch {
+          return false;
+        }
+      }
+
+      // Light + phase 1: checklist schema + '## Open Questions' + '## Implementation Plan' headers
       if (state.flow === 'light' && phase === 1) {
         const checklistAbs = isAbsolute(state.artifacts.checklist)
           ? state.artifacts.checklist
