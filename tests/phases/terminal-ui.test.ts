@@ -142,7 +142,7 @@ describe('performJump (inner-side)', () => {
 });
 
 describe('enterFailedTerminalState', () => {
-  it("R triggers performResume and re-enters runPhaseLoop", async () => {
+  it("R triggers performResume and emits terminal_action event", async () => {
     const { runPhaseLoop } = await import('../../src/phases/runner.js');
     vi.mocked(runPhaseLoop).mockClear();
     const state = makeState();
@@ -154,21 +154,33 @@ describe('enterFailedTerminalState', () => {
     });
     const input = new MockInput();
     input.enqueue('r');
-    await enterFailedTerminalState(state, '/harness', makeTmpDir(), '/cwd', input as unknown as InputManager, makeLogger());
+    const logger = makeLogger();
+    await enterFailedTerminalState(state, '/harness', makeTmpDir(), '/cwd', input as unknown as InputManager, logger);
     expect(runPhaseLoop).toHaveBeenCalledOnce();
+    expect(logger.logEvent).toHaveBeenCalledWith(expect.objectContaining({
+      event: 'terminal_action',
+      action: 'resume',
+      fromPhase: 5,
+    }));
   });
 
-  it('Q exits cleanly without re-entering the loop', async () => {
+  it('Q exits cleanly without re-entering the loop and emits terminal_action quit', async () => {
     const { runPhaseLoop } = await import('../../src/phases/runner.js');
     vi.mocked(runPhaseLoop).mockClear();
     const state = makeState();
     const input = new MockInput();
     input.enqueue('q');
-    await enterFailedTerminalState(state, '/harness', makeTmpDir(), '/cwd', input as unknown as InputManager, makeLogger());
+    const logger = makeLogger();
+    await enterFailedTerminalState(state, '/harness', makeTmpDir(), '/cwd', input as unknown as InputManager, logger);
     expect(runPhaseLoop).not.toHaveBeenCalled();
+    expect(logger.logEvent).toHaveBeenCalledWith(expect.objectContaining({
+      event: 'terminal_action',
+      action: 'quit',
+      fromPhase: 5,
+    }));
   });
 
-  it('J prompts for phase number, then dispatches performJump', async () => {
+  it('J prompts for phase number, then dispatches performJump and emits terminal_action jump', async () => {
     const { runPhaseLoop } = await import('../../src/phases/runner.js');
     vi.mocked(runPhaseLoop).mockClear();
     vi.mocked(runPhaseLoop).mockImplementationOnce(async (s: any) => {
@@ -177,10 +189,18 @@ describe('enterFailedTerminalState', () => {
     const state = makeState();
     const input = new MockInput();
     input.enqueue('j', '3');
-    await enterFailedTerminalState(state, '/harness', makeTmpDir(), '/cwd', input as unknown as InputManager, makeLogger());
+    const logger = makeLogger();
+    await enterFailedTerminalState(state, '/harness', makeTmpDir(), '/cwd', input as unknown as InputManager, logger);
     expect(state.currentPhase).toBe(3);
     expect(runPhaseLoop).toHaveBeenCalledOnce();
+    expect(logger.logEvent).toHaveBeenCalledWith(expect.objectContaining({
+      event: 'terminal_action',
+      action: 'jump',
+      fromPhase: 5,
+      targetPhase: 3,
+    }));
   });
+
 });
 
 describe('enterCompleteTerminalState', () => {

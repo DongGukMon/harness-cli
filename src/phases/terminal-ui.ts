@@ -148,10 +148,15 @@ export async function enterFailedTerminalState(
     process.stderr.write('\n[R] Resume   [J] Jump to phase   [Q] Quit\n');
 
     const choice = await inputManager.waitForKey(new Set(['r', 'j', 'q']));
+    const fromPhase = findFailedPhase(state) ?? state.currentPhase;
 
-    if (choice === 'Q') return;
+    if (choice === 'Q') {
+      logger.logEvent({ event: 'terminal_action', action: 'quit', fromPhase });
+      return;
+    }
 
     if (choice === 'R') {
+      logger.logEvent({ event: 'terminal_action', action: 'resume', fromPhase });
       try {
         await performResume(state, harnessDir, runDir, cwd, inputManager, logger, sidecarReplayAllowed);
       } catch (err) {
@@ -175,6 +180,7 @@ export async function enterFailedTerminalState(
     process.stderr.write(`\nJump to which phase? (${targets.join(' / ')})\n`);
     const phaseKey = await inputManager.waitForKey(targetKeys);
     const target = Number(phaseKey) as InteractivePhase;
+    logger.logEvent({ event: 'terminal_action', action: 'jump', fromPhase, targetPhase: target });
 
     try {
       await performJump(target, state, harnessDir, runDir, cwd, inputManager, logger);
