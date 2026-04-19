@@ -50,8 +50,8 @@ describe('assembleInteractivePrompt wrapper skill inline', () => {
     const prompt = assembleInteractivePrompt(1, state, '/tmp/harness');
     // wrapper body present
     expect(prompt).toContain('harness Phase 1 — Spec writing');
-    // #7 invariant visible to implementer
-    expect(prompt).toContain('Open Questions');
+    // Ambiguity policy: developer-interaction instead of OQ stash
+    expect(prompt).toMatch(/Ambiguity policy/);
     // variables rendered
     expect(prompt).toContain('run-abc');
     expect(prompt).toContain('att-111');
@@ -419,13 +419,18 @@ describe('prompt size and qa-integration guards', () => {
     expect(prompt.length).toBeLessThan(60 * 1024);
   });
 
-  it('phase 1 wrapper surfaces Open Questions requirement (qa #7)', () => {
+  it('phase 1 wrapper enforces live-interaction ambiguity policy (no OQ stash)', () => {
     const state = stubState(tmp);
     const prompt = assembleInteractivePrompt(1, state, '/tmp/harness');
-    expect(prompt).toMatch(/Open Questions/);
-    expect(prompt).toMatch(/P1/);  // gate severity warning for missing section
-    // Wrapper body mentions Open Questions in both Context (gate-level) and Invariants — at least 2 hits
-    expect((prompt.match(/Open Questions/g) || []).length).toBeGreaterThanOrEqual(2);
+    // The old OQ requirement has been removed in favor of direct developer Q&A.
+    expect(prompt).not.toMatch(/ALSO include '## Open Questions' section/);
+    expect(prompt).not.toMatch(/Open Questions.*섹션 필수/);
+    // Core ambiguity-policy wording surfaces in Context, Process override, and
+    // Invariants — so the implementer sees the rule multiple times.
+    expect(prompt).toMatch(/Ambiguity policy/);
+    expect(prompt).toMatch(/사용자에게 직접 질문/);
+    expect(prompt).toMatch(/asking the developer directly/);
+    expect((prompt.match(/Ambiguity|ambiguit/g) || []).length).toBeGreaterThanOrEqual(3);
   });
 
   it('resume-smoke — pre-rev-3 state.json loads and re-renders under rev-3 wrapper without error (spec §11 force-rev-3 decision)', () => {

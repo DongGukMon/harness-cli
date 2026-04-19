@@ -74,7 +74,7 @@ control panel에서 skipped phase는 `(skipped)`로 표시됩니다.
 
 light flow 특이사항:
 - P1은 결합 design+plan 문서를 `docs/specs/<runId>-design.md`에 작성합니다
-- 결합 문서에는 `## Complexity`, `## Open Questions`, `## Implementation Plan`이 반드시 있어야 합니다
+- 결합 문서에는 `## Complexity`, `## Implementation Plan`이 반드시 있어야 합니다
 - `checklist.json`은 여전히 `.harness/<runId>/checklist.json`으로 별도 유지됩니다
 - flow는 run 생성 시 고정되므로 `phase-harness resume --light`는 거부됩니다
 - P2 (pre-impl gate): Codex가 결합 design doc를 4축 루브릭으로 리뷰합니다. REJECT 시 즉시 P1 재진입 — feedback은 `pendingAction.feedbackPaths`로만 전달되고 `state.carryoverFeedback`는 Gate 2에서 설정되지 않습니다. Gate retry limit 3 (풀 플로우 P2와 동일). P2 활성화 이전에 생성된 legacy light run은 `phases['2']='skipped'` 상태를 유지합니다 — activation은 `createInitialState`를 통한 forward-only이고 retroactive migration이 아닙니다.

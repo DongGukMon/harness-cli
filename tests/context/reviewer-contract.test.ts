@@ -6,7 +6,7 @@ import { assembleGatePrompt } from '../../src/context/assembler.js';
 import type { HarnessState } from '../../src/types.js';
 
 function stubState(tmp: string): HarnessState {
-  fs.writeFileSync(path.join(tmp, 'spec.md'), '# spec\n## Context & Decisions\n- x\n## Open Questions\n- y\n');
+  fs.writeFileSync(path.join(tmp, 'spec.md'), '# spec\n## Context & Decisions\n- x\n');
   fs.writeFileSync(path.join(tmp, 'plan.md'), '# plan\n');
   fs.writeFileSync(path.join(tmp, 'eval.md'), '# eval\n');
   return {
@@ -39,7 +39,7 @@ let tmp: string;
 beforeEach(() => { tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'rc-')); });
 
 describe('REVIEWER_CONTRACT_BY_GATE', () => {
-  it('gate 2 — spec rubric (Correctness/Readability/Scope + Open Questions check)', () => {
+  it('gate 2 — spec rubric (Correctness/Readability/Scope, no OQ enforcement)', () => {
     const s = stubState(tmp);
     const p = assembleGatePrompt(2, s, tmp, tmp);
     expect(typeof p).toBe('string');
@@ -48,7 +48,10 @@ describe('REVIEWER_CONTRACT_BY_GATE', () => {
     expect(prompt).toMatch(/1\.\s*Correctness/);
     expect(prompt).toMatch(/2\.\s*Readability/);
     expect(prompt).toMatch(/3\.\s*Scope/);
-    expect(prompt).toMatch(/Open Questions/);           // qa #7 gate check
+    // Phase 1 resolves ambiguities live with the developer — gate must NOT
+    // require or reward an 'Open Questions' section.
+    expect(prompt).not.toMatch(/Additional required check.*Open Questions/);
+    expect(prompt).toMatch(/Do not penalize.*Open Questions/);
     expect(prompt).not.toMatch(/\bSecurity\b/);         // not in spec gate
     expect(prompt).not.toMatch(/\bPerformance\b/);      // not in spec gate
   });

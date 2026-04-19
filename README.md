@@ -57,7 +57,7 @@ P1 design+plan → P5 implement → P6 verify → P7 eval gate
 
 In light flow:
 - phases **2 / 3 / 4** are marked as `skipped`
-- phase 1 must produce a combined design document with `## Complexity`, `## Open Questions`, and `## Implementation Plan`
+- phase 1 must produce a combined design document with `## Complexity` and `## Implementation Plan`
 - phase 7 can reopen **phase 5** for impl-only feedback, or **phase 1** for design/mixed feedback
 - light-flow gate retry limit is **5** (full flow stays at **3**)
 - the flow is frozen when the run is created, so `phase-harness resume --light` is rejected

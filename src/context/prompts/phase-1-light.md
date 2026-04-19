@@ -12,7 +12,6 @@
 ## Context & Decisions
 ## Requirements / Scope
 ## Design
-## Open Questions              (필수 헤더, 정확히 이 텍스트 — 불확실·후속 조사 항목 기록. 없으면 "없음"으로 명시)
 ## Implementation Plan       (필수 헤더, 정확히 이 텍스트)
   - Task 1: ...
   - Task 2: ...
@@ -21,7 +20,7 @@
 
 `## Complexity` 섹션은 정확히 `Small`, `Medium`, `Large` 중 하나를 첫 non-blank 라인에 기록하라 (case-insensitive, 선택적 `— <한 줄 근거>` 허용). 섹션이 누락되거나 값이 enum을 벗어나면 harness는 Phase 1을 실패로 간주한다. Small이면 Implementation Plan은 최대 3 tasks + per-function 의사코드 금지로 자기 제약하라.
 
-`## Open Questions` 섹션은 설계 과정에서 미확인 사항·후속 조사 항목을 기록하라. 없으면 "없음"으로 명시해야 한다. 본 섹션이 누락되면 harness는 Phase 1을 실패로 간주한다.
+**Ambiguity policy**: 설계 중 모호함·결정 공백이 발견되면 산출물에 남기거나 다음 phase로 미루지 말고 **이 세션에서 사용자에게 직접 질문해 해소**하라. 별도 "Open Questions" 섹션은 만들지 않는다 — 모든 질문은 대답을 받아 Design / Decisions 섹션에 반영한 뒤 문서를 닫는다.
 
 `## Implementation Plan` 섹션은 구현 태스크를 각각 1개 이상 체크리스트 아이템(또는 번호 목록)으로 분해하라. 본 섹션이 누락되면 harness는 Phase 1을 실패로 간주한다.
 

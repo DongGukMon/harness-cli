@@ -56,7 +56,6 @@ Phase 4에서 Codex가 다음 축으로 평가한다:
 - sentinel 이후 추가 작업 금지.
 - plan 파일 경로는 `{{plan_path}}` 고정.
 - checklist JSON 스키마 위반 시 `scripts/harness-verify.sh`가 실패. 스키마 정확히 준수.
-- Plan은 spec의 "Open Questions" 항목을 태스크 레벨에서 해소하거나 명시적으로 defer해야 함.
 - Complexity Directive 블록(있을 경우)의 지시는 non-optional. Small 분류에서 3 tasks 초과 / per-function 의사코드 삽입은 gate 리뷰어가 P1으로 잡을 근거가 된다.
 
 **HARNESS FLOW CONSTRAINT**: 이 세션은 orchestrated harness 라이프사이클 내부에서 실행된다. 다음 phase에서 Codex 기반 독립 reviewer가 산출물을 검토한다(gate). 따라서:

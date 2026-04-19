@@ -57,7 +57,7 @@ P1 design+plan → P5 implement → P6 verify → P7 eval gate
 
 light flow에서는:
 - **2 / 3 / 4 phase**가 `skipped` 상태로 처리됩니다
-- phase 1이 `## Complexity`, `## Open Questions`, `## Implementation Plan`이 들어간 결합 문서를 만들어야 합니다
+- phase 1이 `## Complexity`, `## Implementation Plan`이 들어간 결합 문서를 만들어야 합니다
 - phase 7 피드백이 구현 범위면 **phase 5**, 설계/혼합 범위면 **phase 1**을 다시 엽니다
 - light flow의 gate retry 한도는 **5**이고, full flow는 **3**입니다
 - flow는 run 생성 시점에 고정되므로 `phase-harness resume --light`는 거부됩니다
