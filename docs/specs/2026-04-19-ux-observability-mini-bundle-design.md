@@ -211,9 +211,21 @@ await handleGateEscalation(gatePhase, comments, retryIndex, state, runDir, cwd, 
 
 Rationale: the quit branch of `handleGateEscalation` (runner.ts L657-671) does **not** reset `gateRetries`, so at resume time `state.gateRetries[phase]` still equals `GATE_RETRY_LIMIT` (the value reached that triggered escalation); `GATE_RETRY_LIMIT - 1` equals the pre-mutation `retryIndex` that would have been captured live. `Math.max(0, ...)` guards a defensive floor in the unlikely case a future code path resets the counter before pausing. `cycleIndex` does not need resume-time derivation because it is read from `state.gateEscalationCycles` inside `handleGateEscalation` itself.
 
-**TODO (round-4 P2 follow-ups, tracked in `docs/gate-convergence/FOLLOWUPS.md` after merge)**:
-- **FUP-3 (resume replay test coverage)**: add a `tests/phases/gate-resume-escalation.test.ts` case that exercises `handleResume` → `show_escalation` → derived `retryIndex` → `handleGateEscalation` and asserts the resumed archive path matches `gate-N-cycle-C-retry-${GATE_RETRY_LIMIT - 1}-feedback.md`. Not currently in §5/§8 because the replay path is also tested indirectly via existing `gate-resume.test.ts`, but an explicit archive-name assertion would close the verification gap.
-- **FUP-4 (raw comments preservation on resume)**: today `src/resume.ts` `show_escalation` replay loads `comments = readFileSync(action.feedbackPaths[0], 'utf-8')` — which is the *formatted* `gate-N-feedback.md` (headers + "## Reviewer Comments" block). Passing that back through `saveGateFeedback` would nest the markdown. Mitigation options:  (a) resume parses the `## Reviewer Comments` body before the call, or (b) persist raw `comments` in `pendingAction.rawComments` at pause time. Option (b) is preferred long-term (no parse fragility), but is a schema change; for this bundle, **option (a) is the minimum bar** and must be included in the resume-path fix during implementation. If deferred, the archive written on resume will diverge from the live-path archive and violate the "same content" archive invariant.
+**Raw-comments preservation on resume (normative, in scope)**: today `src/resume.ts` `show_escalation` replay loads `comments = readFileSync(action.feedbackPaths[0], 'utf-8')` — which is the *formatted* `gate-N-feedback.md` containing a header and a `## Reviewer Comments` block, NOT raw reviewer text. Passing that back through `saveGateFeedback` would nest the markdown (archive would contain a header inside the reviewer-comments block). The spec requires the resume path to extract raw reviewer comments **before** calling `handleGateEscalation`:
+
+```ts
+// inside show_escalation case in handleResume, before handleGateEscalation call
+const raw = readFileSync(action.feedbackPaths[0], 'utf-8');
+const marker = '## Reviewer Comments\n\n';
+const idx = raw.indexOf(marker);
+const comments = idx >= 0 ? raw.slice(idx + marker.length).trimEnd() : raw;
+```
+
+Rationale: `saveGateFeedback` today formats `# Gate N Feedback\n\n... ## Reviewer Comments\n\n${comments}`. The parse above is the inverse and is robust to trailing newlines/whitespace. An alternative (persisting `rawComments` on `pendingAction`) is cleaner long-term but requires a `PendingAction` schema change and is deferred as FUP-5. **Option (a) parse-body is the normative bar for this bundle** — §5 and §8 below enforce it via test + acceptance grep.
+
+**TODO (non-blocking follow-ups, tracked in `docs/gate-convergence/FOLLOWUPS.md` after merge)**:
+- **FUP-3 (resume replay test coverage expansion)**: beyond the normative assertion added to §5 this round, consider a richer resume-vs-live cross-path equality test that also covers non-phase-7 gates.
+- **FUP-5 (persist raw comments in pendingAction)**: `PendingAction.rawComments?: string` would eliminate the parse-inverse approach entirely. Small schema change; defer because option (a) above is already normative and sufficient.
 
 State type addition (`src/types.ts`):
 ```ts
@@ -232,6 +244,18 @@ const key = String(phase) as '2' | '4' | '7';
 state.gateEscalationCycles[key] =
   (state.gateEscalationCycles[key] ?? 0) + 1;
 ```
+
+**Phase-7 continue feedbackPaths composition (mirrors normal reject)**: the normal Phase-7 reject path at runner.ts L547-553 appends `verify-feedback.md` to `pendingAction.feedbackPaths` so the reopened Phase 5 sees BOTH the eval-gate feedback and the prior verify failure. The `handleGateEscalation` continue branch must mirror this behavior for phase 7:
+```ts
+// inside handleGateEscalation continue branch (phase === 7 only), after saveGateFeedback:
+const feedbackPaths = [feedbackPath];
+const verifyFeedback = path.join(runDir, 'verify-feedback.md');
+if (fs.existsSync(verifyFeedback)) {
+  feedbackPaths.push(verifyFeedback);
+}
+// ... existing pendingAction assembly uses feedbackPaths ...
+```
+Phases 2 and 4 are unaffected (no verify sidecar). Light-flow carryover at L566-570 is also phase-7 specific and is untouched — it already captures `feedbackPath` only, matching the existing reject-path carryover contract.
 
 ### 4.2 `WATCHDOG_DELAY_MS` (runner.ts)
 
@@ -275,6 +299,8 @@ Call-site migration:
 - `src/resume.ts` L173 — same replacement (inside `handleResume` phase-6 error retry branch).
 - `src/resume.ts` L218 — same replacement (inside `applyStoredVerifyResult` PASS branch).
 
+**Path convention**: `commitEvalReport` passes `state.artifacts.evalReport` (repo-relative) to `normalizeArtifactCommit`, not a `path.join(cwd, ...)`-constructed absolute path. Rationale: current live path at runner.ts L798-803 constructs an absolute path (evalReportPath), while resume sites already pass the relative `state.artifacts.evalReport`. `normalizeArtifactCommit` + `git.ts` stage via repo-relative names, so routing all three sites through a single helper that uses the same repo-relative shape eliminates an existing inconsistency and ensures the always-`git add` behavior (§4.4) stages the correct path-shape across live + resume paths.
+
 Throw semantics preserved — `normalizeArtifactCommit` still throws on git failure; callers retain their existing try/catch boundaries. The force-pass synthetic-report path remains on direct `normalizeArtifactCommit` with its existing message `harness[${state.runId}]: Phase 6 — synthetic eval report (skip)` (see `forcePassVerify` at runner.ts L1003) — unchanged by this bundle, since it does not participate in the retry-rev scheme.
 
 ## 5. Testing
@@ -283,7 +309,7 @@ One vitest file per slice, colocated with existing tests:
 
 | Slice | Test file | Key assertions |
 |---|---|---|
-| T8-a | `tests/phases/gate-feedback-archival.test.ts` | Retry creates `gate-N-cycle-0-retry-K-feedback.md` (K=0..2). After a Continue escalation + next retry REJECT, archive lives at `gate-N-cycle-1-retry-0-feedback.md` (distinct from cycle-0 archive; no overwrite). APPROVE creates `gate-N-cycle-C-verdict.json` with `verdict:"APPROVE"`. Legacy `gate-N-feedback.md` still written + returned. |
+| T8-a | `tests/phases/gate-feedback-archival.test.ts` + `tests/phases/gate-resume-escalation.test.ts` | Retry creates `gate-N-cycle-0-retry-K-feedback.md` (K=0..2). After a Continue escalation + next retry REJECT, archive lives at `gate-N-cycle-1-retry-0-feedback.md` (distinct from cycle-0 archive; no overwrite). APPROVE creates `gate-N-cycle-C-verdict.json` with `verdict:"APPROVE"`. Legacy `gate-N-feedback.md` still written + returned. **Resume equality**: after a paused `show_escalation` is resumed via `handleResume`, the archive written by the replayed `handleGateEscalation` contains the same reviewer-comment body as the live-path archive (asserts raw-comments parse worked; failure mode = nested markdown). **Phase-7 continue feedbackPaths**: `handleGateEscalation` continue branch with `phase === 7` + existing `verify-feedback.md` produces `pendingAction.feedbackPaths = [gateFeedback, verifyFeedback]` matching the normal reject path. |
 | T8-b | `tests/phases/interactive-watchdog.test.ts` | Under `vi.useFakeTimers()`: timer arms on claude preset, fires exactly once after `vi.advanceTimersByTimeAsync(WATCHDOG_DELAY_MS)`, is cleared (no late fire) on completed/failed/throw/redirect. Not armed for codex preset. |
 | T8-c | `tests/preflight-claude-at-file.test.ts` | Timeout constant = 10000. Message text contains "delayed" (not "timed out") and "continuing". Exit status ≠ 0 still warns and returns. |
 | T8-d | `tests/phases/eval-report-commit-squash.test.ts` | Retry cycle: commit-count delta per round = 1 (measure via `git rev-list` before/after). Messages contain `rev 1 eval report`, `rev 2 eval report`. `commitEvalReport(state, cwd)` used for all three sites (live runner path + resume.ts L173 + L218) — assert via message title check after simulating each path (live retry; phase-6 error → `handleResume` retry; `applyStoredVerifyResult` PASS). Resume after simulated crash (staged-D only, no worktree entry) resumes cleanly without throw and produces exactly one new `rev K eval report` commit. Force-pass path still writes one synthetic commit with the existing message `Phase 6 — synthetic eval report (skip)` (unchanged). |
@@ -317,7 +343,7 @@ Verification is deterministic; the plan includes `.harness-eval.json` with:
 1. **typecheck** — `pnpm tsc --noEmit` → exit 0.
 2. **tests** — `pnpm vitest run` → exit 0, 617 → 621+ passed, 1 skipped.
 3. **build** — `pnpm build` → exit 0, `dist/src/phases/runner.js` + `dist/src/preflight.js` + `dist/src/artifact.js` exist.
-4. **T8-a signatures + archive path** — `src/phases/runner.ts` `saveGateFeedback` takes 5 params (`retryIndex: number, cycleIndex: number`). `handleGateEscalation` takes `retryIndex` param. `grep -q "cycle-.*-retry-.*-feedback.md" src/phases/runner.ts`. `src/types.ts` exports `gateEscalationCycles?: Partial<Record<'2' | '4' | '7', number>>` on `HarnessState` (inner `Partial<>` supports type-safe `{}` initialization at the increment site). `src/resume.ts` `show_escalation` replay derives `retryIndex` from `state.gateRetries` before calling `handleGateEscalation` (grep: `grep -q "handleGateEscalation(.*retryIndex" src/resume.ts`).
+4. **T8-a signatures + archive path + resume parity** — `src/phases/runner.ts` `saveGateFeedback` takes 5 params (`retryIndex: number, cycleIndex: number`). `handleGateEscalation` takes `retryIndex` param. `grep -q "cycle-.*-retry-.*-feedback.md" src/phases/runner.ts`. `src/types.ts` exports `gateEscalationCycles?: Partial<Record<'2' | '4' | '7', number>>` on `HarnessState` (inner `Partial<>` supports type-safe `{}` initialization at the increment site). `src/resume.ts` `show_escalation` replay derives `retryIndex` from `state.gateRetries` before calling `handleGateEscalation` (grep: `grep -q "handleGateEscalation(.*retryIndex" src/resume.ts`) AND parses raw reviewer comments from the formatted feedback file via the `## Reviewer Comments` marker (grep: `grep -q "Reviewer Comments" src/resume.ts`). Phase-7 `handleGateEscalation` continue branch appends `verify-feedback.md` to `pendingAction.feedbackPaths` when present (grep: `grep -q "verify-feedback.md" src/phases/runner.ts` AND the escalation test asserts the 2-element array).
 5. **T8-b constant** — `grep -q "WATCHDOG_DELAY_MS" src/phases/runner.ts`.
 6. **T8-c string** — `grep -q "timeout: 10_\\?000" src/preflight.ts`.
 7. **T8-d commit-count + shared helper** — dedicated test verifies for N verify rounds within a verify cycle (1 initial + `verifyRetries`), Phase 6 commit count == `verifyRetries + 1` (one per round), all message titles contain `rev K eval report` for K ∈ {1..verifyRetries+1}. Resume-from-staged-D scenario commits exactly one additional `rev K eval report`. `src/artifact.ts` exports `commitEvalReport(state, cwd)`; `grep -q "commitEvalReport" src/phases/runner.ts` AND `grep -q "commitEvalReport" src/resume.ts` (both live path and both resume recovery sites route through the shared helper).
