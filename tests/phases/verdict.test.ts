@@ -54,6 +54,17 @@ describe('parseVerdict', () => {
     ].join('\n'));
     expect(result?.scope).toBeUndefined();
   });
+
+  it('returns null when ## Verdict is missing, even if Scope: impl is present', () => {
+    const result = parseVerdict([
+      '## Comments',
+      '- malformed output',
+      'Scope: impl',
+      '## Summary',
+      'Needs work',
+    ].join('\n'));
+    expect(result).toBeNull();
+  });
 });
 
 describe('buildGateResult', () => {
