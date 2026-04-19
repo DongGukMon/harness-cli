@@ -46,6 +46,32 @@ function summarizeRecentEvents(runDir: string, limit = 10): string {
   }
 }
 
+function fastClaudeFailureHint(eventsPath: string): string | null {
+  try {
+    const raw = fs.readFileSync(eventsPath, 'utf-8');
+    const lines = raw.trimEnd().split('\n');
+    for (let i = lines.length - 1; i >= 0; i--) {
+      let ev: any;
+      try { ev = JSON.parse(lines[i]); } catch { continue; }
+      if (ev.event !== 'phase_end' || ev.status !== 'failed') continue;
+      const tokens = ev.claudeTokens;
+      const dur = ev.durationMs ?? 0;
+      const zeroObj = tokens && typeof tokens === 'object' && tokens.total === 0;
+      const nullToken = tokens === null;
+      if ((zeroObj || nullToken) && dur < 30_000) {
+        return [
+          'Hint: Claude exited within ' + Math.round(dur / 1000) + 's with no assistant output.',
+          'Common causes: folder-trust dialog blocking the workspace pane, immediate crash,',
+          'or the Claude binary failing to launch. Check the workspace tmux pane for a dialog',
+          'before pressing [R] (a fresh attempt will hit the same wall).',
+        ].join('\n');
+      }
+      return null;
+    }
+  } catch { /* file missing or unreadable */ }
+  return null;
+}
+
 function summarizeGitStatus(cwd: string, headLines = 10): string {
   try {
     const out = execSync('git status --porcelain', { cwd, encoding: 'utf-8' }).trimEnd();
@@ -146,15 +172,26 @@ export async function enterFailedTerminalState(
 
     process.stderr.write('\nRecent events:\n');
     process.stderr.write(summarizeRecentEvents(runDir) + '\n');
+
+    const hint = fastClaudeFailureHint(path.join(runDir, 'events.jsonl'));
+    if (hint !== null) {
+      process.stderr.write('\n' + hint + '\n');
+    }
+
     process.stderr.write('\nWorking tree:\n');
     process.stderr.write(summarizeGitStatus(cwd) + '\n');
     process.stderr.write('\n[R] Resume   [J] Jump to phase   [Q] Quit\n');
 
     const choice = await inputManager.waitForKey(new Set(['r', 'j', 'q']));
+    const fromPhase = findFailedPhase(state) ?? state.currentPhase;
 
-    if (choice === 'Q') return;
+    if (choice === 'Q') {
+      logger.logEvent({ event: 'terminal_action', action: 'quit', fromPhase });
+      return;
+    }
 
     if (choice === 'R') {
+      logger.logEvent({ event: 'terminal_action', action: 'resume', fromPhase });
       try {
         await performResume(state, harnessDir, runDir, cwd, inputManager, logger, sidecarReplayAllowed);
       } catch (err) {
@@ -178,6 +215,7 @@ export async function enterFailedTerminalState(
     process.stderr.write(`\nJump to which phase? (${targets.join(' / ')})\n`);
     const phaseKey = await inputManager.waitForKey(targetKeys);
     const target = Number(phaseKey) as InteractivePhase;
+    logger.logEvent({ event: 'terminal_action', action: 'jump', fromPhase, targetPhase: target });
 
     try {
       await performJump(target, state, harnessDir, runDir, cwd, inputManager, logger);

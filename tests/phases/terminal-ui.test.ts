@@ -175,7 +175,7 @@ describe('performJump (inner-side)', () => {
 });
 
 describe('enterFailedTerminalState', () => {
-  it("R triggers performResume and re-enters runPhaseLoop", async () => {
+  it("R triggers performResume and emits terminal_action event", async () => {
     const { runPhaseLoop } = await import('../../src/phases/runner.js');
     vi.mocked(runPhaseLoop).mockClear();
     const state = makeState();
@@ -187,8 +187,14 @@ describe('enterFailedTerminalState', () => {
     });
     const input = new MockInput();
     input.enqueue('r');
-    await enterFailedTerminalState(state, '/harness', makeTmpDir(), '/cwd', input as unknown as InputManager, makeLogger());
+    const logger = makeLogger();
+    await enterFailedTerminalState(state, '/harness', makeTmpDir(), '/cwd', input as unknown as InputManager, logger);
     expect(runPhaseLoop).toHaveBeenCalledOnce();
+    expect(logger.logEvent).toHaveBeenCalledWith(expect.objectContaining({
+      event: 'terminal_action',
+      action: 'resume',
+      fromPhase: 5,
+    }));
   });
 
   it('R triggers performResume; if a fresh failure surfaces, loop continues until Q', async () => {
@@ -209,17 +215,23 @@ describe('enterFailedTerminalState', () => {
     expect(state.phases['6']).toBe('failed');
   });
 
-  it('Q exits cleanly without re-entering the loop', async () => {
+  it('Q exits cleanly without re-entering the loop and emits terminal_action quit', async () => {
     const { runPhaseLoop } = await import('../../src/phases/runner.js');
     vi.mocked(runPhaseLoop).mockClear();
     const state = makeState();
     const input = new MockInput();
     input.enqueue('q');
-    await enterFailedTerminalState(state, '/harness', makeTmpDir(), '/cwd', input as unknown as InputManager, makeLogger());
+    const logger = makeLogger();
+    await enterFailedTerminalState(state, '/harness', makeTmpDir(), '/cwd', input as unknown as InputManager, logger);
     expect(runPhaseLoop).not.toHaveBeenCalled();
+    expect(logger.logEvent).toHaveBeenCalledWith(expect.objectContaining({
+      event: 'terminal_action',
+      action: 'quit',
+      fromPhase: 5,
+    }));
   });
 
-  it('J prompts for phase number, then dispatches performJump', async () => {
+  it('J prompts for phase number, then dispatches performJump and emits terminal_action jump', async () => {
     const { runPhaseLoop } = await import('../../src/phases/runner.js');
     vi.mocked(runPhaseLoop).mockClear();
     vi.mocked(runPhaseLoop).mockImplementationOnce(async (s: any) => {
@@ -228,9 +240,44 @@ describe('enterFailedTerminalState', () => {
     const state = makeState();
     const input = new MockInput();
     input.enqueue('j', '3');
-    await enterFailedTerminalState(state, '/harness', makeTmpDir(), '/cwd', input as unknown as InputManager, makeLogger());
+    const logger = makeLogger();
+    await enterFailedTerminalState(state, '/harness', makeTmpDir(), '/cwd', input as unknown as InputManager, logger);
     expect(state.currentPhase).toBe(3);
     expect(runPhaseLoop).toHaveBeenCalledOnce();
+    expect(logger.logEvent).toHaveBeenCalledWith(expect.objectContaining({
+      event: 'terminal_action',
+      action: 'jump',
+      fromPhase: 5,
+      targetPhase: 3,
+    }));
+  });
+
+  it('shows a fast-Claude-failure hint when the most recent phase_end matches', async () => {
+    const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    const state = makeState();
+    const runDir = makeTmpDir();
+    fs.writeFileSync(path.join(runDir, 'events.jsonl'),
+      JSON.stringify({ event: 'phase_end', phase: 5, status: 'failed', durationMs: 6800, claudeTokens: { input: 0, output: 0, cacheRead: 0, cacheCreate: 0, total: 0 } }) + '\n');
+    const input = new MockInput();
+    input.enqueue('q');
+    await enterFailedTerminalState(state, '/harness', runDir, '/cwd', input as unknown as InputManager, makeLogger());
+    const hintShown = stderrSpy.mock.calls.some(c => /Hint: Claude exited within/.test(String(c[0])));
+    expect(hintShown).toBe(true);
+    stderrSpy.mockRestore();
+  });
+
+  it('does not show the hint when duration is long', async () => {
+    const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    const state = makeState();
+    const runDir = makeTmpDir();
+    fs.writeFileSync(path.join(runDir, 'events.jsonl'),
+      JSON.stringify({ event: 'phase_end', phase: 5, status: 'failed', durationMs: 600_000, claudeTokens: null }) + '\n');
+    const input = new MockInput();
+    input.enqueue('q');
+    await enterFailedTerminalState(state, '/harness', runDir, '/cwd', input as unknown as InputManager, makeLogger());
+    const hintShown = stderrSpy.mock.calls.some(c => /Hint: Claude exited within/.test(String(c[0])));
+    expect(hintShown).toBe(false);
+    stderrSpy.mockRestore();
   });
 });
 

@@ -261,6 +261,12 @@ export type LogEvent =
       phaseStatus: PhaseStatus;
       callsite: RenderCallsite;
     })
+  | (LogEventBase & {
+      event: 'terminal_action';
+      action: 'resume' | 'jump' | 'quit';
+      fromPhase: number;
+      targetPhase?: number;
+    })
   | (LogEventBase & { event: 'session_end'; status: 'completed' | 'paused' | 'interrupted'; totalWallMs: number });
 
 export interface SessionMeta {
