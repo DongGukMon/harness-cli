@@ -358,7 +358,7 @@ Run `phase-harness list` to discover existing runs, or start a new one.
 `--light` is a start-time choice only. Resume the existing run as-is, or start a fresh light run.
 
 **Need to inspect current progress from another terminal?**  
-Use `phase-harness status`, `phase-harness skip`, or `harness jump <phase>`.
+Use `phase-harness status`, `phase-harness skip`, or `phase-harness jump <phase>`.
 
 ---
 

@@ -11,6 +11,13 @@ Return your review as structured text with these sections in order:
 ## Verdict
 State exactly one of: `APPROVE` or `REJECT`
 
+When the verdict is `REJECT` and the gate type is **eval**, the next non-empty line in the Verdict section MUST be exactly:
+  Scope: design | impl | mixed
+(choose one value: `design`, `impl`, or `mixed`). Omit the `Scope:` line for `APPROVE` and for non-eval gates (spec/plan review).
+- `design`: spec or requirements gap → restart from Phase 1
+- `impl`: spec is valid, implementation fails contract → retry Phase 5
+- `mixed`: both design and implementation issues present
+
 ## Comments
 For each finding, use this format:
 - **[P0|P1|P2|P3]** — Location: [section/file reference]
@@ -130,6 +137,14 @@ Use after Phase 4 (implementation complete + auto-verification report generated)
 You are performing the final evaluation review as an independent technical lead.
 Your goal is to verify that the implementation meets the spec requirements and passes all defined quality criteria.
 
+Inputs (one of two shapes):
+- Full flow:  [SPEC_CONTENT] + [PLAN_CONTENT] are two distinct documents.
+- Light flow: [SPEC_CONTENT] is a combined design spec that embeds the implementation plan
+              in a `## Implementation Plan` section; [PLAN_CONTENT] is not provided separately.
+The `<plan_document>` block is optional: in light flow, omit it or replace it with a
+single-line note `(light flow — plan is in spec.Implementation Plan)`.
+To detect light flow: check whether the spec document contains a `## Implementation Plan` section.
+
 <spec_document>
 [SPEC_CONTENT]
 </spec_document>
@@ -162,6 +177,11 @@ Before finalizing your verdict:
 - Verify each checklist item against the auto-verification report results
 - Verify each spec section against the code diff
 - If a checklist item passes but the underlying test does not cover the spec requirement meaningfully, flag this as P1
+
+If you decide REJECT, classify each P0/P1 finding as:
+- design-level  (requires spec/requirements revision)
+- impl-level    (requires code-only change, spec is valid)
+Then emit exactly one of: `Scope: design`, `Scope: impl`, or `Scope: mixed` as the next non-empty line after `REJECT` in the Verdict section.
 </verification_loop>
 
 <dig_deeper_nudge>
@@ -200,7 +220,7 @@ When constructing a gate review prompt:
 1. Select the gate-type-specific `<task>` block above
 2. **Claude Code가 직접 파일을 Read하여 모든 placeholder를 실제 내용으로 교체한다** (경로 문자열을 넘기지 않는다)
    - `[SPEC_CONTENT]`: spec doc 전문
-   - `[PLAN_CONTENT]`: impl plan 전문
+   - `[PLAN_CONTENT]`: impl plan 전문 (full flow only; light flow에서는 이 치환을 skip하고 `<plan_document>` 블록을 생략하거나 `(light flow — plan is in spec.Implementation Plan)` 한 줄로 대체)
    - `[EVAL_REPORT_CONTENT]`: auto-verification report 전문
    - `[KEY_DECISIONS_SUMMARY]`: spec의 "Context & Decisions" 섹션
    - `[GIT_DIFF_CONTENT]`: `git diff` 전문 (파일이 많으면 `git diff --stat` + 핵심 변경 파일 전문)

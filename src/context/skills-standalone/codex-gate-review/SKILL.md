@@ -43,9 +43,14 @@ This skill is invoked as part of the harness lifecycle (see `harness-lifecycle` 
 
 **Gate eval:**
 - spec doc 전문을 Read → `[SPEC_CONTENT]`에 삽입
-- impl plan 전문을 Read → `[PLAN_CONTENT]`에 삽입
+- impl plan 이 별도 파일로 존재하면(full flow) 전문을 Read → `[PLAN_CONTENT]`에 삽입
+- impl plan 이 spec 의 `## Implementation Plan` 섹션으로 내장되어 있으면(light flow)
+  `[PLAN_CONTENT]` 블록은 생략하거나 `(light flow — plan embedded in spec)` 주석으로 대체
+  (감지 방법: spec doc 에 `## Implementation Plan` 섹션이 있으면 light flow)
 - auto-verification report 전문을 Read → `[EVAL_REPORT_CONTENT]`에 삽입
 - `git diff` 실행 → `[GIT_DIFF_CONTENT]`에 삽입 (파일이 많으면 `--stat` 요약 + 핵심 변경 파일 전문)
+
+Note: `phase-harness` light flow uses a combined design spec; `--gate eval` detects this automatically via the `## Implementation Plan` section presence.
 
 ### Step 2: Construct Codex Prompt
 
