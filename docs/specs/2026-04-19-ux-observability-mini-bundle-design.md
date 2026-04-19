@@ -88,12 +88,14 @@ With C + K both in the filename, re-escalation cycles never overwrite prior arch
 
 **Hint text** (Korean, matching existing `printWarning` style):
 ```
-⚠️  30s 동안 출력 없음 — Claude 창(C-b 1)에서 folder-trust 다이얼로그 대기 중일 수 있음.
+⚠️  30s 동안 출력 없음 — Claude 작업 창에서 folder-trust 다이얼로그 대기 중일 수 있음 (tmux pane: ${state.tmuxWorkspacePane ?? '?'}).
 ```
+
+**Rationale for pane interpolation**: the tmux workspace pane is dynamic (tracked on `state.tmuxWorkspacePane`, populated from `splitPane` in `src/commands/inner.ts` L58). Hardcoding `C-b 1` would mislead users in both dedicated mode (split inside current control pane) and reused mode (dynamically created control window). The hint reads `state.tmuxWorkspacePane` at emit time; if absent (unexpected but defensive) it falls back to `?` so the warning still conveys the cause even when pane lookup fails.
 
 **Why 30s**: dogfood observation shows Claude prompt typically begins output within 3–10s on a trusted folder. 30s is a comfortable upper bound that avoids false positives while still giving useful early feedback before the user gives up. Not a runtime knob; `WATCHDOG_DELAY_MS = 30_000` is a module-level constant in runner.ts.
 
-**Test strategy (ESM-safe)**: imported `const` bindings are read-only under `"type": "module"` (package.json). Tests therefore use `vi.useFakeTimers()` + `vi.advanceTimersByTimeAsync(30_000)` and assert the hint-emission side effect. No mutation of `WATCHDOG_DELAY_MS` is required. If a test needs a shorter delay for a non-fake-timer scenario, the module exports `__setWatchdogDelayMsForTesting(ms: number): void` (wraps a private `let _delayMs`) — but the default path uses fake timers and does **not** call this setter.
+**Test strategy (ESM-safe, fake-timer only)**: imported `const` bindings are read-only under `"type": "module"` (package.json). Tests use `vi.useFakeTimers()` + `vi.advanceTimersByTimeAsync(WATCHDOG_DELAY_MS)` and assert the hint-emission side effect — no mutation of the constant is required. The module's only exported interface is `WATCHDOG_DELAY_MS` (see §4.2); no `__setWatchdogDelayMsForTesting` setter is introduced (earlier draft mentioned one but was dropped to keep the module surface minimal).
 
 **Only fires once per phase**: re-entering the same phase (retry, reopen) arms a new timer with a fresh `attemptId`. No cross-phase suppression — each phase entry independently arms one.
 
@@ -273,7 +275,7 @@ Call-site migration:
 - `src/resume.ts` L173 — same replacement (inside `handleResume` phase-6 error retry branch).
 - `src/resume.ts` L218 — same replacement (inside `applyStoredVerifyResult` PASS branch).
 
-Throw semantics preserved — `normalizeArtifactCommit` still throws on git failure; callers retain their existing try/catch boundaries. The force-pass synthetic-report path remains on direct `normalizeArtifactCommit` with its own message (`Phase 6 — eval report (force-pass)`) since it does not participate in the retry-rev scheme.
+Throw semantics preserved — `normalizeArtifactCommit` still throws on git failure; callers retain their existing try/catch boundaries. The force-pass synthetic-report path remains on direct `normalizeArtifactCommit` with its existing message `harness[${state.runId}]: Phase 6 — synthetic eval report (skip)` (see `forcePassVerify` at runner.ts L1003) — unchanged by this bundle, since it does not participate in the retry-rev scheme.
 
 ## 5. Testing
 
@@ -284,7 +286,7 @@ One vitest file per slice, colocated with existing tests:
 | T8-a | `tests/phases/gate-feedback-archival.test.ts` | Retry creates `gate-N-cycle-0-retry-K-feedback.md` (K=0..2). After a Continue escalation + next retry REJECT, archive lives at `gate-N-cycle-1-retry-0-feedback.md` (distinct from cycle-0 archive; no overwrite). APPROVE creates `gate-N-cycle-C-verdict.json` with `verdict:"APPROVE"`. Legacy `gate-N-feedback.md` still written + returned. |
 | T8-b | `tests/phases/interactive-watchdog.test.ts` | Under `vi.useFakeTimers()`: timer arms on claude preset, fires exactly once after `vi.advanceTimersByTimeAsync(WATCHDOG_DELAY_MS)`, is cleared (no late fire) on completed/failed/throw/redirect. Not armed for codex preset. |
 | T8-c | `tests/preflight-claude-at-file.test.ts` | Timeout constant = 10000. Message text contains "delayed" (not "timed out") and "continuing". Exit status ≠ 0 still warns and returns. |
-| T8-d | `tests/phases/eval-report-commit-squash.test.ts` | Retry cycle: commit-count delta per round = 1 (measure via `git rev-list` before/after). Messages contain `rev 1 eval report`, `rev 2 eval report`. `commitEvalReport(state, cwd)` used for all three sites (live runner path + resume.ts L173 + L218) — assert via message title check after simulating each path (live retry; phase-6 error → `handleResume` retry; `applyStoredVerifyResult` PASS). Resume after simulated crash (staged-D only, no worktree entry) resumes cleanly without throw and produces exactly one new `rev K eval report` commit. Force-pass path still writes one synthetic commit with the legacy force-pass message (unchanged). |
+| T8-d | `tests/phases/eval-report-commit-squash.test.ts` | Retry cycle: commit-count delta per round = 1 (measure via `git rev-list` before/after). Messages contain `rev 1 eval report`, `rev 2 eval report`. `commitEvalReport(state, cwd)` used for all three sites (live runner path + resume.ts L173 + L218) — assert via message title check after simulating each path (live retry; phase-6 error → `handleResume` retry; `applyStoredVerifyResult` PASS). Resume after simulated crash (staged-D only, no worktree entry) resumes cleanly without throw and produces exactly one new `rev K eval report` commit. Force-pass path still writes one synthetic commit with the existing message `Phase 6 — synthetic eval report (skip)` (unchanged). |
 
 Test strategy:
 - **T8-b timer tests**: use `vi.useFakeTimers()` + run `vi.advanceTimersByTimeAsync(WATCHDOG_DELAY_MS)`. Mock `runInteractivePhase` to return a controlled Promise so we can time the timer fire against the phase resolution.
