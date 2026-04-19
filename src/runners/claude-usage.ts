@@ -77,6 +77,15 @@ function warn(msg: string): void {
   process.stderr.write(`[harness.claudeUsage] ${msg}\n`);
 }
 
+export function claudeSessionJsonlPath(sessionId: string, cwd: string, homeDir?: string): string {
+  const home = homeDir ?? os.homedir();
+  return path.join(home, '.claude', 'projects', encodeProjectDir(cwd), `${sessionId}.jsonl`);
+}
+
+export function claudeSessionJsonlExists(sessionId: string, cwd: string, homeDir?: string): boolean {
+  return fs.existsSync(claudeSessionJsonlPath(sessionId, cwd, homeDir));
+}
+
 export function readClaudeSessionUsage(input: ReadClaudeSessionUsageInput): ClaudeTokens | null {
   const { sessionId, cwd, phaseStartTs } = input;
   const homeDir = input.homeDir ?? os.homedir();
