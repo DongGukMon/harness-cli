@@ -653,3 +653,71 @@ describe('complexity signal — directive builder', () => {
     }
   });
 });
+
+// ─── Complexity signal: E2E across the three buckets ─────────────────────────
+
+describe('complexity signal — E2E', () => {
+  afterEach(() => {
+    __resetComplexityWarning();
+  });
+
+  function assemblePhase3WithBucket(body: string): string {
+    const tmp = makeTmpDir();
+    const relPath = 'docs/specs/fixture-e2e.md';
+    const abs = path.join(tmp, relPath);
+    fs.mkdirSync(path.dirname(abs), { recursive: true });
+    fs.writeFileSync(abs, body);
+    const state = makeState({
+      phaseAttemptId: { '1': null, '3': 'attempt-e2e', '5': null },
+      artifacts: {
+        spec: relPath,
+        decisionLog: '.harness/my-run/decisions.md',
+        plan: 'docs/plans/fixture.md',
+        checklist: '.harness/my-run/checklist.json',
+        evalReport: 'docs/process/evals/fixture-eval.md',
+      },
+    });
+    const harnessDir = path.join(tmp, '.harness');
+    return assembleInteractivePrompt(3, state, harnessDir);
+  }
+
+  it('renders all three buckets with the expected stanza presence + ordering', () => {
+    const small = assemblePhase3WithBucket('# Fixture\n\n## Complexity\n\nSmall\n');
+    __resetComplexityWarning();
+    const medium = assemblePhase3WithBucket('# Fixture\n\n## Complexity\n\nMedium\n');
+    __resetComplexityWarning();
+    const large = assemblePhase3WithBucket('# Fixture\n\n## Complexity\n\nLarge\n');
+
+    // Bucket-specific markers present/absent.
+    expect(small).toContain('classified **Small**');
+    expect(small).toContain('at most 3 tasks');
+    expect(medium).not.toContain('<complexity_directive>');
+    expect(medium).not.toContain('classified **Small**');
+    expect(medium).not.toContain('classified **Large**');
+    expect(large).toContain('classified **Large**');
+    expect(large).toContain('vertical slices');
+
+    // Cross-bucket length regression: Medium (empty directive) is strictly
+    // shorter than both Small and Large (non-empty directives), and the two
+    // non-empty directives are similarly sized.
+    expect(medium.length).toBeLessThan(small.length);
+    expect(medium.length).toBeLessThan(large.length);
+    expect(Math.abs(small.length - large.length)).toBeLessThan(500);
+  });
+
+  it('unknown complexity token falls back to Medium rendering (empty directive + single warn)', () => {
+    const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      const out = assemblePhase3WithBucket('# Fixture\n\n## Complexity\n\nExtraLarge\n');
+      expect(out).not.toContain('<complexity_directive>');
+      expect(out).not.toContain('classified **Small**');
+      expect(out).not.toContain('classified **Large**');
+      const warnCalls = stderrSpy.mock.calls.filter(
+        (c) => typeof c[0] === 'string' && (c[0] as string).includes('Complexity signal'),
+      );
+      expect(warnCalls.length).toBe(1);
+    } finally {
+      stderrSpy.mockRestore();
+    }
+  });
+});
