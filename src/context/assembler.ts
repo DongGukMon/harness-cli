@@ -53,7 +53,7 @@ const FIVE_AXIS_SPEC_GATE = `
 2. Readability — 섹션 구성이 명확하고 모호 표현이 없는가?
 3. Scope — 단일 구현 plan으로 분해 가능한 크기인가? 여러 독립 프로젝트 섞이지 않음?
 
-Additional required check: spec MUST contain an explicit '## Open Questions' section. Missing/empty-without-rationale → P1.
+Note: Phase 1 resolves design ambiguities live with the developer. Do not penalize for missing "Open Questions" / "TODO" / deferred-items sections — those are intentionally absent.
 `;
 
 const FIVE_AXIS_PLAN_GATE = `
@@ -96,7 +96,7 @@ const FIVE_AXIS_DESIGN_GATE_LIGHT = `
 3. Readability — 섹션 구성이 명확하고 모호 표현이 없는가?
 4. Scope — 단일 구현 세션으로 분해 가능한 크기? 여러 독립 프로젝트 섞이지 않음?
 
-Additional required check: spec MUST contain an explicit '## Open Questions' section. Missing/empty-without-rationale → P1.
+Note: Phase 1 resolves design ambiguities live with the developer. Do not penalize for missing "Open Questions" / "TODO" / deferred-items sections — those are intentionally absent.
 Note: light flow에는 별도 plan 아티팩트가 없다. plan 파일 부재를 finding으로 올리지 말 것. 구현(Phase 5) 아직 수행되지 않음 — 구현 관련 이슈는 Phase 7에서 다룬다.
 `;
 

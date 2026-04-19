@@ -57,7 +57,7 @@ P1 design+plan → P2 pre-impl gate → P5 implement → P6 verify → P7 eval g
 
 light flow에서는:
 - **3 / 4 phase**가 `skipped` 상태로 처리됩니다 (P2/P7 Codex gate는 활성)
-- phase 1이 `## Complexity`, `## Open Questions`, `## Implementation Plan`이 들어간 결합 문서를 만들어야 합니다
+- phase 1이 `## Complexity`, `## Implementation Plan`이 들어간 결합 문서를 만들어야 합니다
 - **P2 (pre-impl gate)**: Codex가 결합 설계 문서를 light flow 전용 design rubric으로 리뷰합니다. REJECT 시 phase 1을 reopen하고, 피드백은 `pendingAction.feedbackPaths`로만 전달됩니다 (Gate 2는 `carryoverFeedback`를 쓰지 않음).
 - phase 7 피드백이 구현 범위면 **phase 5**, 설계/혼합 범위면 **phase 1**을 다시 엽니다
 - gate retry 한도: **light P2 = 3**, **light P7 = 5**, full flow = 3

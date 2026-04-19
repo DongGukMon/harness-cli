@@ -529,7 +529,7 @@ export function completeInteractivePhaseFromFreshSentinel(
         }
       }
 
-      // Light + phase 1: checklist schema + '## Open Questions' + '## Implementation Plan' headers
+      // Light + phase 1: checklist schema + '## Implementation Plan' header
       if (state.flow === 'light' && phase === 1) {
         const checklistAbs = isAbsolute(state.artifacts.checklist)
           ? state.artifacts.checklist
@@ -541,7 +541,6 @@ export function completeInteractivePhaseFromFreshSentinel(
           : join(cwd, state.artifacts.spec);
         try {
           const body = readFileSync(specAbs, 'utf-8');
-          if (!/^##\s+Open\s+Questions\s*$/m.test(body)) return false;
           if (!/^##\s+Implementation\s+Plan\s*$/m.test(body)) return false;
         } catch {
           return false;

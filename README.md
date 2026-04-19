@@ -57,7 +57,7 @@ P1 design+plan → P2 pre-impl gate → P5 implement → P6 verify → P7 eval g
 
 In light flow:
 - phases **3 / 4** are marked as `skipped` (P2 and P7 remain active Codex gates)
-- phase 1 must produce a combined design document with `## Complexity`, `## Open Questions`, and `## Implementation Plan`
+- phase 1 must produce a combined design document with `## Complexity` and `## Implementation Plan`
 - **P2 (pre-impl gate)**: Codex reviews the combined design doc with a light-flow design rubric. REJECT reopens phase 1; the feedback is delivered only via `pendingAction.feedbackPaths` (no `carryoverFeedback` at Gate 2).
 - phase 7 can reopen **phase 5** for impl-only feedback, or **phase 1** for design/mixed feedback
 - gate retry limits: **light P2 = 3**, **light P7 = 5**, full flow = 3

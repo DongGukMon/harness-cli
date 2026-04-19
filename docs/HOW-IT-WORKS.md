@@ -74,7 +74,7 @@ The control panel renders skipped phases as `(skipped)` and the phase loop jumps
 
 Light-flow specifics:
 - P1 writes a combined design+plan doc to `docs/specs/<runId>-design.md`
-- the combined doc must include `## Complexity`, `## Open Questions`, and `## Implementation Plan`
+- the combined doc must include `## Complexity` and `## Implementation Plan`
 - `checklist.json` still exists as a separate file under `.harness/<runId>/checklist.json`
 - `phase-harness resume --light` is rejected because flow is frozen at run creation
 - P2 (pre-impl gate): Codex reviews the combined design doc using a 4-axis rubric. REJECT → immediate P1 reopen with feedback delivered via `pendingAction.feedbackPaths` only; `state.carryoverFeedback` is not set at Gate 2. Gate retry limit 3 (same as full-flow P2). Legacy light runs created before P2 activation keep `phases['2']='skipped'` — activation is forward-only via `createInitialState`, not retroactive migration.
