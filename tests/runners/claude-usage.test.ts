@@ -5,6 +5,8 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
   encodeProjectDir,
   readClaudeSessionUsage,
+  claudeSessionJsonlPath,
+  claudeSessionJsonlExists,
 } from '../../src/runners/claude-usage.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -326,5 +328,52 @@ describe('readClaudeSessionUsage', () => {
     } finally {
       readSpy.mockRestore();
     }
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// claudeSessionJsonlPath + claudeSessionJsonlExists
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('claudeSessionJsonlPath', () => {
+  it('returns the expected path under homeDir/.claude/projects/<encodedCwd>/<id>.jsonl', () => {
+    const result = claudeSessionJsonlPath(
+      '00000000-0000-4000-8000-000000000001',
+      '/tmp/fake-cwd',
+      '/fake-home',
+    );
+    expect(result).toBe('/fake-home/.claude/projects/-tmp-fake-cwd/00000000-0000-4000-8000-000000000001.jsonl');
+  });
+
+  it('uses os.homedir() when homeDir is omitted', () => {
+    const result = claudeSessionJsonlPath('some-id', '/cwd');
+    expect(result).toContain('/.claude/projects/');
+    expect(result.endsWith('some-id.jsonl')).toBe(true);
+  });
+});
+
+describe('claudeSessionJsonlExists', () => {
+  let tmpHome: string;
+
+  beforeEach(() => {
+    tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'jsonl-exists-test-'));
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpHome, { recursive: true, force: true });
+  });
+
+  it('returns true when the JSONL file exists', () => {
+    const sessionId = '11111111-1111-4111-8111-111111111111';
+    const cwd = '/tmp/test-cwd';
+    const dir = path.join(tmpHome, '.claude', 'projects', encodeProjectDir(cwd));
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, `${sessionId}.jsonl`), '');
+    expect(claudeSessionJsonlExists(sessionId, cwd, tmpHome)).toBe(true);
+  });
+
+  it('returns false when the JSONL file does not exist', () => {
+    const sessionId = '22222222-2222-4222-8222-222222222222';
+    expect(claudeSessionJsonlExists(sessionId, '/tmp/nonexistent-cwd', tmpHome)).toBe(false);
   });
 });

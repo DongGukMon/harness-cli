@@ -210,6 +210,7 @@ export async function runInteractivePhase(
   runDir: string,
   cwd: string,
   attemptId: string,
+  resume: boolean = false,
 ): Promise<InteractiveResult & { attemptId: string }> {
   // Pre-set attemptId before preparePhase so it can respect the caller-assigned ID
   state.phaseAttemptId[String(phase)] = attemptId;
@@ -233,7 +234,7 @@ export async function runInteractivePhase(
   // Dispatch to runner
   if (preset.runner === 'claude') {
     const { pid: claudePid } = await runClaudeInteractive(
-      phase, updatedState, preset, harnessDir, runDir, promptFile,
+      phase, updatedState, preset, harnessDir, runDir, promptFile, resume,
     );
     const sentinelPath = path.join(runDir, `phase-${phase}.done`);
     const resolvedAttemptId = updatedState.phaseAttemptId[String(phase)] ?? attemptId;

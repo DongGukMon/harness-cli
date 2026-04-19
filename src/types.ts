@@ -38,6 +38,12 @@ export interface GateSessionInfo {
   lastOutcome: 'approve' | 'reject' | 'error';
 }
 
+export interface ClaudeSessionInfo {
+  runner: 'claude';
+  model: string;
+  effort: string;
+}
+
 export interface HarnessState {
   runId: string;
   flow: FlowMode;
@@ -69,6 +75,8 @@ export interface HarnessState {
   phaseReopenFlags: Record<string, boolean>;    // keys "1","3","5"
   // Per-phase Codex session resume (§4.1 of spec)
   phaseCodexSessions: Record<'2' | '4' | '7', GateSessionInfo | null>;
+  // Per-phase Claude session resume (same-phase same-session policy)
+  phaseClaudeSessions: Record<'1' | '3' | '5', ClaudeSessionInfo | null>;
   lastWorkspacePid: number | null;
   lastWorkspacePidStartTime: number | null;
   tmuxSession: string;
@@ -218,6 +226,7 @@ export type LogEvent =
       reopenFromGate?: number | null;
       retryIndex?: number;
       preset?: { id: string; runner: 'claude' | 'codex'; model: string; effort: string };
+      claudeResumeSessionId?: string | null;
     })
   | (LogEventBase & {
       event: 'gate_verdict';

@@ -4,7 +4,7 @@
 
 It supports:
 - a **full 7-phase flow**: spec → spec gate → plan → plan gate → implement → verify → eval gate
-- a **light 4-phase flow** for smaller tasks: design+plan → implement → verify → eval gate
+- a **light 5-phase flow** for smaller tasks: design+plan → pre-impl gate → implement → verify → eval gate
 - **per-phase model preset selection** at start/resume
 - **tmux-based crash recovery** with `resume`, `status`, `list`, `skip`, and `jump`
 - **optional session logging** and a live footer with elapsed time and token totals
@@ -52,14 +52,15 @@ Use the full flow when independent pre-implementation review matters: migrations
 ### Light flow (`phase-harness start --light "task"`)
 
 ```text
-P1 design+plan → P5 implement → P6 verify → P7 eval gate
+P1 design+plan → P2 pre-impl gate → P5 implement → P6 verify → P7 eval gate
 ```
 
 In light flow:
-- phases **2 / 3 / 4** are marked as `skipped`
+- phases **3 / 4** are marked as `skipped` (P2 and P7 remain active Codex gates)
 - phase 1 must produce a combined design document with `## Complexity` and `## Implementation Plan`
+- **P2 (pre-impl gate)**: Codex reviews the combined design doc with a light-flow design rubric. REJECT reopens phase 1; the feedback is delivered only via `pendingAction.feedbackPaths` (no `carryoverFeedback` at Gate 2).
 - phase 7 can reopen **phase 5** for impl-only feedback, or **phase 1** for design/mixed feedback
-- light-flow gate retry limit is **5** (full flow stays at **3**)
+- gate retry limits: **light P2 = 3**, **light P7 = 5**, full flow = 3
 - the flow is frozen when the run is created, so `phase-harness resume --light` is rejected
 
 ---
@@ -212,7 +213,7 @@ Flags:
 - `--require-clean` — block if the working tree has any uncommitted changes
 - `--auto` — autonomous mode for escalation handling
 - `--enable-logging` — write session logs under `~/.harness/sessions/...`
-- `--light` — use the 4-phase light flow
+- `--light` — use the 5-phase light flow (P1 design+plan → P2 pre-impl gate → P5 → P6 → P7)
 - `--codex-no-isolate` — disable per-run `CODEX_HOME` isolation for Codex subprocesses; not recommended
 - global `--root <dir>` — use `<dir>/.harness` as the harness root
 
