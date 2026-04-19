@@ -19,6 +19,10 @@ import { isValidChecklistSchema } from './checklist.js';
  * if either drifts, the E2E tests in assembler.test.ts should catch it.
  */
 function specHasValidComplexity(specBody: string): boolean {
+  // Spec Goal 1: "exactly one `## Complexity` section." Count matches before
+  // reading the body token.
+  const allHeaders = specBody.match(/^##\s+Complexity\s*$/gm);
+  if (!allHeaders || allHeaders.length !== 1) return false;
   const headerMatch = specBody.match(/^##\s+Complexity\s*$/m);
   if (!headerMatch) return false;
   const offset = (headerMatch.index ?? 0) + headerMatch[0].length;

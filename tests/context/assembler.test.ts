@@ -524,6 +524,39 @@ describe('complexity signal — Phase 3 prompt injection', () => {
     }
   });
 
+  it('non-ENOENT I/O error from readFileSync propagates (spec R4: only swallow ENOENT)', () => {
+    // Spec R4: "fs.readFileSync(specPath, 'utf-8') (swallow ENOENT → treat as
+    // null parse)." Unexpected read errors (EACCES, EIO, …) must NOT silently
+    // downgrade to Medium — they indicate real infrastructure failure.
+    const tmp = makeTmpDir();
+    const { state, harnessDir } = makePhase3State(
+      tmp,
+      '# Fixture\n\n## Complexity\n\nSmall\n',
+    );
+    const readSpy = vi.spyOn(fs, 'readFileSync').mockImplementation(((
+      ...args: unknown[]
+    ) => {
+      const p = args[0];
+      if (typeof p === 'string' && p.endsWith('fixture-complexity.md')) {
+        const err = new Error('permission denied') as NodeJS.ErrnoException;
+        err.code = 'EACCES';
+        throw err;
+      }
+      // Fall through to the real implementation for template + skill reads.
+      return (fs.readFileSync as unknown as (...a: unknown[]) => unknown).call(
+        fs,
+        ...args,
+      ) as string;
+    }) as typeof fs.readFileSync);
+    try {
+      expect(() => assembleInteractivePrompt(3, state, harnessDir)).toThrow(
+        /permission denied|EACCES/,
+      );
+    } finally {
+      readSpy.mockRestore();
+    }
+  });
+
   it('Phase 1 prompt is NOT affected (directive only injects at Phase 3)', () => {
     const tmp = makeTmpDir();
     const { state, harnessDir } = makePhase3State(
@@ -591,6 +624,19 @@ describe('complexity signal — parser', () => {
     expect(parseComplexitySignal('## Complexity: Small\n\nSmall\n')).toBeNull();
     expect(parseComplexitySignal('## Complexity: Small\n\n')).toBeNull();
   });
+
+  it('returns null when the spec contains two `## Complexity` sections (spec Goal 1: "exactly one")', () => {
+    // Spec Goals item 1: "Phase 1 spec must contain exactly one ## Complexity
+    // section." Duplicate headers — even with identical bodies — are an author
+    // error and must not silently pass.
+    const twoHeaders =
+      '# Title\n\n## Complexity\n\nSmall\n\n## Other\n\n## Complexity\n\nLarge\n';
+    expect(parseComplexitySignal(twoHeaders)).toBeNull();
+
+    const twoHeadersSameBody =
+      '## Complexity\n\nSmall\n\n## Complexity\n\nSmall\n';
+    expect(parseComplexitySignal(twoHeadersSameBody)).toBeNull();
+  });
 });
 
 // ─── Complexity signal: directive builder ─────────────────────────────────────
@@ -636,6 +682,27 @@ describe('complexity signal — directive builder', () => {
     } finally {
       stderrSpy.mockRestore();
     }
+  });
+
+  it('exact-snapshot — Small directive matches spec R3 byte-for-byte (drift guard)', () => {
+    // Spec R3 declares the directive text is normative ("exact directive text
+    // is part of this spec; tests snapshot these strings"). Freeze it.
+    expect(buildComplexityDirective('small')).toBe(
+      '<complexity_directive>\n' +
+        'This task is classified **Small**. Keep the plan to **at most 3 tasks**. ' +
+        'Do not emit per-function pseudocode or ASCII diagrams. Prefer bundling related edits in one task over splitting them. ' +
+        'Keep `checklist.json` to at most 4 `checks` entries — typecheck + test + build is usually enough.\n' +
+        '</complexity_directive>\n',
+    );
+  });
+
+  it('exact-snapshot — Large directive matches spec R3 byte-for-byte (drift guard)', () => {
+    expect(buildComplexityDirective('large')).toBe(
+      '<complexity_directive>\n' +
+        'This task is classified **Large**. Decompose into clear vertical slices with explicit dependency order. ' +
+        'Capture architecturally-relevant decisions as short ADR blurbs inline in the plan. Standard depth otherwise.\n' +
+        '</complexity_directive>\n',
+    );
   });
 
   it('__resetComplexityWarning re-arms the warning', () => {

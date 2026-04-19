@@ -107,6 +107,11 @@ export function __resetComplexityWarning(): void {
 export function parseComplexitySignal(
   specText: string,
 ): 'small' | 'medium' | 'large' | null {
+  // Spec Goal 1: "Phase 1 spec must contain exactly one `## Complexity`
+  // section." Duplicate headers are rejected (author error) — not silently
+  // reduced to the first one.
+  const allHeaders = specText.match(/^##\s+Complexity\s*$/gm);
+  if (!allHeaders || allHeaders.length !== 1) return null;
   const headerMatch = specText.match(/^##\s+Complexity\s*$/m);
   if (!headerMatch) return null;
   const offset = (headerMatch.index ?? 0) + headerMatch[0].length;
@@ -457,8 +462,9 @@ export function assembleInteractivePrompt(
   const playbookDir = path.join(__dirname, 'playbooks');
 
   // Phase 3 complexity directive: parse the spec's `## Complexity` signal and
-  // inject the matching stanza. Read errors / missing section → empty directive
-  // (buildComplexityDirective emits a single stderr warn per process).
+  // inject the matching stanza. Spec R4: swallow ENOENT (missing file → null
+  // parse → Medium fallback + warn); any other I/O error (EACCES, EIO, …) is
+  // unexpected and must surface, not silently downgrade to Medium.
   let complexityDirective = '';
   if (phase === 3) {
     const specAbs = path.isAbsolute(state.artifacts.spec)
@@ -467,8 +473,13 @@ export function assembleInteractivePrompt(
     let specText: string | null = null;
     try {
       specText = fs.readFileSync(specAbs, 'utf-8');
-    } catch {
-      specText = null;
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === 'ENOENT') {
+        specText = null;
+      } else {
+        throw err;
+      }
     }
     const level = specText !== null ? parseComplexitySignal(specText) : null;
     complexityDirective = buildComplexityDirective(level);

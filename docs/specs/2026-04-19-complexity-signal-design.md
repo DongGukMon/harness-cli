@@ -109,12 +109,32 @@ Medium — touches 8 files, ~300 LoC
 
 `buildComplexityDirective(level: 'small' | 'medium' | 'large' | null): string`.
 
-Mapping (exact directive text is part of this spec; tests snapshot these strings):
+Mapping (exact directive text is part of this spec; tests snapshot these strings — see `tests/context/assembler.test.ts > complexity signal — directive builder > exact-snapshot`):
 
-- `small` → a 4–6 line stanza: "`<complexity_directive>\nThis task is classified **Small**. Keep the plan to **at most 3 tasks**. Do not emit per-function pseudocode or ASCII diagrams. Prefer bundling related edits in one task over splitting them. Keep the eval checklist to 3–4 commands at the command level (typecheck + test + build is usually enough).\n</complexity_directive>\n`"
+- `small` → a 4–6 line stanza:
+  ```
+  <complexity_directive>
+  This task is classified **Small**. Keep the plan to **at most 3 tasks**. Do not emit per-function pseudocode or ASCII diagrams. Prefer bundling related edits in one task over splitting them. Keep `checklist.json` to at most 4 `checks` entries — typecheck + test + build is usually enough.
+  </complexity_directive>
+  ```
 - `medium` → empty string (today's behavior).
-- `large` → a 3–4 line stanza: "`<complexity_directive>\nThis task is classified **Large**. Decompose into clear vertical slices with explicit dependency order. Capture architecturally-relevant decisions as short ADR blurbs inline in the plan. Standard depth otherwise.\n</complexity_directive>\n`"
+- `large` → a 3–4 line stanza:
+  ```
+  <complexity_directive>
+  This task is classified **Large**. Decompose into clear vertical slices with explicit dependency order. Capture architecturally-relevant decisions as short ADR blurbs inline in the plan. Standard depth otherwise.
+  </complexity_directive>
+  ```
 - `null` (fallback from parse failure) → empty string + single `stderr.write` warning the first time per run; do NOT repeat the warning on subsequent Phase 3 reopens within the same process.
+
+> **Post-hoc spec correction (applied 2026-04-19):** earlier drafts of R3
+> phrased the Small stanza's final sentence as *"Keep the eval checklist to
+> 3–4 commands at the command level (typecheck + test + build is usually
+> enough)."* That wording did not match the harness contract — the verifier
+> consumes `checklist.json` with `{checks: [{name, command}]}` entries, not
+> free-form "commands." The spec has been updated to the implementation's
+> actual wording so the spec, the snapshot test, and the runtime directive
+> are aligned. See Plan §Deviations #3 and the `exact-snapshot` test above
+> for the enforcement mechanism against future drift.
 
 ### R4 — Assembler wiring
 
