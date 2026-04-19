@@ -15,7 +15,7 @@ Full flow
 P1 spec → P2 spec gate → P3 plan → P4 plan gate → P5 implement → P6 verify → P7 eval gate
 
 Light flow (`--light`)
-P1 design+plan → P5 implement → P6 verify → P7 eval gate
+P1 design+plan → P2 pre-impl gate → P5 implement → P6 verify → P7 eval gate
 ```
 
 Key invariants:
@@ -47,7 +47,7 @@ Built-in presets come from `src/config.ts`:
 
 Default assignments:
 - full flow: P1 `opus-1m-high`, P2 `codex-high`, P3 `sonnet-1m-high`, P4 `codex-high`, P5 `sonnet-1m-high`, P7 `codex-high`
-- light flow: P1 `opus-1m-high`, P5 `sonnet-1m-high`, P7 `codex-high`
+- light flow: P1 `opus-1m-high`, P2 `codex-high`, P5 `sonnet-1m-high`, P7 `codex-high`
 
 Users can change every non-verify phase preset during `harness start` and `harness resume`.
 Selections persist in `state.phasePresets`.
@@ -68,15 +68,17 @@ Phase outputs are:
 
 ### Light flow (`harness start --light`)
 
-Light flow skips phases 2, 3, and 4 by initializing them as `skipped`.
-The control panel renders them as `(skipped)` and the phase loop jumps past them.
+Light flow skips phases 3 and 4 by initializing them as `skipped`.
+Phase 2 is active (`pending`) and runs a pre-impl Codex review of the combined design doc.
+The control panel renders skipped phases as `(skipped)` and the phase loop jumps past them.
 
 Light-flow specifics:
 - P1 writes a combined design+plan doc to `docs/specs/<runId>-design.md`
 - the combined doc must include `## Complexity`, `## Open Questions`, and `## Implementation Plan`
 - `checklist.json` still exists as a separate file under `.harness/<runId>/checklist.json`
 - `harness resume --light` is rejected because flow is frozen at run creation
-- gate retry limit is 5 in light flow, 3 in full flow
+- P2 (pre-impl gate): Codex reviews the combined design doc using a 4-axis rubric. REJECT → immediate P1 reopen with feedback delivered via `pendingAction.feedbackPaths` only; `state.carryoverFeedback` is not set at Gate 2. Gate retry limit 3 (same as full-flow P2). Legacy light runs created before P2 activation keep `phases['2']='skipped'` — activation is forward-only via `createInitialState`, not retroactive migration.
+- gate retry limit: light P2 = 3, light P7 = 5, full flow = 3
 - on P7 `REJECT`:
   - `Scope: impl` → reopen P5
   - `Scope: design`, `Scope: mixed`, or missing scope → reopen P1 and preserve carryover feedback for P5

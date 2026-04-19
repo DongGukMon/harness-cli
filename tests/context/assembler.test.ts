@@ -419,7 +419,7 @@ describe('buildGatePromptPhase7 — flow-aware (ADR-12)', () => {
     expect(result).toContain('결합 design spec');
     expect(result).toContain('별도의 plan 아티팩트가 없다');
     expect(result).not.toContain('spec + plan + eval report + diff');
-    expect(result).toContain('4-phase light harness lifecycle');
+    expect(result).toContain('5-phase light harness lifecycle');
   });
 
   it('full Gate 7 (fresh) contract text is unchanged', () => {
@@ -808,5 +808,64 @@ describe('complexity signal — E2E', () => {
     } finally {
       stderrSpy.mockRestore();
     }
+  });
+});
+
+describe('assembleGatePrompt(2) — light flow + full-flow regression (SC#3 / Inv #7-9)', () => {
+  function writeLightSpec(cwd: string, state: HarnessState, content = '# combined spec\nspec content'): void {
+    const specAbsPath = path.join(cwd, state.artifacts.spec);
+    fs.mkdirSync(path.dirname(specAbsPath), { recursive: true });
+    fs.writeFileSync(specAbsPath, content);
+  }
+
+  it('full-flow Gate 2 output is byte-identical after change (Inv #9 — exact snapshot)', () => {
+    const cwd = makeTmpDir();
+    const state = makeState();  // flow defaults to 'full'
+    const specAbsPath = path.join(cwd, state.artifacts.spec);
+    fs.mkdirSync(path.dirname(specAbsPath), { recursive: true });
+    fs.writeFileSync(specAbsPath, '# Full Spec\nfull flow content');
+    const result = assembleGatePrompt(2, state, '/tmp/harness', cwd);
+    expect(typeof result).toBe('string');
+    // toMatchSnapshot captures the exact bytes on first run and enforces them on future runs
+    expect(result as string).toMatchSnapshot();
+  });
+
+  it('light Gate 2 contains FIVE_AXIS_DESIGN_GATE_LIGHT rubric marker (Inv #7)', () => {
+    const cwd = makeTmpDir();
+    const state = makeState({
+      flow: 'light',
+      artifacts: {
+        spec: 'docs/specs/my-run-design.md',
+        plan: '',
+        decisionLog: '.harness/my-run/decisions.md',
+        checklist: '.harness/my-run/checklist.json',
+        evalReport: 'docs/process/evals/my-run-eval.md',
+      },
+    });
+    writeLightSpec(cwd, state);
+    const result = assembleGatePrompt(2, state, '/tmp/harness', cwd);
+    expect(typeof result).toBe('string');
+    const prompt = result as string;
+    expect(prompt).toContain('Phase 2 — design gate, light flow');
+    expect(prompt).toContain('5-phase light harness lifecycle');
+    expect(prompt).toContain('combined design spec');
+    // No plan artifact section injected (REVIEWER_CONTRACT_BASE mentions <plan> in examples, so check for the tag+newline pattern)
+    expect(prompt).not.toContain('<plan>\n');
+    // Snapshot — locks the exact light P2 prompt bytes for regression detection
+    expect(prompt).toMatchSnapshot();
+  });
+
+  it('full-flow Gate 2 does NOT contain light stanza (no regression to full path)', () => {
+    const cwd = makeTmpDir();
+    const state = makeState();  // flow='full' by default
+    const specAbsPath = path.join(cwd, state.artifacts.spec);
+    fs.mkdirSync(path.dirname(specAbsPath), { recursive: true });
+    fs.writeFileSync(specAbsPath, '# spec');
+    const result = assembleGatePrompt(2, state, '/tmp/harness', cwd);
+    expect(typeof result).toBe('string');
+    const prompt = result as string;
+    expect(prompt).toContain('Phase 2 — spec gate');
+    expect(prompt).not.toContain('5-phase light harness lifecycle');
+    expect(prompt).not.toContain('Phase 2 — design gate, light flow');
   });
 });

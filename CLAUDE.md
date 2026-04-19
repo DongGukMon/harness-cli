@@ -4,7 +4,7 @@
 
 ## 프로젝트 한 줄
 
-`harness-cli`는 AI 에이전트 개발 라이프사이클을 7단계 파이프라인(spec → gate → plan → gate → impl → verify → eval gate) 또는 `--light` 4단계 파이프라인(P1 → P5 → P6 → P7)으로 실행하는 CLI. runner/model은 phase preset으로 결정되고, 기본 gate runner는 Codex CLI, 기본 interactive runner는 Claude Code CLI다.
+`harness-cli`는 AI 에이전트 개발 라이프사이클을 7단계 파이프라인(spec → gate → plan → gate → impl → verify → eval gate) 또는 `--light` 5단계 파이프라인(P1 → P2 → P5 → P6 → P7)으로 실행하는 CLI. runner/model은 phase preset으로 결정되고, 기본 gate runner는 Codex CLI, 기본 interactive runner는 Claude Code CLI다.
 
 ## 먼저 읽을 것
 
@@ -18,7 +18,8 @@
    - `docs/specs/2026-04-18-gate-prompt-hardening-design.md` + `docs/plans/2026-04-18-gate-prompt-hardening.md`
    - `docs/specs/2026-04-18-harness-skills-synthesis-{INTENT,design}.md` + `docs/plans/2026-04-18-harness-skills-synthesis.md`
    - `docs/specs/2026-04-18-claude-token-capture-design.md`
-   - `docs/specs/2026-04-18-light-flow-design.md` + `docs/plans/2026-04-18-light-flow.md` (**현재는 구현 완료 상태**. 구현 여부는 설계 문서가 아니라 `README*`, `docs/HOW-IT-WORKS*`, `src/`를 기준으로 판단할 것.)
+   - `docs/specs/2026-04-18-light-flow-design.md` + `docs/plans/2026-04-18-light-flow.md` (light flow 초기 설계; ADR-4는 `2026-04-19-untitled-2-design.md` ADR-15로 대체됨)
+   - `docs/specs/2026-04-19-untitled-2-design.md` + `docs/plans/2026-04-19-untitled-2.md` — light flow Phase 2 pre-impl Codex gate 활성화 (ADR-15~20)
 
 ## 문서 동기화 의무
 
@@ -110,7 +111,7 @@ Session meta: `~/.harness/sessions/<hash>/<runId>/{events.jsonl, meta.json, summ
 pnpm build                                    # 현 브랜치 변경분을 dist에 반영 (필수)
 harness run --enable-logging "<task>"         # 7-phase 풀 플로우
 # 또는 경량:
-harness start --light "<task>"                # 4-phase 경량 (P1 → P5 → P6 → P7)
+harness start --light "<task>"                # 5-phase 경량 (P1 → P2 → P5 → P6 → P7)
 ```
 
 빌드 없이는 dist가 갱신되지 않으므로 소스 수정 직후엔 **항상 `pnpm build`** — 그 뒤 CLI 실행 결과가 실제 변경분을 반영한다. 내부 phase 순서·gate 규약·자율 모드 정책(Codex 3 reject → 4회째 강제 통과)은 전역 규칙 `harness-lifecycle` 섹션 참조.

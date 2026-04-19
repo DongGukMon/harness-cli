@@ -116,16 +116,18 @@ export const PHASE_ARTIFACT_FILES: Record<number, string[]> = {
   3: ['plan', 'checklist'],
 };
 
-export const LIGHT_REQUIRED_PHASE_KEYS = ['1', '5', '7'] as const;
+export const LIGHT_REQUIRED_PHASE_KEYS = ['1', '2', '5', '7'] as const;
 
 export const LIGHT_PHASE_DEFAULTS: PhasePresetMap = {
   1: 'opus-1m-high',
+  2: 'codex-high',
   5: 'sonnet-1m-high',
   7: 'codex-high',
 };
 
 export const LEGACY_LIGHT_PHASE_DEFAULTS: PhasePresetMap = {
   1: 'opus-high',
+  2: 'codex-high',
   5: 'sonnet-high',
   7: 'codex-high',
 };
@@ -161,6 +163,7 @@ export function getReopenTarget(flow: FlowMode, gate: GatePhase): InteractivePha
   return 5; // gate 7 + full
 }
 
-export function getGateRetryLimit(flow: FlowMode): number {
+export function getGateRetryLimit(flow: FlowMode, gate?: GatePhase): number {
+  if (flow === 'light' && gate === 2) return GATE_RETRY_LIMIT_FULL;
   return flow === 'light' ? GATE_RETRY_LIMIT_LIGHT : GATE_RETRY_LIMIT_FULL;
 }

@@ -807,7 +807,7 @@ async function replayPendingAction(
         const gatePhase = action.targetPhase as 2 | 4 | 7;
         const retryIndex = Math.max(
           0,
-          (state.gateRetries[String(gatePhase)] ?? getGateRetryLimit(state.flow)) - 1,
+          (state.gateRetries[String(gatePhase)] ?? getGateRetryLimit(state.flow, gatePhase)) - 1,
         );
         await handleGateEscalation(
           gatePhase,

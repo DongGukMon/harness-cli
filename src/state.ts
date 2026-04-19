@@ -209,7 +209,7 @@ export function createInitialState(
 
   const phases: Record<string, PhaseStatus> =
     flow === 'light'
-      ? { '1': 'pending', '2': 'skipped', '3': 'skipped', '4': 'skipped',
+      ? { '1': 'pending', '2': 'pending', '3': 'skipped', '4': 'skipped',
           '5': 'pending', '6': 'pending', '7': 'pending' }
       : { '1': 'pending', '2': 'pending', '3': 'pending', '4': 'pending',
           '5': 'pending', '6': 'pending', '7': 'pending' };
