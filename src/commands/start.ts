@@ -18,6 +18,7 @@ export interface StartOptions {
   enableLogging?: boolean;
   light?: boolean;
   codexNoIsolate?: boolean;
+  strictTree?: boolean;
 }
 
 export async function startCommand(task: string | undefined, options: StartOptions = {}): Promise<void> {
@@ -112,6 +113,7 @@ export async function startCommand(task: string | undefined, options: StartOptio
       options.enableLogging ?? false,
       options.light ? 'light' : 'full',
       options.codexNoIsolate ?? false,
+      options.strictTree ?? false,
     );
 
     if (options.codexNoIsolate) {

@@ -217,4 +217,20 @@ describe('startCommand', () => {
     const stderr = stderrSpy.mock.calls.map((c: any) => c[0]).join('');
     expect(stderr).not.toMatch(/CODEX_HOME isolation disabled/i);
   });
+
+  it('state.strictTree=true when --strict-tree passed', async () => {
+    await startCommand('test task', { root: repo.path, strictTree: true });
+    const harnessDir = join(repo.path, '.harness');
+    const runId = readFileSync(join(harnessDir, 'current-run'), 'utf-8').trim();
+    const state = JSON.parse(readFileSync(join(harnessDir, runId, 'state.json'), 'utf-8'));
+    expect(state.strictTree).toBe(true);
+  });
+
+  it('state.strictTree=false (default) when --strict-tree omitted', async () => {
+    await startCommand('test task', { root: repo.path });
+    const harnessDir = join(repo.path, '.harness');
+    const runId = readFileSync(join(harnessDir, 'current-run'), 'utf-8').trim();
+    const state = JSON.parse(readFileSync(join(harnessDir, runId, 'state.json'), 'utf-8'));
+    expect(state.strictTree).toBe(false);
+  });
 });
