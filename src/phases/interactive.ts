@@ -97,7 +97,6 @@ export function validatePhaseArtifacts(
   cwd: string
 ): boolean {
   if (phase === 1 || phase === 3) {
-    const openedAt = state.phaseOpenedAt[String(phase)];
     const artifactKeys = getPhaseArtifactFiles(state.flow, phase);
     if (artifactKeys.length === 0) return false;
 
@@ -106,10 +105,9 @@ export function validatePhaseArtifacts(
       const absPath = path.isAbsolute(relPath) ? relPath : path.join(cwd, relPath);
       try {
         const stat = fs.statSync(absPath);
-        // Must be non-empty
+        // Must be non-empty. Freshness is proven by sentinel attemptId, not mtime:
+        // reopens may legitimately leave artifacts untouched (rev-invariant case).
         if (stat.size === 0) return false;
-        // mtime must be >= phaseOpenedAt (both in ms)
-        if (openedAt !== null && stat.mtimeMs < openedAt) return false;
       } catch {
         // File doesn't exist
         return false;

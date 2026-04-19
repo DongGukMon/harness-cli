@@ -451,10 +451,13 @@ describe('validatePhaseArtifacts — Phase 1', () => {
     expect(result).toBe(false);
   });
 
-  it('returns false when artifact mtime is before phaseOpenedAt (stale file)', () => {
+  it('accepts rev-invariant artifacts when mtime < phaseOpenedAt (reopen semantic)', () => {
+    // Reopen scenario: Claude decides the artifact is rev-invariant and does
+    // not touch it. Sentinel freshness (attemptId match, checked elsewhere) is
+    // the real safety gate. Validator must accept. Regression guard for the
+    // P1-NEW mtime staleness bug observed in gate-convergence dogfood Round 2.
     const cwd = makeTmpDir();
-    // Set phaseOpenedAt to far in the future so existing files appear stale
-    const futureOpenedAt = (Math.floor(Date.now() / 1000) + 3600) * 1000; // 1 hour from now
+    const futureOpenedAt = (Math.floor(Date.now() / 1000) + 3600) * 1000; // 1h from now
     const state = makeState({
       phaseOpenedAt: { '1': futureOpenedAt, '3': null, '5': null },
     });
@@ -467,7 +470,7 @@ describe('validatePhaseArtifacts — Phase 1', () => {
     fs.writeFileSync(decPath, '# Decisions');
 
     const result = validatePhaseArtifacts(1, state, cwd);
-    expect(result).toBe(false);
+    expect(result).toBe(true);
   });
 });
 
@@ -523,6 +526,29 @@ describe('validatePhaseArtifacts — Phase 3', () => {
 
     const result = validatePhaseArtifacts(3, state, cwd);
     expect(result).toBe(false);
+  });
+
+  it('accepts rev-invariant artifacts when mtime < phaseOpenedAt (reopen semantic)', () => {
+    // Phase 3 reopen analog of the Phase 1 reopen test. Claude may decide the
+    // plan+checklist are rev-invariant under Gate 4 feedback and leave them.
+    const cwd = makeTmpDir();
+    const futureOpenedAt = (Math.floor(Date.now() / 1000) + 3600) * 1000;
+    const state = makeState({
+      phaseOpenedAt: { '1': null, '3': futureOpenedAt, '5': null },
+    });
+
+    const planPath = path.join(cwd, state.artifacts.plan);
+    const checklistPath = path.join(cwd, state.artifacts.checklist);
+    fs.mkdirSync(path.dirname(planPath), { recursive: true });
+    fs.mkdirSync(path.dirname(checklistPath), { recursive: true });
+    fs.writeFileSync(planPath, '# Plan');
+    fs.writeFileSync(
+      checklistPath,
+      JSON.stringify({ checks: [{ name: 'n', command: 'true' }] }),
+    );
+
+    const result = validatePhaseArtifacts(3, state, cwd);
+    expect(result).toBe(true);
   });
 });
 
