@@ -28,7 +28,7 @@ Summary:
 | a | Gate feedback archival | P2 | After Gate N APPROVE, `gate-N-feedback.md` still contains the last REJECT comments — misleading post-hoc. | Per-retry archives preserved; approve metadata saved to `gate-N-verdict.json`. |
 | b | Folder-trust watchdog | P2 | On first run, Claude blocks on folder-trust dialog; control pane stays silent at "Phase 1 ▶". | After 30s of silence post phase-start, control pane prints a one-shot hint. |
 | c | Preflight `@file` timeout | P3 | `⚠️ preflight: claude @file check timed out (5s); skipping …` prints on every happy-path run. | 10s timeout + softer "delayed" wording. |
-| d | Phase 6 double-commit | P3 | Each verify retry produces two commits (`reset eval report` + `eval report`). 3 retries → 4 phase-6 commits. | One commit per retry (`rev K eval report`). |
+| d | Phase 6 double-commit | P3 | Each verify retry produces two commits (`reset eval report` + `eval report`). N verify rounds → 2·N−1 phase-6 commits (first round 1 commit, each subsequent retry +2). | One commit per verify round (`rev K eval report`), total = `verifyRetries + 1`. |
 
 ## 2. Goals / Non-goals
 
@@ -49,18 +49,20 @@ Summary:
 ### ADR-1 — Gate feedback archival (T8-a)
 
 **Decision**: On every `saveGateFeedback` call, write TWO files:
-1. `gate-N-feedback.md` (existing path, overwrite — backward compat: referenced by `sidecarFeedback`).
-2. `gate-N-retry-K-feedback.md` (new — K is the retry index of the failed attempt, 0-based).
+1. `gate-N-feedback.md` (existing path, overwrite — **mandatory**; callers `stat` this file, see Persistence semantics).
+2. `gate-N-retry-K-feedback.md` (new archive — best-effort).
 
-Additionally on APPROVE, write `gate-N-verdict.json` with `{ verdict, retryIndex, codexSessionId, tokensTotal, durationMs, timestamp }`.
+Additionally on APPROVE verdict, write `gate-N-verdict.json` (best-effort) with `{ verdict, retryIndex, codexSessionId?, tokensTotal?, durationMs?, timestamp }`.
 
-**Naming scheme**: `gate-N-retry-K-feedback.md` where N = phase (2/4/7), K = retryIndex at verdict time (the `retryIndex` captured BEFORE mutation in `handleGateReject`, per gate.ts §5.3). Rationale: the existing `gate_retry` event carries the same `retryIndex`, so the file naming aligns with the telemetry contract.
+**Naming scheme**: `gate-N-retry-K-feedback.md` where N = phase (2/4/7), K = retryIndex at the moment of the write. `K` is sourced by **threading the pre-mutation `retryIndex` through every call site** — `saveGateFeedback` gains a fourth `retryIndex: number` parameter, and `handleGateEscalation` gains a new `retryIndex: number` parameter (propagated from `handleGateReject`, which already captures it at gate.ts L385–386). Rationale: the existing `gate_retry` event carries the same `retryIndex`, so archive filenames align with the telemetry contract.
 
-**Scope**: feedback archival covers `handleGateReject` (line 531), `handleGateEscalation` continue branch (line 627), and `handleGateEscalation` quit branch (line 660). Verdict JSON covers APPROVE only — not force-pass (force-pass already emits a dedicated `force_pass` event).
+**Escalation K semantics**: at escalation entry (`retryCount >= GATE_RETRY_LIMIT`) the captured `retryIndex` equals `GATE_RETRY_LIMIT - 1` (the index of the attempt whose REJECT triggered the limit). `handleGateEscalation` continue/quit branches use that same `retryIndex` when calling `saveGateFeedback`. Continue-then-retry starts from `retryIndex = 0` again on the next reject, so no collision with the stored archive of the prior escalation round.
+
+**Scope**: feedback archival covers `handleGateReject` (gate.ts L531), `handleGateEscalation` continue branch (L627), and `handleGateEscalation` quit branch (L660). Verdict JSON covers APPROVE only — not force-pass (force-pass already emits a dedicated `force_pass` event and has no codex session/tokens to record).
 
 **Why not rename / abolish `gate-N-feedback.md`**: retained as the "last reject pointer" for codex resume Variant A (`gate.ts` L237 reads this exact path when `lastOutcome=reject`). Archival is purely additive.
 
-**Persistence semantics**: both files are best-effort writes (wrapped in try/catch, warnings to stderr on failure). The gate verdict remains authoritative via `gate-N-result.json`.
+**Persistence semantics**: the legacy `gate-N-feedback.md` write is **mandatory** — failure throws (current behavior; callers immediately `fs.statSync(feedbackPath).size` the result, so a silent failure would break telemetry and `pendingAction.feedbackPaths` resume). The archive file `gate-N-retry-K-feedback.md` and the `gate-N-verdict.json` APPROVE metadata are **best-effort** — wrapped in try/catch with a single `printWarning(…)` line per failure. Helper signature unchanged (`: string`); archive failures never alter the returned path.
 
 ### ADR-2 — Folder-trust watchdog (T8-b)
 
@@ -75,7 +77,9 @@ Additionally on APPROVE, write `gate-N-verdict.json` with `{ verdict, retryIndex
 ⚠️  30s 동안 출력 없음 — Claude 창(C-b 1)에서 folder-trust 다이얼로그 대기 중일 수 있음.
 ```
 
-**Why 30s**: dogfood observation shows Claude prompt typically begins output within 3–10s on a trusted folder. 30s is a comfortable upper bound that avoids false positives while still giving useful early feedback before the user gives up. Escapable via `state.harnessVersion` → not a knob; hardcoded constant `WATCHDOG_DELAY_MS = 30_000` in runner.ts with a `// exported for testing` export so the test can stub it.
+**Why 30s**: dogfood observation shows Claude prompt typically begins output within 3–10s on a trusted folder. 30s is a comfortable upper bound that avoids false positives while still giving useful early feedback before the user gives up. Not a runtime knob; `WATCHDOG_DELAY_MS = 30_000` is a module-level constant in runner.ts.
+
+**Test strategy (ESM-safe)**: imported `const` bindings are read-only under `"type": "module"` (package.json). Tests therefore use `vi.useFakeTimers()` + `vi.advanceTimersByTimeAsync(30_000)` and assert the hint-emission side effect. No mutation of `WATCHDOG_DELAY_MS` is required. If a test needs a shorter delay for a non-fake-timer scenario, the module exports `__setWatchdogDelayMsForTesting(ms: number): void` (wraps a private `let _delayMs`) — but the default path uses fake timers and does **not** call this setter.
 
 **Only fires once per phase**: re-entering the same phase (retry, reopen) arms a new timer with a fresh `attemptId`. No cross-phase suppression — each phase entry independently arms one.
 
@@ -110,12 +114,17 @@ After: `⚠️  preflight: claude @file check delayed (>10s); continuing — run
 - Index: eval report path staged for deletion.
 - `git status --porcelain`: `D  <evalReportPath>`.
 
-Recovery on resume: re-entering Phase 6 calls `runPhase6Preconditions` again. The idempotency branch must accept `fileStatus = 'D  …'` (or similar) as "already reset — no-op". Specifically, `runPhase6Preconditions` Step 3 adds a new branch:
+Recovery on resume: re-entering Phase 6 calls `runPhase6Preconditions` again. The idempotency branch must accept "staged deletion, no worktree entry" as "already reset — no-op".
+
+**Porcelain parsing detail** (addresses P2-1): `getFileStatus()` in `src/git.ts` currently returns `git status --porcelain <path>`.trim() — trimming loses the leading XY column distinction (leading `' '` in unstaged vs `'D'` in staged). To reliably detect "staged for deletion", the resume branch uses a dedicated helper that preserves the **raw XY** via `git status --porcelain -z` parsing, or a direct `git diff --cached --name-status <path>` check returning `D\t<path>`. Concretely, introduce `isStagedDeletion(filePath, cwd): boolean` in `src/git.ts` that runs `git diff --cached --name-status -- <path>` and returns true iff output starts with `D\t`. `runPhase6Preconditions` calls this before the tracked-file branch:
+```ts
+if (isStagedDeletion(evalReportPath, cwd)) {
+  // already reset — no-op
+} else if (isTracked(evalReportPath, cwd) && fileExists(evalReportPath)) {
+  execSync(`git rm -f "${evalReportPath}"`, { cwd });
+}
 ```
-else if (fileStatus.startsWith('D '))    // already staged for deletion
-  // no-op
-```
-This keeps resume safe even if the crash occurred between rm and the new write.
+This keeps resume safe even if the crash occurred between rm and the new write, without relying on trimmed porcelain strings.
 
 **Force-pass path unchanged**: `forcePassVerify` still writes + commits a synthetic report via `normalizeArtifactCommit`. No retry loop inside force-pass, so no double-commit concern.
 
@@ -127,7 +136,7 @@ This subtly changes existing Phase 1/3 artifact commit behavior: when the artifa
 
 ## 4. Interfaces
 
-### 4.1 `saveGateFeedback` (runner.ts)
+### 4.1 `saveGateFeedback` (runner.ts) + escalation propagation
 
 ```ts
 // BEFORE
@@ -139,10 +148,11 @@ function saveGateFeedback(
   phase: number,
   comments: string,
   retryIndex: number,
-): string  // returns legacy feedback path (unchanged return contract)
+): string  // returns legacy feedback path (unchanged return contract).
+          // Legacy write throws on failure. Archive write is best-effort (try/catch + printWarning).
 ```
 
-Sibling helper:
+Sibling helper (best-effort, no throw on failure):
 ```ts
 function saveGateApproveVerdict(
   runDir: string,
@@ -152,18 +162,39 @@ function saveGateApproveVerdict(
 ): void
 ```
 
+Call-site propagation:
+```ts
+// BEFORE
+export async function handleGateEscalation(
+  phase, comments, state, runDir, cwd, inputManager, logger,
+): Promise<void>
+
+// AFTER — accepts retryIndex (propagated from handleGateReject pre-mutation capture)
+export async function handleGateEscalation(
+  phase, comments, retryIndex, state, runDir, cwd, inputManager, logger,
+): Promise<void>
+```
+
+`handleGateReject` passes its captured `retryIndex` (gate.ts L496) into the escalation branch (L588). All three `saveGateFeedback` call sites (L531 / L627 / L660) receive a concrete retry index.
+
 ### 4.2 `WATCHDOG_DELAY_MS` (runner.ts)
 
 ```ts
-export const WATCHDOG_DELAY_MS = 30_000;  // exported for test stubbing
+export const WATCHDOG_DELAY_MS = 30_000;  // module constant; tests drive via fake timers.
 ```
 
-### 4.3 `runPhase6Preconditions` (artifact.ts)
+### 4.3 `runPhase6Preconditions` (artifact.ts) + `isStagedDeletion` (git.ts)
 
-Signature unchanged. Internal behavior:
+Signatures unchanged for existing callers. Internal behavior:
+- Already staged for deletion (detected via new `isStagedDeletion()` helper on `git diff --cached --name-status -- <path>`) → no-op.
 - Tracked/clean eval report → `git rm -f <path>` only (no commit).
-- Already staged for deletion (`D ` status) → no-op.
 - Final clean check scoped: allow staged-deleted eval report path; reject any other dirty path.
+
+New helper in `src/git.ts`:
+```ts
+// Returns true iff <filePath> appears in the index as a staged deletion.
+export function isStagedDeletion(filePath: string, cwd?: string): boolean;
+```
 
 ### 4.4 `normalizeArtifactCommit` (artifact.ts)
 
@@ -176,9 +207,9 @@ One vitest file per slice, colocated with existing tests:
 | Slice | Test file | Key assertions |
 |---|---|---|
 | T8-a | `tests/phases/gate-feedback-archival.test.ts` | Retry creates `gate-N-retry-K-feedback.md`. APPROVE creates `gate-N-verdict.json` with `verdict:"APPROVE"`. Legacy `gate-N-feedback.md` still written. |
-| T8-b | `tests/phases/interactive-watchdog.test.ts` | Timer arms on claude preset; fires exactly once after `WATCHDOG_DELAY_MS` (stubbed to 50ms via re-assignment on test import). Cleared on completed/failed/throw. Not armed for codex preset. |
+| T8-b | `tests/phases/interactive-watchdog.test.ts` | Under `vi.useFakeTimers()`: timer arms on claude preset, fires exactly once after `vi.advanceTimersByTimeAsync(WATCHDOG_DELAY_MS)`, is cleared (no late fire) on completed/failed/throw. Not armed for codex preset. |
 | T8-c | `tests/preflight-claude-at-file.test.ts` | Timeout constant = 10000. Message text contains "delayed" (not "timed out") and "continuing". Exit status ≠ 0 still warns and returns. |
-| T8-d | `tests/phases/eval-report-commit-squash.test.ts` | Retry cycle produces one commit (not two). Commit message contains `rev 2 eval report`. Resume after simulated crash (staged-D only) resumes cleanly without throw. Force-pass path still writes one synthetic commit. |
+| T8-d | `tests/phases/eval-report-commit-squash.test.ts` | Retry cycle: commit-count delta per round = 1 (measure via `git rev-list` before/after). Messages contain `rev 1 eval report`, `rev 2 eval report`. Resume after simulated crash (staged-D only, no worktree entry) resumes cleanly without throw and produces exactly one new commit. Force-pass path still writes one synthetic commit. |
 
 Test strategy:
 - **T8-b timer tests**: use `vi.useFakeTimers()` + run `vi.advanceTimersByTimeAsync(WATCHDOG_DELAY_MS)`. Mock `runInteractivePhase` to return a controlled Promise so we can time the timer fire against the phase resolution.
@@ -209,9 +240,9 @@ Verification is deterministic; the plan includes `.harness-eval.json` with:
 1. **typecheck** — `pnpm tsc --noEmit` → exit 0.
 2. **tests** — `pnpm vitest run` → exit 0, 617 → 621+ passed, 1 skipped.
 3. **build** — `pnpm build` → exit 0, `dist/src/phases/runner.js` + `dist/src/preflight.js` exist.
-4. **T8-a file** — new file `src/phases/runner.ts` exports `saveGateFeedback` with 4 params. `grep -q "retry-.*-feedback.md" src/phases/runner.ts`.
+4. **T8-a file** — `src/phases/runner.ts` `saveGateFeedback` takes 4 params (`retryIndex: number`). `handleGateEscalation` takes `retryIndex` param. `grep -q "retry-.*-feedback.md" src/phases/runner.ts`.
 5. **T8-b constant** — `grep -q "WATCHDOG_DELAY_MS" src/phases/runner.ts`.
 6. **T8-c string** — `grep -q "timeout: 10_\\?000" src/preflight.ts`.
-7. **T8-d commit-count** — dedicated test verifies `git log --oneline | grep 'Phase 6 —' | wc -l == retries` (not `retries * 2`).
+7. **T8-d commit-count** — dedicated test verifies for N verify rounds (1 initial + verifyRetries), Phase 6 commit count == `verifyRetries + 1` (one per round), all message titles contain `rev K eval report` for K ∈ {1..verifyRetries+1}. Resume-from-staged-D scenario commits exactly one additional `rev K eval report`.
 
 Each checklist item maps to an automated command in `.harness-eval.json`.
