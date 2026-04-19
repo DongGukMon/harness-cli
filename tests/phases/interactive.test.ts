@@ -415,7 +415,7 @@ describe('validatePhaseArtifacts — Phase 1', () => {
     fs.writeFileSync(specPath, '# Spec content\n\n## Complexity\n\nMedium\n');
     fs.writeFileSync(decPath, '# Decisions');
 
-    const result = validatePhaseArtifacts(1, state, cwd);
+    const result = validatePhaseArtifacts(1, state, cwd, cwd);
     expect(result).toBe(true);
   });
 
@@ -430,7 +430,7 @@ describe('validatePhaseArtifacts — Phase 1', () => {
     fs.mkdirSync(path.dirname(decPath), { recursive: true });
     fs.writeFileSync(decPath, '# Decisions');
 
-    const result = validatePhaseArtifacts(1, state, cwd);
+    const result = validatePhaseArtifacts(1, state, cwd, cwd);
     expect(result).toBe(false);
   });
 
@@ -447,14 +447,17 @@ describe('validatePhaseArtifacts — Phase 1', () => {
     fs.writeFileSync(specPath, ''); // empty!
     fs.writeFileSync(decPath, '# Decisions');
 
-    const result = validatePhaseArtifacts(1, state, cwd);
+    const result = validatePhaseArtifacts(1, state, cwd, cwd);
     expect(result).toBe(false);
   });
 
-  it('returns false when artifact mtime is before phaseOpenedAt (stale file)', () => {
+  it('accepts rev-invariant artifacts when mtime < phaseOpenedAt (reopen semantic)', () => {
+    // Reopen scenario: Claude decides the artifact is rev-invariant and does
+    // not touch it. Sentinel freshness (attemptId match, checked elsewhere) is
+    // the real safety gate. Validator must accept. Regression guard for the
+    // P1-NEW mtime staleness bug observed in gate-convergence dogfood Round 2.
     const cwd = makeTmpDir();
-    // Set phaseOpenedAt to far in the future so existing files appear stale
-    const futureOpenedAt = (Math.floor(Date.now() / 1000) + 3600) * 1000; // 1 hour from now
+    const futureOpenedAt = (Math.floor(Date.now() / 1000) + 3600) * 1000; // 1h from now
     const state = makeState({
       phaseOpenedAt: { '1': futureOpenedAt, '3': null, '5': null },
     });
@@ -466,8 +469,8 @@ describe('validatePhaseArtifacts — Phase 1', () => {
     fs.writeFileSync(specPath, '# Spec\n\n## Complexity\n\nMedium\n');
     fs.writeFileSync(decPath, '# Decisions');
 
-    const result = validatePhaseArtifacts(1, state, cwd);
-    expect(result).toBe(false);
+    const result = validatePhaseArtifacts(1, state, cwd, cwd);
+    expect(result).toBe(true);
   });
 
   // ── Complexity validator cases (spec R5: applies to full + light flows) ──
@@ -533,7 +536,7 @@ describe('validatePhaseArtifacts — Phase 3', () => {
       JSON.stringify({ checks: [{ name: 'test', command: 'echo ok' }] })
     );
 
-    const result = validatePhaseArtifacts(3, state, cwd);
+    const result = validatePhaseArtifacts(3, state, cwd, cwd);
     expect(result).toBe(true);
   });
 
@@ -550,7 +553,7 @@ describe('validatePhaseArtifacts — Phase 3', () => {
     fs.writeFileSync(planPath, '# Plan content');
     fs.writeFileSync(checklistPath, '{ "not": "valid schema" }');
 
-    const result = validatePhaseArtifacts(3, state, cwd);
+    const result = validatePhaseArtifacts(3, state, cwd, cwd);
     expect(result).toBe(false);
   });
 
@@ -565,8 +568,31 @@ describe('validatePhaseArtifacts — Phase 3', () => {
     fs.writeFileSync(planPath, '# Plan');
     // checklist not written
 
-    const result = validatePhaseArtifacts(3, state, cwd);
+    const result = validatePhaseArtifacts(3, state, cwd, cwd);
     expect(result).toBe(false);
+  });
+
+  it('accepts rev-invariant artifacts when mtime < phaseOpenedAt (reopen semantic)', () => {
+    // Phase 3 reopen analog of the Phase 1 reopen test. Claude may decide the
+    // plan+checklist are rev-invariant under Gate 4 feedback and leave them.
+    const cwd = makeTmpDir();
+    const futureOpenedAt = (Math.floor(Date.now() / 1000) + 3600) * 1000;
+    const state = makeState({
+      phaseOpenedAt: { '1': null, '3': futureOpenedAt, '5': null },
+    });
+
+    const planPath = path.join(cwd, state.artifacts.plan);
+    const checklistPath = path.join(cwd, state.artifacts.checklist);
+    fs.mkdirSync(path.dirname(planPath), { recursive: true });
+    fs.mkdirSync(path.dirname(checklistPath), { recursive: true });
+    fs.writeFileSync(planPath, '# Plan');
+    fs.writeFileSync(
+      checklistPath,
+      JSON.stringify({ checks: [{ name: 'n', command: 'true' }] }),
+    );
+
+    const result = validatePhaseArtifacts(3, state, cwd, cwd);
+    expect(result).toBe(true);
   });
 });
 
@@ -582,7 +608,7 @@ describe('validatePhaseArtifacts — Phase 5', () => {
     expect(newHead).not.toBe(head);
 
     const state = makeState({ implRetryBase: head });
-    const result = validatePhaseArtifacts(5, state, repoDir);
+    const result = validatePhaseArtifacts(5, state, repoDir, repoDir);
     expect(result).toBe(true);
   });
 
@@ -591,7 +617,7 @@ describe('validatePhaseArtifacts — Phase 5', () => {
     const head = execSync('git rev-parse HEAD', { cwd: repoDir, encoding: 'utf-8' }).trim();
 
     const state = makeState({ implRetryBase: head });
-    const result = validatePhaseArtifacts(5, state, repoDir);
+    const result = validatePhaseArtifacts(5, state, repoDir, repoDir);
     expect(result).toBe(false);
   });
 
@@ -607,7 +633,7 @@ describe('validatePhaseArtifacts — Phase 5', () => {
     fs.writeFileSync(path.join(repoDir, 'dirty.txt'), 'dirty');
 
     const state = makeState({ implRetryBase: head });
-    const result = validatePhaseArtifacts(5, state, repoDir);
+    const result = validatePhaseArtifacts(5, state, repoDir, repoDir);
     expect(result).toBe(false);
   });
 
@@ -618,8 +644,58 @@ describe('validatePhaseArtifacts — Phase 5', () => {
     const repoDir = createTestRepo();
     const head = execSync('git rev-parse HEAD', { cwd: repoDir, encoding: 'utf-8' }).trim();
     const state = makeState({ implRetryBase: head, implCommit: 'prior-impl-sha' });
-    const result = validatePhaseArtifacts(5, state, repoDir);
+    const result = validatePhaseArtifacts(5, state, repoDir, repoDir);
     expect(result).toBe(true);
+  });
+
+  it('auto-recovers a dirty tree with ignorable artifacts and returns true', () => {
+    const repoDir = createTestRepo();
+    execSync('git config user.email "t@t" && git config user.name "t"', { cwd: repoDir });
+    const head = execSync('git rev-parse HEAD', { cwd: repoDir, encoding: 'utf-8' }).trim();
+    // Tracked scaffold so __pycache__/ surfaces directly in porcelain.
+    fs.mkdirSync(path.join(repoDir, 'app'), { recursive: true });
+    fs.writeFileSync(path.join(repoDir, 'app/main.py'), 'print("hi")');
+    execSync('git add app/main.py && git commit -q -m "impl"', { cwd: repoDir });
+    fs.mkdirSync(path.join(repoDir, 'app/__pycache__'), { recursive: true });
+    fs.writeFileSync(path.join(repoDir, 'app/__pycache__/foo.pyc'), 'x');
+    const runDir = makeTmpDir();
+    const state = makeState({ implRetryBase: head });
+    const result = validatePhaseArtifacts(5, state, repoDir, runDir);
+    expect(result).toBe(true);
+    const gitignore = fs.readFileSync(path.join(repoDir, '.gitignore'), 'utf-8');
+    expect(gitignore).toMatch(/__pycache__\//);
+  });
+
+  it('blocks on non-ignorable residual and writes diagnostic', () => {
+    const repoDir = createTestRepo();
+    execSync('git config user.email "t@t" && git config user.name "t"', { cwd: repoDir });
+    const head = execSync('git rev-parse HEAD', { cwd: repoDir, encoding: 'utf-8' }).trim();
+    fs.writeFileSync(path.join(repoDir, 'impl.txt'), 'implementation');
+    execSync('git add impl.txt && git commit -q -m "impl"', { cwd: repoDir });
+    fs.writeFileSync(path.join(repoDir, 'unexpected.txt'), 'not ignorable');
+    const runDir = makeTmpDir();
+    const state = makeState({ implRetryBase: head });
+    const result = validatePhaseArtifacts(5, state, repoDir, runDir);
+    expect(result).toBe(false);
+    const diag = fs.readFileSync(path.join(runDir, 'phase-5-dirty-tree.md'), 'utf-8');
+    expect(diag).toMatch(/unexpected\.txt/);
+  });
+
+  it('strictTree=true skips auto-recovery and writes strict-tree diagnostic', () => {
+    const repoDir = createTestRepo();
+    execSync('git config user.email "t@t" && git config user.name "t"', { cwd: repoDir });
+    const head = execSync('git rev-parse HEAD', { cwd: repoDir, encoding: 'utf-8' }).trim();
+    fs.mkdirSync(path.join(repoDir, 'app'), { recursive: true });
+    fs.writeFileSync(path.join(repoDir, 'app/main.py'), 'print("hi")');
+    execSync('git add app/main.py && git commit -q -m "impl"', { cwd: repoDir });
+    fs.mkdirSync(path.join(repoDir, 'app/__pycache__'), { recursive: true });
+    fs.writeFileSync(path.join(repoDir, 'app/__pycache__/foo.pyc'), 'x');
+    const runDir = makeTmpDir();
+    const state = makeState({ implRetryBase: head, strictTree: true });
+    const result = validatePhaseArtifacts(5, state, repoDir, runDir);
+    expect(result).toBe(false);
+    const diag = fs.readFileSync(path.join(runDir, 'phase-5-dirty-tree.md'), 'utf-8');
+    expect(diag).toMatch(/strict-tree enabled/);
   });
 });
 
@@ -665,7 +741,7 @@ describe('validatePhaseArtifacts — light + phase 1 extras (ADR-13)', () => {
     fs.writeFileSync(state.artifacts.decisionLog, '# D\n');
     fs.writeFileSync(state.artifacts.checklist,
       JSON.stringify({ checks: [{ name: 'n', command: 'true' }] }));
-    expect(validatePhaseArtifacts(1, state, tmp)).toBe(true);
+    expect(validatePhaseArtifacts(1, state, tmp, tmp)).toBe(true);
   });
 
   it('rejects a combined doc that lacks the "## Open Questions" header', () => {
@@ -679,7 +755,7 @@ describe('validatePhaseArtifacts — light + phase 1 extras (ADR-13)', () => {
     fs.writeFileSync(state.artifacts.decisionLog, '# D\n');
     fs.writeFileSync(state.artifacts.checklist,
       JSON.stringify({ checks: [{ name: 'n', command: 'true' }] }));
-    expect(validatePhaseArtifacts(1, state, tmp)).toBe(false);
+    expect(validatePhaseArtifacts(1, state, tmp, tmp)).toBe(false);
   });
 
   it('rejects a combined doc that lacks the "## Implementation Plan" header', () => {
@@ -693,7 +769,7 @@ describe('validatePhaseArtifacts — light + phase 1 extras (ADR-13)', () => {
     fs.writeFileSync(state.artifacts.decisionLog, '# D\n');
     fs.writeFileSync(state.artifacts.checklist,
       JSON.stringify({ checks: [{ name: 'n', command: 'true' }] }));
-    expect(validatePhaseArtifacts(1, state, tmp)).toBe(false);
+    expect(validatePhaseArtifacts(1, state, tmp, tmp)).toBe(false);
   });
 
   it('rejects when checklist.json schema is invalid', () => {
@@ -706,7 +782,7 @@ describe('validatePhaseArtifacts — light + phase 1 extras (ADR-13)', () => {
       '# T\n## Context & Decisions\n\n## Complexity\n\nSmall\n\n## Open Questions\n없음\n\n## Implementation Plan\n- t\n');
     fs.writeFileSync(state.artifacts.decisionLog, '# D\n');
     fs.writeFileSync(state.artifacts.checklist, '{"checks":[]}');
-    expect(validatePhaseArtifacts(1, state, tmp)).toBe(false);
+    expect(validatePhaseArtifacts(1, state, tmp, tmp)).toBe(false);
   });
 
   it('rejects a light combined doc that lacks the "## Complexity" header', () => {

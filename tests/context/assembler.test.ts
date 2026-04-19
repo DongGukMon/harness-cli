@@ -153,6 +153,26 @@ describe('Phase 5 interactive prompt', () => {
     expect(prompt).toContain('phase-5.done');
     expect(prompt).toContain('attempt-phase5');
   });
+
+  it('mandates standard gitignore scaffolding (Slice 3 step 0)', () => {
+    const state = makeState({
+      phaseAttemptId: { '1': null, '3': null, '5': 'aid' },
+    });
+    const prompt = assembleInteractivePrompt(5, state, '/tmp/harness');
+    // Step 0 language + the canonical commit name used in the dogfood contract
+    expect(prompt).toContain('chore: add standard gitignore entries');
+    expect(prompt).toContain('git status --porcelain');
+    expect(prompt).toMatch(/__pycache__\//);
+  });
+
+  it('generalizes the reopen invariant (rev-invariant artifacts OK)', () => {
+    const state = makeState({
+      phaseAttemptId: { '1': null, '3': null, '5': 'aid' },
+    });
+    const prompt = assembleInteractivePrompt(5, state, '/tmp/harness');
+    expect(prompt).toMatch(/Reopen 시 artifact를 변경하지 않아도/);
+    expect(prompt).toMatch(/sentinel attemptId/);
+  });
 });
 
 describe('Phase 1/3/5 HARNESS FLOW CONSTRAINT stanza', () => {

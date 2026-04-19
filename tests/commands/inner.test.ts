@@ -259,6 +259,7 @@ describe('bootstrapSessionLogger', () => {
       tmuxControlWindow: '', tmuxWorkspacePane: '', tmuxControlPane: '',
       loggingEnabled: true,
       codexNoIsolate: false,
+      strictTree: false,
     };
     return { ...base, ...overrides };
   }
@@ -340,6 +341,7 @@ describe('buildConfigCancelHandler — lazy bootstrap', () => {
       tmuxControlWindow: '', tmuxWorkspacePane: '', tmuxControlPane: '',
       loggingEnabled: true,
       codexNoIsolate: false,
+      strictTree: false,
     };
     return { ...base, ...overrides };
   }
@@ -539,6 +541,7 @@ describe('bootstrapSessionLogger — codexHome integration (Issue #13)', () => {
       tmuxControlWindow: '', tmuxWorkspacePane: '', tmuxControlPane: '',
       loggingEnabled: true,
       codexNoIsolate: false,
+      strictTree: false,
     };
     return { ...base, ...overrides };
   }
