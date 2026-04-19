@@ -69,31 +69,58 @@ Task prescribes polling; polling at 1 Hz is sufficient and simpler. `fs.readFile
 | Event | Token contribution |
 |---|---|
 | `phase_end.claudeTokens.total` (interactive 1/3/5) | Added to `claudeTokens`. Skip if `null` or field absent. |
-| `gate_verdict.tokensTotal` (2/4/7) | Added to `gateTokens`. Skip if undefined. |
-| `gate_error.tokensTotal` (2/4/7) | Added to `gateTokens`. Skip if undefined. |
+| `gate_verdict.tokensTotal` (2/4/7) | Added to `gateTokens`. Skip if undefined **or if this verdict is a sidecar replay superseded by an authoritative verdict** (§3.6.1). |
+| `gate_error.tokensTotal` (2/4/7) | Added to `gateTokens`. Skip if undefined **or if this error is a sidecar replay superseded by an authoritative error** (§3.6.1). |
 | Phase 6 | No token contribution (script phase). |
 
 `total = claudeTokens + gateTokens`.
 
-### 3.7 Current phase + attempt
-- `currentPhase` = the `phase` field of the **last** `phase_start` event in the file.
-- `phaseRunningElapsedMs` = `now − phase_start.ts` of that event, *unless* a matching `phase_end` (same `phase` + `attemptId`) appeared afterward — in which case phase is idle and we return `null` (no "phase elapsed" segment).
-- `attempt` = number of `phase_start` events with `phase == currentPhase` *since the latest session-open*. 1-indexed.
+#### 3.6.1 Sidecar replay deduplication
+`FileSessionLogger.finalizeSummary` already dedupes sidecar-replayed gate events to avoid double-counting on resumed runs (`src/logger.ts:182–220`, asserted in `tests/logger.test.ts:278–305`). The footer aggregator mirrors the same rule:
 
-This handles interactive re-entries (reopen from later gate rejects) and gate retries equally.
+1. First pass: collect "authoritative" keys from events where `recoveredFromSidecar !== true`.
+   - `authoritativeVerdicts`: `Set<"${phase}:${retryIndex}">` for `gate_verdict`.
+   - `authoritativeErrors`: `Set<phase>` for `gate_error`.
+2. Second pass (token accumulation): for a `gate_verdict` with `recoveredFromSidecar === true`, skip if the key is already in `authoritativeVerdicts`. For `gate_error` with `recoveredFromSidecar === true`, skip if `phase` is in `authoritativeErrors`.
+
+This guarantees footer totals stay consistent with `summary.json.totals.gateTokens`.
+
+### 3.7 Current phase + attempt (hybrid — state.json + events)
+
+**Reality check:** gate phases 2/4/7 do **not** emit `phase_start` (`src/phases/runner.ts:handleGatePhase` only emits `gate_verdict` / `gate_error`). Only phases 1/3/5/6 emit `phase_start`. Using "last `phase_start`" alone would leave the footer stuck on the previous interactive phase during multi-minute gate runs. We therefore read `state.json.currentPhase` each tick as the authoritative live-phase signal and fall back to events for elapsed timing.
+
+Inputs:
+- `state.currentPhase` (1..7): read from `<runDir>/state.json` at tick time — passed in via a `stateJsonPath` argument to the aggregator.
+- `state.gateRetries[phase]`: read from the same state.json.
+- events from `events.jsonl`.
+
+Computation:
+- **`currentPhase`** = `state.currentPhase` (always). If state.json is unreadable this tick → aggregator returns `null` (skip render).
+- **`attempt`**:
+  - For interactive phases 1/3/5 and verify phase 6: count `phase_start` events in the file where `phase === currentPhase` since the latest session-open event, 1-indexed.
+  - For gate phases 2/4/7: `state.gateRetries[String(currentPhase)] + 1` (gateRetries is zero-indexed, the current live attempt is the next retry).
+- **`phaseRunningElapsedMs`**:
+  - For interactive 1/3/5 and verify 6: `now − ts` of the last `phase_start` event matching `currentPhase`, *unless* a matching "phase closed" event appeared afterward — in which case return `null` (phase is idle, nothing yet started for the next attempt). "Matching closed" means:
+    - Interactive: a `phase_end` with same `phase` + `attemptId`.
+    - Phase 6: a `phase_end` with same `phase` whose `ts` is greater than the matching `phase_start.ts` (verify phase_end does not carry `attemptId`/`retryIndex`; §3.9 confirms). If multiple `phase_start(phase=6)` interleave with `phase_end(phase=6)`, pair them positionally.
+  - For gate phases 2/4/7: compute elapsed from `max(ts_of_last_phase_end OR gate_verdict OR gate_error in the file before gate started)`. Practically: find the most recent event with `ts < now` whose effect is "gate has begun" — that is the event immediately preceding the gate's execution. If none (first phase of the run), fall back to the session-open event's `ts`. Return `null` if the last event in the file is already a `gate_verdict` / `gate_error` for `currentPhase` (gate just finished; the control pane is transitioning).
+
+The gate-elapsed rule is approximate (no explicit `phase_start` for gates) but bounded: the gate begins within milliseconds of the triggering event's log write, so worst-case skew is ≪ 1 s.
 
 ### 3.8 Scrollback cost
 1 Hz bottom-row writes append a ~80-byte line per second. Over 1 h that is ~290 KB / ~3 600 lines in the tmux scrollback — bounded by tmux's default 2 000-line history (older lines evict naturally). Full re-renders would have been 36 000 lines/h; bottom-row updates are 10× better. Still non-zero; flagged for awareness.
 
 ### 3.9 Phase 6 variant
-Phase 6 runs `harness-verify.sh` and produces no `claudeTokens`. Footer shows `P6 · Xm Ys phase · Zm Ws session` (no token segment).
+Phase 6 runs `harness-verify.sh` and produces no `claudeTokens`. Footer shows `P6 · Xm Ys phase · Zm Ws session` (no token segment, token aggregates still include prior phases' totals).
+
+Note: phase 6 emits `phase_start` with a `retryIndex` field (`src/phases/runner.ts:771`) but `phase_end` does **not** carry `attemptId` or `retryIndex`. The pairing rule for "has phase 6 ended?" therefore uses positional pairing of `phase_start(phase=6)` / `phase_end(phase=6)` events within the current session-open window (§3.7).
 
 ### 3.10 Wide / compact threshold
 - `columns >= 80` → wide: `P5 attempt 1 · 1m 23s phase · 12m 04s session · 9.1M tok (8.7M Claude + 0.4M gate)`
 - `columns <  80` → compact: `P5 a1 · 1m23s / 12m04s · 9.1M tok`
 - `columns` unknown → skip footer render (non-TTY or size not reported).
 
-Width check uses `process.stdout.columns` and `process.stdout.rows`; both must be positive numbers. The existing `separator()` helper already has the same guard.
+Width check uses **`process.stderr.columns`** and **`process.stderr.rows`** (footer is a stderr render per §3.2); both must be positive numbers and `process.stderr.isTTY` must be true. This is consistent with the stream choice in §3.2 and §4.4.
 
 ### 3.11 SIGWINCH
 Register a `process.on('SIGWINCH', ...)` handler inside `inner.ts` (while the tick is active) that triggers one immediate footer re-render. Terminal size changes are applied within 1 tick anyway; SIGWINCH only saves up to 1 s.
@@ -106,8 +133,12 @@ Register a `process.on('SIGWINCH', ...)` handler inside `inner.ts` (while the ti
 
 No fatal paths — footer failure never crashes the run.
 
-### 3.13 State derivation vs events authority
-We intentionally derive `currentPhase` from the events file, not from `state.currentPhase`, so that the footer reflects what the logger has actually recorded (avoids the narrow race where `state.currentPhase` advances just before the next `phase_start` is flushed).
+### 3.13 State derivation vs events authority (revised)
+**Previous draft** proposed deriving `currentPhase` solely from the events file. Codex spec-gate round 1 surfaced that gate phases 2/4/7 emit no `phase_start`, so pure event-derivation would freeze the footer on the previous interactive phase during long gate runs.
+
+**Revised contract (§3.7):** hybrid — `state.json.currentPhase` is the authoritative live-phase signal, events supply timing and token aggregates. `state.json` is updated atomically by `writeState` at every phase transition (`src/state.ts`), and the aggregator reads it each tick.
+
+Narrow-race tradeoff (previously cited): `state.currentPhase` may briefly show `N+1` before the `phase_start(N+1)` event is flushed. In practice, phase_start logging happens within the same synchronous block as `writeState` in `handleInteractivePhase` / `handleVerifyPhase`, so the race is ≪ 1 s and well under the 1 Hz tick interval. Acceptable.
 
 ### 3.14 Ticker cleanup on abnormal exit (SIGINT / SIGTERM / crash)
 `signal.ts::registerSignalHandlers` calls `handleShutdown(...)` then `process.exit(130)` — `process.exit` terminates without running `finally` blocks, so the `inner.ts` try/finally that stops the ticker is **not** sufficient on its own. The footer row would otherwise remain as a stale bottom line until terminal scroll clears it.
@@ -122,13 +153,18 @@ Implementation notes:
 
 ### 4.1 New module: `src/metrics/footer-aggregator.ts`
 
-Pure functions, no I/O besides reading the path. Trivially unit-testable.
+Pure functions, no I/O besides reading the events file + state.json. Trivially unit-testable.
 
 ```ts
+export interface FooterStateSlice {
+  currentPhase: number;          // 1..7, from state.json
+  gateRetries: Record<string, number>; // from state.json
+}
+
 export interface FooterSummary {
-  currentPhase: number | null;       // 1..7
-  attempt: number | null;            // 1-indexed; null if currentPhase null
-  phaseRunningElapsedMs: number | null; // null if phase ended
+  currentPhase: number;              // 1..7 (from state slice)
+  attempt: number;                   // 1-indexed
+  phaseRunningElapsedMs: number | null; // null when "phase closed" (see §3.7)
   sessionElapsedMs: number;          // from latest session-open
   claudeTokens: number;
   gateTokens: number;
@@ -136,10 +172,15 @@ export interface FooterSummary {
 }
 
 export function readEventsJsonl(path: string): LogEvent[];
-export function aggregateFooter(events: LogEvent[], now: number): FooterSummary | null;
+export function readStateSlice(stateJsonPath: string): FooterStateSlice | null;
+export function aggregateFooter(
+  events: LogEvent[],
+  stateSlice: FooterStateSlice,
+  now: number,
+): FooterSummary | null;
 ```
 
-`aggregateFooter` returns `null` when no `session_start` / `session_resumed` is present (logging bootstrapped but no events yet).
+`aggregateFooter` returns `null` when no `session_start` / `session_resumed` is present (logging bootstrapped but no events yet). The ticker computes `stateSlice` by calling `readStateSlice` each tick; if that returns `null` (state.json missing or malformed), the tick is skipped.
 
 ### 4.2 UI helpers: `src/ui.ts`
 
