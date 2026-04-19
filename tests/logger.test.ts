@@ -50,6 +50,11 @@ describe('NoopLogger', () => {
     expect(ts).toBeGreaterThan(Date.now() - 1000);
     expect(ts).toBeLessThanOrEqual(Date.now());
   });
+
+  it('getEventsPath returns null', () => {
+    const logger = new NoopLogger();
+    expect(logger.getEventsPath()).toBeNull();
+  });
 });
 
 describe('FileSessionLogger — constructor + meta.json + bootstrap flags', () => {
@@ -82,6 +87,14 @@ describe('FileSessionLogger — constructor + meta.json + bootstrap flags', () =
     const ts = logger.getStartedAt();
     expect(ts).toBeGreaterThan(Date.now() - 1000);
     expect(ts).toBeLessThanOrEqual(Date.now());
+  });
+
+  it('getEventsPath returns the events.jsonl path for the run', () => {
+    const harnessDir = makeTempHarnessDir();
+    const sessionsRoot = path.join(harnessDir, 'sessions-root');
+    const logger = new FileSessionLogger('run-events', harnessDir, { sessionsRoot });
+    const repoKey = computeRepoKey(harnessDir);
+    expect(logger.getEventsPath()).toBe(path.join(sessionsRoot, repoKey, 'run-events', 'events.jsonl'));
   });
 
   it('mkdirSync failure in constructor: logger becomes disabled (no-op all methods)', () => {
@@ -134,6 +147,12 @@ describe('FileSessionLogger — constructor + meta.json + bootstrap flags', () =
     expect(meta.resumedAt.length).toBe(1);
     expect(meta.task).toBe('resumed-task');
     expect(typeof meta.startedAt).toBe('number');
+  });
+
+  it('createSessionLogger(loggingEnabled=false) exposes null events path via NoopLogger', () => {
+    const harnessDir = makeTempHarnessDir();
+    const logger = createSessionLogger('run-noop', harnessDir, false);
+    expect(logger.getEventsPath()).toBeNull();
   });
 });
 
