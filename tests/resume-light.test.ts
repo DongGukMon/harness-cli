@@ -58,7 +58,7 @@ describe('completeInteractivePhaseFromFreshSentinel — light + phase 1 extras (
     fs.writeFileSync(state.artifacts.checklist,
       JSON.stringify({ checks: [{ name: 'n', command: 'true' }] }));
 
-    expect(completeInteractivePhaseFromFreshSentinel(1, state, tmp)).toBe(true);
+    expect(completeInteractivePhaseFromFreshSentinel(1, state, tmp, tmp)).toBe(true);
     expect(state.specCommit).toBe('head-sha');
   });
 
@@ -73,7 +73,7 @@ describe('completeInteractivePhaseFromFreshSentinel — light + phase 1 extras (
     fs.writeFileSync(state.artifacts.decisionLog, '# D\n');
     fs.writeFileSync(state.artifacts.checklist,
       JSON.stringify({ checks: [{ name: 'n', command: 'true' }] }));
-    expect(completeInteractivePhaseFromFreshSentinel(1, state, tmp)).toBe(false);
+    expect(completeInteractivePhaseFromFreshSentinel(1, state, tmp, tmp)).toBe(false);
   });
 
   it('rejects missing "## Implementation Plan" header', () => {
@@ -87,7 +87,7 @@ describe('completeInteractivePhaseFromFreshSentinel — light + phase 1 extras (
     fs.writeFileSync(state.artifacts.decisionLog, '# D\n');
     fs.writeFileSync(state.artifacts.checklist,
       JSON.stringify({ checks: [{ name: 'n', command: 'true' }] }));
-    expect(completeInteractivePhaseFromFreshSentinel(1, state, tmp)).toBe(false);
+    expect(completeInteractivePhaseFromFreshSentinel(1, state, tmp, tmp)).toBe(false);
   });
 
   it('rejects invalid checklist.json', () => {
@@ -100,7 +100,7 @@ describe('completeInteractivePhaseFromFreshSentinel — light + phase 1 extras (
       '# T\n## Open Questions\n없음\n\n## Implementation Plan\n- t\n');
     fs.writeFileSync(state.artifacts.decisionLog, '# D\n');
     fs.writeFileSync(state.artifacts.checklist, '{"checks":[]}');
-    expect(completeInteractivePhaseFromFreshSentinel(1, state, tmp)).toBe(false);
+    expect(completeInteractivePhaseFromFreshSentinel(1, state, tmp, tmp)).toBe(false);
   });
 
   it('accepts phase 1 artifacts when mtime is older than phaseOpenedAt (ADR-13 symmetric reopen)', () => {
@@ -124,7 +124,7 @@ describe('completeInteractivePhaseFromFreshSentinel — light + phase 1 extras (
       state.artifacts.checklist,
       JSON.stringify({ checks: [{ name: 'n', command: 'true' }] }),
     );
-    expect(completeInteractivePhaseFromFreshSentinel(1, state, tmp)).toBe(true);
+    expect(completeInteractivePhaseFromFreshSentinel(1, state, tmp, tmp)).toBe(true);
     expect(state.specCommit).toBe('head-sha');
   });
 });

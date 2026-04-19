@@ -16,6 +16,7 @@ import { InputManager } from './input.js';
 import { NoopLogger } from './logger.js';
 import { getPhaseArtifactFiles } from './config.js';
 import { isValidChecklistSchema } from './phases/checklist.js';
+import { tryAutoRecoverDirtyTree, writeDirtyTreeDiagnostic } from './phases/dirty-tree.js';
 import type { HarnessState, PhaseNumber } from './types.js';
 
 /** Create a no-op InputManager for use in resumeRun (deferred refactor: inputManager passed by inner.ts in future). */
@@ -92,7 +93,8 @@ async function recoverGeneralState(
     const completed = completeInteractivePhaseFromFreshSentinel(
       phase as PhaseNumber,
       state,
-      cwd
+      cwd,
+      runDir,
     );
     if (completed) {
       state.phases[phaseKey] = 'completed';
@@ -124,7 +126,8 @@ async function recoverGeneralState(
           const completed = completeInteractivePhaseFromFreshSentinel(
             phase as PhaseNumber,
             state,
-            cwd
+            cwd,
+            runDir,
           );
           if (completed) {
             state.phases[phaseKey] = 'completed';
@@ -474,7 +477,8 @@ function updateExternalCommitsDetected(state: HarnessState, cwd: string, runDir:
 export function completeInteractivePhaseFromFreshSentinel(
   phase: PhaseNumber,
   state: HarnessState,
-  cwd: string
+  cwd: string,
+  runDir: string,
 ): boolean {
   try {
     if (phase === 1 || phase === 3) {
@@ -527,15 +531,35 @@ export function completeInteractivePhaseFromFreshSentinel(
     }
 
     if (phase === 5) {
-      // Phase 5 completion contract: at least 1 commit since implRetryBase + clean tree
+      // Symmetric with validatePhaseArtifacts: tolerate ignorable residuals via
+      // auto-recovery (unless strictTree), then enforce the completion contract.
+      let status = execSync('git status --porcelain', { cwd, encoding: 'utf-8' }).trim();
+      if (status !== '') {
+        if (state.strictTree) {
+          writeDirtyTreeDiagnostic(runDir, 'strict-tree', status);
+          return false;
+        }
+        try {
+          const recovery = tryAutoRecoverDirtyTree(cwd, state.runId);
+          if (recovery.outcome === 'blocked') {
+            writeDirtyTreeDiagnostic(runDir, 'blocked', recovery.blockers.join('\n'));
+            return false;
+          }
+          status = '';
+        } catch (err) {
+          writeDirtyTreeDiagnostic(
+            runDir,
+            'blocked',
+            `${status}\n\n(auto-recovery threw: ${(err as Error).message})`,
+          );
+          return false;
+        }
+      }
       const head = getHead(cwd);
       if (head === state.implRetryBase) {
         // No commits since implRetryBase — fails completion contract
         return false;
       }
-      // Working tree must be clean
-      const status = execSync('git status --porcelain', { cwd, encoding: 'utf-8' }).trim();
-      if (status !== '') return false;
       state.implCommit = head;
       return true;
     }
@@ -671,7 +695,8 @@ async function replayPendingAction(
           const completed = completeInteractivePhaseFromFreshSentinel(
             action.targetPhase,
             state,
-            cwd
+            cwd,
+            runDir,
           );
           if (completed) {
             state.pendingAction = null;

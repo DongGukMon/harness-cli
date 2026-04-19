@@ -11,6 +11,7 @@ import { isPidAlive } from '../process.js';
 import { assembleInteractivePrompt } from '../context/assembler.js';
 import { runClaudeInteractive } from '../runners/claude.js';
 import { isValidChecklistSchema } from './checklist.js';
+import { tryAutoRecoverDirtyTree, writeDirtyTreeDiagnostic } from './dirty-tree.js';
 
 export interface InteractiveResult {
   status: 'completed' | 'failed';
@@ -87,14 +88,18 @@ export function checkSentinelFreshness(
 
 /**
  * Validate artifacts for the completed phase.
- * Phase 1/3: check existence, non-empty, and mtime >= phaseOpenedAt.
- * Phase 5: check commits exist (HEAD advanced beyond implRetryBase) and working tree is clean.
- * Returns true if valid.
+ * Phase 1/3: check existence + non-empty (reopen-aware per ADR-13; freshness
+ * is carried by sentinel attemptId alone — no mtime staleness heuristic).
+ * Phase 5: enforce clean working tree + HEAD advancement, with optional
+ * auto-recovery of allowlisted residuals unless `state.strictTree` is set.
+ * `runDir` is used only to render a Phase 5 dirty-tree diagnostic when
+ * strict-tree or auto-recovery blocks validation.
  */
 export function validatePhaseArtifacts(
   phase: InteractivePhase,
   state: HarnessState,
-  cwd: string
+  cwd: string,
+  runDir: string,
 ): boolean {
   if (phase === 1 || phase === 3) {
     const artifactKeys = getPhaseArtifactFiles(state.flow, phase);
@@ -146,11 +151,31 @@ export function validatePhaseArtifacts(
 
   if (phase === 5) {
     try {
+      let status = execSync('git status --porcelain', { cwd, encoding: 'utf-8' }).trim();
+      if (status !== '') {
+        if (state.strictTree) {
+          writeDirtyTreeDiagnostic(runDir, 'strict-tree', status);
+          return false;
+        }
+        try {
+          const recovery = tryAutoRecoverDirtyTree(cwd, state.runId);
+          if (recovery.outcome === 'blocked') {
+            writeDirtyTreeDiagnostic(runDir, 'blocked', recovery.blockers.join('\n'));
+            return false;
+          }
+          // outcome: 'recovered' — HEAD advanced via gitignore commit.
+          status = '';
+        } catch (err) {
+          writeDirtyTreeDiagnostic(
+            runDir,
+            'blocked',
+            `${status}\n\n(auto-recovery threw: ${(err as Error).message})`,
+          );
+          return false;
+        }
+      }
       const head = execSync('git rev-parse HEAD', { cwd, encoding: 'utf-8' }).trim();
       const base = state.implRetryBase;
-      const status = execSync('git status --porcelain', { cwd, encoding: 'utf-8' }).trim();
-      // Working tree must always be clean
-      if (status !== '') return false;
       // HEAD advanced — always valid
       if (head !== base) return true;
       // HEAD did not advance. Accept only on reopen (implCommit already set):
@@ -242,7 +267,7 @@ export async function runInteractivePhase(
       return { status: 'failed', attemptId };
     }
     // Validate artifacts after Codex completes
-    const valid = validatePhaseArtifacts(phase, updatedState, cwd);
+    const valid = validatePhaseArtifacts(phase, updatedState, cwd, runDir);
     return { status: valid ? 'completed' : 'failed', attemptId };
   }
 }
@@ -296,7 +321,7 @@ async function waitForPhaseCompletion(
       if (settled) return;
       const freshness = checkSentinelFreshness(sentinelPath, attemptId);
       if (freshness === 'fresh') {
-        const valid = validatePhaseArtifacts(phase, state, cwd);
+        const valid = validatePhaseArtifacts(phase, state, cwd, runDir);
         settle(valid ? 'completed' : 'failed');
       }
     }
@@ -325,7 +350,7 @@ async function waitForPhaseCompletion(
           // PID died — check sentinel one last time
           const freshness = checkSentinelFreshness(sentinelPath, attemptId);
           if (freshness === 'fresh') {
-            const valid = validatePhaseArtifacts(phase, state, cwd);
+            const valid = validatePhaseArtifacts(phase, state, cwd, runDir);
             settle(valid ? 'completed' : 'failed');
           } else {
             settle('failed');
