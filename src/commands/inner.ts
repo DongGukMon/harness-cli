@@ -227,9 +227,9 @@ export async function innerCommand(runId: string, options: InnerOptions = {}): P
     } else if (anyPhaseFailed(state)) {
       await enterFailedTerminalState(state, harnessDir, runDir, cwd, inputManager, logger);
       // After R/J flow returns: classify, and surface idle panel if it ended in completion.
-      // Re-read state.status via a cast — the call above can mutate it, but TS still
-      // narrows from the surrounding if/else-if chain that excluded 'completed'/'paused'.
-      const postStatus = state.status as HarnessState['status'];
+      // The else-if chain narrowed state.status to 'in_progress'; the call above can mutate it,
+      // so widen via indirect access before classifying.
+      const postStatus = (state as HarnessState).status;
       if (postStatus === 'completed') {
         sessionEndStatus = 'completed';
         await enterIdle();
