@@ -54,7 +54,8 @@
   ```
 - `GateOutcome` (`src/types.ts`) 에도 optional `scope?: Scope` 필드를 추가한다.
 - 파싱 규칙:
-  - `## Verdict` 섹션 이후부터 문서 끝까지 (또는 `^(?:#|---)` 경계까지) 전 범위를 스캔하고, `^\s*Scope:\s*(design|impl|mixed)\b.*$` 를 대소문자 무관 match 한다. 여러 매치 시 **첫 번째만** 사용한다.
+  - **스캔 범위 계약 (gate-2 P1 fix)**: `## Verdict` 헤딩이 처음 등장한 라인 **다음 라인부터 문서 끝(EOF)까지** 의 전 범위를 스캔한다. 중간에 등장하는 `^(?:#|---)` 는 **경계로 간주하지 않는다** — 즉 `## Comments` 같은 하위 섹션 내부의 `Scope:` 라인도 매치된다. 이 계약은 reviewer 가 Scope 라인을 `## Verdict` 본문에 두든 `## Comments` 섹션에 두든 모두 파싱되도록 의도된 것이다 (Edge case #4 와 정합). `## Verdict` 헤딩이 존재하지 않으면 scope 는 undefined.
+  - 정규식: `^\s*Scope:\s*(design|impl|mixed)\b.*$` (대소문자 무관, multiline). 여러 매치 시 **첫 번째만** 사용한다 (문서 상단 → 하단 순).
   - 매치가 있고 `verdict === 'REJECT'` 이면 `scope` 를 세팅한다.
   - 매치가 있지만 `verdict === 'APPROVE'` 이면 scope 를 무시한다 (fallthrough).
   - 매치가 없거나 토큰이 `design|impl|mixed` 가 아니면 `scope` 필드를 생략한다 (undefined).
@@ -89,7 +90,8 @@
 
 - `gate_retry` 이벤트의 `retryLimit` 필드는 `getGateRetryLimit(state.flow)` 값을 emit 한다 (line 541).
 - 필드 타입 (`LogEventBase.retryLimit: number`) 는 변경 없음 — 스키마 호환.
-- 다른 이벤트 (`phase_end`, `gate_verdict`, `gate_error`) 의 스키마 변경 없음. `GateOutcome.scope` 는 runtime state 에만 존재하고, events.jsonl 에는 emit 하지 않는다 (P3 plan 단계에서 "scope 를 log 에도 담을지" 를 재확인 — 본 spec 의 디폴트: emit 하지 않음; Open Questions Q1 참조).
+- 다른 이벤트 (`phase_end`, `gate_verdict`, `gate_error`) 의 스키마 변경 없음. `GateOutcome.scope` 는 runtime state 에만 존재하고, events.jsonl 에는 emit 하지 않는다.
+- **측정/rollback 데이터 소스 (gate-2 P2 carry-over, TODO)**: Scope 를 events.jsonl 에 emit 하지 않기로 했을 때, rollout 후 "Codex scope 분류 정확도" 와 "false fast-path (design 이슈를 impl 로 오분류) 발생률" 을 무엇으로 측정할지의 **데이터 소스가 이 spec 시점에서는 미확정** 이다. 본 spec 은 디폴트를 "runtime-only, no emit" 으로 고정하되, Phase 3 plan 에서 다음 두 후보 중 하나를 **반드시 선택** 한다. (a) gate-7 verdict-raw.txt (이미 디스크 영속) 를 수동 grep 으로 분석 — tooling 0, 정확도 post-hoc 가능. (b) `gate_verdict` 이벤트에 `scope?: Scope` 필드 추가 — 스키마 1필드, session meta 집계 자연스러움. Q1/Q3/Q4 는 이 결정을 재확인하는 hook 이다. **gate-2 P2 는 이 TODO 를 Phase 3 plan 으로 이월** (사용자 정책: gate reject 시 P1 만 처리, P2 는 다음 phase 이월).
 
 ### R6. 테스트 전략 (Phase 3 plan 에서 태스크화)
 
@@ -100,6 +102,8 @@
   - REJECT + `Scope:` 없음 → `scope` 필드 부재.
   - APPROVE + `Scope: impl` (오타 시나리오) → `scope` 필드 부재 (APPROVE 는 무시).
   - REJECT + `Scope: bogus` → `scope` 필드 부재.
+  - REJECT + `Scope: impl` 라인이 `## Verdict` 이후 `## Comments` 섹션 **내부** 에 위치 → `'impl'` (R2 스캔 계약 검증; gate-2 P1 fix).
+  - REJECT + `## Verdict` 이전 본문에 `Scope: impl` 라인이 있고 `## Verdict` 이후에는 없음 → `scope` 필드 부재 (스캔 범위 하한 검증).
 - **Unit — `getGateRetryLimit`** (tests/config.test.ts):
   - `getGateRetryLimit('full') === 3`, `getGateRetryLimit('light') === 5`.
 - **Integration — `handleGateReject`** (tests/phases/runner.test.ts):
@@ -135,7 +139,7 @@
 1. **Codex 가 APPROVE 인데 `Scope: impl` 라인을 넣은 경우** — parser 가 scope 를 무시한다. Runner 는 APPROVE 경로로 진행 — REJECT-only 계약이 유지된다.
 2. **Codex 가 `Scope:` 다음에 여러 값을 쓴 경우** (예: `Scope: impl, design`) — 첫 매치의 첫 토큰만 사용. `impl, design` 은 regex 매치 안 됨 → undefined → mixed fallback → P1 reopen. 안전 측면의 fallback.
 3. **Codex 가 `Scope: mixed` 를 반환** — R3 분기 조건 (`scope === 'impl'`) 을 만족하지 않으므로 기존 경로 (P1 reopen). 의도된 동작.
-4. **Codex 가 `Scope:` 를 raw output 내 Comments 섹션 안에 넣은 경우** — regex 가 `## Verdict` 이후 문서 전체를 스캔하므로 매치된다. 의도된 동작 (reviewer 의 배치 자유도 허용).
+4. **Codex 가 `Scope:` 를 raw output 내 Comments 섹션 안에 넣은 경우** — R2 의 스캔 계약(`## Verdict` 이후 EOF 까지, 중간 `#`/`---` 무시) 에 따라 `## Comments` 섹션 내부 `Scope:` 도 매치된다. 의도된 동작 (reviewer 의 배치 자유도 허용). R6 에 테스트 케이스 명시.
 5. **Light flow 에서 retry 5 회 소진 후 auto-mode** — `retryCount >= 5 && autoMode` → `forcePassGate` 경로 (R4 의 헬퍼 경유). 기존 auto-mode 동작과 동일, limit 만 5 로 변경.
 6. **Light flow 에서 retry 5 회 소진 후 non-auto** — `handleGateEscalation` 경로. 사용자 프롬프트 (C/S/Q) 유지. 메시지의 "rejected 3 times" 를 `getGateRetryLimit(state.flow)` 로 교체.
 7. **Full flow 에서 scope=impl REJECT** — R3 분기 조건 (`state.flow === 'light'`) 을 만족하지 않으므로 기존 경로 (`getReopenTarget('full', 7) === 5` → P5 reopen). 즉 full flow 는 scope 를 emit 받아도 **dispatch 가 변하지 않는다** (non-regression 보증).
@@ -184,10 +188,10 @@
 
 > Phase 2 gate 리뷰어는 다음 중 해결이 필요하다고 판단되는 항목을 P1/P2 로 올려주십시오. 본 spec 의 설계 제안 (괄호 안 "현 스펙") 은 기각 가능합니다.
 
-- **Q1. Scope 를 events.jsonl 에 emit 할까?** — 현 스펙: 안 한다 (runtime-only). 근거: scope 는 dispatch 에만 쓰이고 post-hoc 분석 가치가 크지 않다고 판단. 반대 의견: 롤아웃 후 "Codex 가 실제 어떤 scope 를 얼마나 반환하는지" 메트릭이 필요할 수 있다 → 그 경우 `gate_verdict` 이벤트에 `scope?: Scope` 추가가 최소 변경이다. Phase 2 가 "metric 용 필드를 P1 에 포함하라" 고 하면 R5 를 확장한다.
+- **Q1. Scope 를 events.jsonl 에 emit 할까?** — 현 스펙: 안 한다 (runtime-only). 근거: scope 는 dispatch 에만 쓰이고 post-hoc 분석은 gate-7 `verdict-raw.txt` 디스크 영속본을 grep 으로 분석 가능. 반대 의견: session meta 집계 시 `gate_verdict` 이벤트에 `scope?: Scope` 필드가 있으면 1-hop 으로 해결된다. **gate-2 P2 카리오버**: 측정 데이터 소스가 아직 이 spec 에서 닫히지 않았으므로, Phase 3 plan 이 (a) verdict-raw grep, (b) `gate_verdict.scope` emit 추가 중 **하나를 반드시 선택** 해야 한다 (R5 TODO). Phase 2 reviewer 가 이 선택을 P1 에 포함하라고 하면 본 spec 을 다시 revise.
 - **Q2. Light flow `GATE_RETRY_LIMIT_LIGHT = 5` 는 적정한가?** — 현 스펙: 5 (INTENT 권장). 근거: Round 1 데이터가 3회 중 3회째 APPROVE 였으므로 "여유가 있으면 더 수렴했을 가능성" 에 대한 argument 는 약하다. 하지만 Option 1 (fast-path) 이 cycle 당 비용을 낮추므로 5 회 소진이 예산 면에서 감당 가능. 대안: 4 (보수), 6 (적극). Phase 2 가 " data 가 3 을 감당 못 한다는 직접 증거가 약하니 4 로" 라고 하면 수용 가능.
 - **Q3. 롤아웃 후 rollback trigger 를 명시할까?** — 현 스펙: 명시하지 않음. Phase 2 가 "scope classification 정확도 < X%, 또는 false-fast-path 가 design-level regression 을 유발하면 Option 1 off" 같은 조건을 spec 에 박제하라고 하면 "Rollback trigger" 섹션을 추가한다. 현 스펙은 follow-up dogfood 에서 측정 후 판단.
-- **Q4. `GateOutcome.scope` 를 `gate_verdict` 이벤트 스키마에 넣지 않으면, 재시도 체인 분석이 쉬운가?** — Q1 의 구체화. events.jsonl 만 보고 "이 REJECT 는 impl 이었나 design 이었나" 를 알 수 없으면 dogfood 디버깅이 어렵다. 의견: 이것만 봐도 Q1 의 답이 "emit 한다" 쪽으로 기울 수 있음. Phase 2 가 이 지점을 짚어주기를 기대.
+- **Q4. `GateOutcome.scope` 를 `gate_verdict` 이벤트 스키마에 넣지 않으면, 재시도 체인 분석이 쉬운가?** — Q1 의 구체화. events.jsonl 만 보고 "이 REJECT 는 impl 이었나 design 이었나" 를 알 수 없으면 dogfood 디버깅 비용이 크다. 대안: gate-7 `verdict-raw.txt` (runDir 내) 를 grep 하면 복구 가능하나 세션 단위 집계가 불편. **gate-2 P2 정렬**: R5 TODO 와 같은 이슈. Phase 2 가 이 지점을 P1 으로 올리면 본 spec 의 R5 를 `gate_verdict.scope?: Scope` emit 추가로 수정하고 R6 에 이벤트 fixture 테스트를 추가한다.
 - **Q5. 기존 `GATE_RETRY_LIMIT` 상수 제거 vs deprecated alias 유지** — 현 스펙: 제거. 반대 의견: 외부 consumer (예: `harness` CLI 를 node 모듈로 import 하는 third-party) 가 있을 수 있다. 현 구조상 그럴 가능성은 매우 낮지만, Phase 2 가 "API 안정성 차원에서 한 버전은 alias 로 유지" 를 요구하면 deprecation JSDoc + 다음 메이저에서 제거로 타협 가능.
 
 ---
