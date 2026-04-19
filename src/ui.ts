@@ -1,6 +1,6 @@
 import { MODEL_PRESETS, REQUIRED_PHASE_KEYS, getPresetById } from './config.js';
 import type { FooterSummary } from './metrics/footer-aggregator.js';
-import type { HarnessState, FlowMode, SessionLogger } from './types.js';
+import type { HarnessState, FlowMode, SessionLogger, RenderCallsite } from './types.js';
 import type { InputManager } from './input.js';
 
 // ANSI color codes
@@ -34,7 +34,7 @@ function phaseLabel(phase: number, flow: FlowMode = 'full'): string {
 export function renderControlPanel(
   state: HarnessState,
   logger?: SessionLogger,
-  callsite?: string,
+  callsite?: RenderCallsite,
 ): void {
   process.stdout.write('\x1b[2J\x1b[H'); // clear screen
   console.error(separator());

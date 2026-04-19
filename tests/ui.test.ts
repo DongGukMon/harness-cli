@@ -125,7 +125,7 @@ describe('renderControlPanel — ui_render emission', () => {
     const origErr = console.error;
     console.error = (...args: any[]) => { captured.push(args.join(' ')); };
     try {
-      renderControlPanel(state, logger, 'unit-test');
+      renderControlPanel(state, logger, 'loop-top');
     } finally {
       console.error = origErr;
     }
@@ -133,7 +133,7 @@ describe('renderControlPanel — ui_render emission', () => {
       event: 'ui_render',
       phase: 5,
       phaseStatus: 'in_progress',
-      callsite: 'unit-test',
+      callsite: 'loop-top',
     });
   });
 

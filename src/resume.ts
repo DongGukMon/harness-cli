@@ -486,6 +486,12 @@ function updateExternalCommitsDetected(state: HarnessState, cwd: string, runDir:
 /**
  * Validate Phase 1/3/5 artifacts when fresh sentinel is detected on resume.
  * Runs normalize_artifact_commit for Phase 1/3.
+ *
+ * Phase 5 success: HEAD has advanced past `implRetryBase`. No working-tree
+ * cleanliness check (auto-recovery removed 2026-04-19). Reopen-zero-commit
+ * is intentionally NOT accepted here because this helper runs only for
+ * fresh-sentinel recovery (not the verify-failure reopen path).
+ *
  * Returns true if the phase can be treated as completed.
  */
 export function completeInteractivePhaseFromFreshSentinel(
