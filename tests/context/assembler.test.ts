@@ -2,7 +2,13 @@ import { describe, it, expect, afterEach, vi } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { assembleInteractivePrompt, assembleGatePrompt } from '../../src/context/assembler.js';
+import {
+  assembleInteractivePrompt,
+  assembleGatePrompt,
+  parseComplexitySignal,
+  buildComplexityDirective,
+  __resetComplexityWarning,
+} from '../../src/context/assembler.js';
 import { createInitialState } from '../../src/state.js';
 import type { HarnessState } from '../../src/types.js';
 
@@ -402,5 +408,119 @@ describe('buildGatePromptPhase7 — flow-aware (ADR-12)', () => {
     if (typeof result !== 'string') throw new Error('expected string');
     expect(result).toContain('spec + plan + eval report + diff');
     expect(result).toContain('7-phase harness lifecycle');
+  });
+});
+
+// ─── Complexity signal: parser ───────────────────────────────────────────────
+
+describe('complexity signal — parser', () => {
+  it.each([
+    ['Small', 'small'],
+    ['small', 'small'],
+    ['SMALL', 'small'],
+    ['Medium', 'medium'],
+    ['medium', 'medium'],
+    ['MEDIUM', 'medium'],
+    ['Large', 'large'],
+    ['large', 'large'],
+    ['LARGE', 'large'],
+  ])('case-insensitive token %s → %s', (token, expected) => {
+    const spec = `# Title\n\n## Complexity\n\n${token}\n\n## Next\n`;
+    expect(parseComplexitySignal(spec)).toBe(expected);
+  });
+
+  it.each([
+    ['Small — ~300 LoC single-file CLI', 'small'],
+    ['Medium — touches 8 files', 'medium'],
+    ['Large - major refactor', 'large'],
+  ])('accepts inline rationale after token (%s)', (line, expected) => {
+    const spec = `## Complexity\n\n${line}\n`;
+    expect(parseComplexitySignal(spec)).toBe(expected);
+  });
+
+  it('returns null when section missing', () => {
+    expect(parseComplexitySignal('# Title\n\nJust prose, no Complexity header.\n')).toBeNull();
+  });
+
+  it('returns null when section present but body is empty', () => {
+    expect(parseComplexitySignal('## Complexity\n\n\n## Next\n')).toBeNull();
+  });
+
+  it('returns null for unknown tokens', () => {
+    expect(parseComplexitySignal('## Complexity\n\nExtraLarge\n')).toBeNull();
+    expect(parseComplexitySignal('## Complexity\n\n3\n')).toBeNull();
+  });
+
+  it('skips leading blank lines before the token', () => {
+    expect(parseComplexitySignal('## Complexity\n\n\n\n  \n\nMedium\n')).toBe('medium');
+  });
+
+  it('does not match "## Complexity:" (header must stand alone)', () => {
+    // R2 is strict: `^##\s+Complexity\s*$`. Trailing colon or rationale on the
+    // header line itself is rejected; authors put rationale on the next line.
+    // Neither of these has a bare "## Complexity" header, so both return null.
+    expect(parseComplexitySignal('## Complexity: Small\n\nSmall\n')).toBeNull();
+    expect(parseComplexitySignal('## Complexity: Small\n\n')).toBeNull();
+  });
+});
+
+// ─── Complexity signal: directive builder ─────────────────────────────────────
+
+describe('complexity signal — directive builder', () => {
+  afterEach(() => {
+    __resetComplexityWarning();
+  });
+
+  it('Small emits a non-empty stanza instructing task-count ceiling + no pseudocode', () => {
+    const out = buildComplexityDirective('small');
+    expect(out).toContain('<complexity_directive>');
+    expect(out).toContain('</complexity_directive>');
+    expect(out).toMatch(/classified \*\*Small\*\*/);
+    expect(out).toMatch(/at most 3 tasks/i);
+    expect(out).toMatch(/per-function pseudocode/i);
+    expect(out.endsWith('\n')).toBe(true);
+  });
+
+  it('Large emits a non-empty stanza instructing slice discipline + ADR capture', () => {
+    const out = buildComplexityDirective('large');
+    expect(out).toContain('<complexity_directive>');
+    expect(out).toMatch(/classified \*\*Large\*\*/);
+    expect(out).toMatch(/vertical slices/i);
+    expect(out).toMatch(/ADR/);
+  });
+
+  it('Medium returns empty string (no behavioral drift)', () => {
+    expect(buildComplexityDirective('medium')).toBe('');
+  });
+
+  it('null returns empty string and emits a single stderr warning per process', () => {
+    const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      expect(buildComplexityDirective(null)).toBe('');
+      expect(buildComplexityDirective(null)).toBe('');
+      expect(buildComplexityDirective(null)).toBe('');
+      // Only one warn despite 3 calls
+      const warnCalls = stderrSpy.mock.calls.filter(
+        (c) => typeof c[0] === 'string' && (c[0] as string).includes('Complexity signal'),
+      );
+      expect(warnCalls.length).toBe(1);
+    } finally {
+      stderrSpy.mockRestore();
+    }
+  });
+
+  it('__resetComplexityWarning re-arms the warning', () => {
+    const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      buildComplexityDirective(null);
+      __resetComplexityWarning();
+      buildComplexityDirective(null);
+      const warnCalls = stderrSpy.mock.calls.filter(
+        (c) => typeof c[0] === 'string' && (c[0] as string).includes('Complexity signal'),
+      );
+      expect(warnCalls.length).toBe(2);
+    } finally {
+      stderrSpy.mockRestore();
+    }
   });
 });

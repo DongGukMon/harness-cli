@@ -90,6 +90,67 @@ const REVIEWER_CONTRACT_BY_GATE: Record<2 | 4, string> = {
   4: REVIEWER_CONTRACT_BASE + FIVE_AXIS_PLAN_GATE,
 };
 
+// ─── Complexity signal (spec R2/R3) ──────────────────────────────────────────
+//
+// Phase 1 spec must contain a `## Complexity` section whose first non-blank
+// body line is Small/Medium/Large (case-insensitive). Phase 3 assembler parses
+// this and injects a per-bucket directive into the plan-writing prompt.
+// Medium / parse-failure paths are empty-string fallbacks (preserve today's
+// behavior). Parse failure emits exactly one stderr warn per process.
+
+let complexityWarningEmitted = false;
+
+export function __resetComplexityWarning(): void {
+  complexityWarningEmitted = false;
+}
+
+export function parseComplexitySignal(
+  specText: string,
+): 'small' | 'medium' | 'large' | null {
+  const headerMatch = specText.match(/^##\s+Complexity\s*$/m);
+  if (!headerMatch) return null;
+  const offset = (headerMatch.index ?? 0) + headerMatch[0].length;
+  const remainder = specText.slice(offset);
+  const lines = remainder.split('\n');
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (line === '') continue;
+    const tokenMatch = line.match(/^(small|medium|large)\b/i);
+    return tokenMatch
+      ? (tokenMatch[1].toLowerCase() as 'small' | 'medium' | 'large')
+      : null;
+  }
+  return null;
+}
+
+const SMALL_DIRECTIVE =
+  '<complexity_directive>\n' +
+  'This task is classified **Small**. Keep the plan to **at most 3 tasks**. ' +
+  'Do not emit per-function pseudocode or ASCII diagrams. Prefer bundling related edits in one task over splitting them. ' +
+  'Keep `checklist.json` to at most 4 `checks` entries — typecheck + test + build is usually enough.\n' +
+  '</complexity_directive>\n';
+
+const LARGE_DIRECTIVE =
+  '<complexity_directive>\n' +
+  'This task is classified **Large**. Decompose into clear vertical slices with explicit dependency order. ' +
+  'Capture architecturally-relevant decisions as short ADR blurbs inline in the plan. Standard depth otherwise.\n' +
+  '</complexity_directive>\n';
+
+export function buildComplexityDirective(
+  level: 'small' | 'medium' | 'large' | null,
+): string {
+  if (level === 'small') return SMALL_DIRECTIVE;
+  if (level === 'large') return LARGE_DIRECTIVE;
+  if (level === 'medium') return '';
+  if (!complexityWarningEmitted) {
+    process.stderr.write(
+      '⚠️  Complexity signal missing or invalid in spec; defaulting to Medium.\n',
+    );
+    complexityWarningEmitted = true;
+  }
+  return '';
+}
+
 function readTemplateFile(filename: string): string {
   const templatePath = path.join(__dirname, 'prompts', filename);
   return fs.readFileSync(templatePath, 'utf-8');
