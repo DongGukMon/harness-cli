@@ -370,6 +370,45 @@ describe('handleInteractivePhase — sentinel pre-delete (hard prerequisite)', (
   });
 });
 
+// ─── Regression: lineage atomicity — phaseClaudeSessions unchanged on purge throw (R7) ──────────
+
+describe('handleInteractivePhase — lineage atomicity regression (R7)', () => {
+  it('leaves phaseClaudeSessions unchanged when sentinel purge throws', async () => {
+    vi.mocked(claudeSessionJsonlExists).mockReturnValue(false);
+
+    const runDir = makeTmpDir();
+    const sentinelPath = path.join(runDir, 'phase-5.done');
+    fs.writeFileSync(sentinelPath, 'stale-content');
+
+    const PREV_SESSION = { runner: 'claude' as const, model: 'claude-sonnet-4-6[1m]', effort: 'high' };
+    const state = makeReopenState(5);
+    state.phaseClaudeSessions['5'] = PREV_SESSION;
+
+    // Force existsSync to return true after rmSync — simulates purge failure
+    const origExistsSync = fs.existsSync;
+    let rmSyncCalled = false;
+    const rmSyncSpy = vi.spyOn(fs, 'rmSync').mockImplementation(() => { rmSyncCalled = true; });
+    const existsSpy = vi.spyOn(fs, 'existsSync').mockImplementation((p) => {
+      if (rmSyncCalled && typeof p === 'string' && p === sentinelPath) return true;
+      return origExistsSync(p as string);
+    });
+
+    const logger = new CapturingLogger();
+    try {
+      await expect(
+        handleInteractivePhase(5, state, HDIR, runDir, CWD, logger as any)
+      ).rejects.toThrow('pre-relaunch sentinel purge failed');
+
+      // Both lineage fields must remain at their pre-call values
+      expect(state.phaseClaudeSessions['5']).toEqual(PREV_SESSION);
+      expect(state.phaseAttemptId['5']).toBe(PREV_ATTEMPT_ID);
+    } finally {
+      rmSyncSpy.mockRestore();
+      existsSpy.mockRestore();
+    }
+  });
+});
+
 // ─── Regression: token capture still works on resume path ────────────────────
 
 describe('handleInteractivePhase — token capture regression on resume', () => {

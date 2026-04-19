@@ -130,7 +130,7 @@ If any condition fails, harness falls back to a fresh session (new UUID, `--sess
 
 The last-launched preset for each interactive phase is persisted in `state.phaseClaudeSessions: Record<'1'|'3'|'5', ClaudeSessionInfo | null>` and migrated to `null` on state upgrade.
 
-**Pre-relaunch sentinel purge (hard prerequisite):** Before spawning Claude (on both resume and fresh paths), harness deletes any existing `phase-<N>.done` sentinel and verifies the file is absent. If the file cannot be deleted, the relaunch is aborted and the phase is marked failed. This prevents a prior-attempt sentinel from being mistaken for the current attempt's completion signal when the `attemptId` is reused.
+**Pre-relaunch sentinel purge (hard prerequisite):** Before spawning Claude (on both resume and fresh paths), harness deletes any existing `phase-<N>.done` sentinel and verifies the file is absent. If the file cannot be deleted, the relaunch is aborted and the phase is marked failed. This prevents a prior-attempt sentinel from being mistaken for the current attempt's completion signal when the `attemptId` is reused. When the purge fails and the relaunch is aborted, `phaseAttemptId` and `phaseClaudeSessions` are both left unchanged — neither field is updated until the purge succeeds — so the next reopen can make a consistent resume-eligibility decision based on the previous attempt's lineage.
 
 Other behavior:
 - the PID is captured via `claude-<phase>-<attemptId>.pid`
