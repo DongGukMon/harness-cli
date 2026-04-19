@@ -1,6 +1,6 @@
 ---
 name: harness-phase-3-plan
-description: Use during harness-cli Phase 3 to write an implementation plan + eval checklist that passes the harness plan gate (Phase 4).
+description: Use during phase-harness Phase 3 to write an implementation plan + eval checklist that passes the harness plan gate (Phase 4).
 ---
 
 # harness Phase 3 — Planning

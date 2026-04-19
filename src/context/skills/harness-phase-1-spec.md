@@ -1,12 +1,12 @@
 ---
 name: harness-phase-1-spec
-description: Use during harness-cli Phase 1 to brainstorm and write a spec that passes the harness spec gate (Phase 2).
+description: Use during phase-harness Phase 1 to brainstorm and write a spec that passes the harness spec gate (Phase 2).
 ---
 
 # harness Phase 1 — Spec writing
 
 ## Context
-당신은 harness-cli 파이프라인의 Phase 1에 있다. 산출물(spec)은 Phase 2에서 Codex가 다음 5축 rubric의 subset으로 평가한다:
+당신은 phase-harness 파이프라인의 Phase 1에 있다. 산출물(spec)은 Phase 2에서 Codex가 다음 5축 rubric의 subset으로 평가한다:
 - **Correctness** — 요구사항/비요구사항/경계조건/성공기준이 명시되었는가?
 - **Readability** — 섹션 구성이 명확하고 모호한 표현이 없는가?
 - **Scope** — 단일 구현 plan으로 분해 가능한 크기인가? 여러 독립 프로젝트가 섞이지 않았는가?
