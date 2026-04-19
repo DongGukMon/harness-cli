@@ -100,6 +100,7 @@ Notes:
 - Supported platforms are **macOS and Linux**.
 - The verify script is resolved from the installed package first, with legacy fallback to `~/.claude/scripts/harness-verify.sh`.
 - If you switch an interactive phase to a Codex preset, harness will use the Codex CLI for that phase too.
+- By default, Codex phases run through the real `codex` CLI inside an isolated `<runDir>/codex-home`; use `--codex-no-isolate` only when you intentionally want inherited `CODEX_HOME` behavior.
 
 ---
 

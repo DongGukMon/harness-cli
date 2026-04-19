@@ -100,6 +100,7 @@ Harness는 git working tree를 기준으로 동작하며, phase 경계에서 art
 - 지원 플랫폼은 **macOS와 Linux**입니다.
 - verify script는 먼저 설치된 패키지 내부 경로에서 찾고, 없으면 `~/.claude/scripts/harness-verify.sh`를 레거시 fallback으로 사용합니다.
 - interactive phase를 Codex preset으로 바꾸면, 해당 phase도 Codex CLI로 실행됩니다.
+- 기본적으로 Codex phase는 실제 `codex` CLI를 사용하고, `<runDir>/codex-home` 격리 환경에서 실행됩니다. 사용자 전역 `CODEX_HOME` 동작이 필요할 때만 `--codex-no-isolate`를 사용하세요.
 
 ---
 
