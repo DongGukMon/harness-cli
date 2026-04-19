@@ -54,7 +54,7 @@ Summary:
 
 **Decision**: On every `saveGateFeedback` call, write TWO files:
 1. `gate-N-feedback.md` (existing path, overwrite — **mandatory**; callers `stat` this file, see Persistence semantics).
-2. `gate-N-retry-K-feedback.md` (new archive — best-effort).
+2. `gate-N-cycle-C-retry-K-feedback.md` (new archive — best-effort; cycle-indexed, see Naming scheme below).
 
 Additionally on APPROVE verdict, write `gate-N-cycle-C-verdict.json` (best-effort) with `{ verdict, retryIndex, cycleIndex, codexSessionId?, tokensTotal?, durationMs?, timestamp }`. Cycle-indexed filename prevents overwrites across Continue-escalation cycles — matches the feedback archive contract.
 
@@ -209,6 +209,10 @@ await handleGateEscalation(gatePhase, comments, retryIndex, state, runDir, cwd, 
 
 Rationale: the quit branch of `handleGateEscalation` (runner.ts L657-671) does **not** reset `gateRetries`, so at resume time `state.gateRetries[phase]` still equals `GATE_RETRY_LIMIT` (the value reached that triggered escalation); `GATE_RETRY_LIMIT - 1` equals the pre-mutation `retryIndex` that would have been captured live. `Math.max(0, ...)` guards a defensive floor in the unlikely case a future code path resets the counter before pausing. `cycleIndex` does not need resume-time derivation because it is read from `state.gateEscalationCycles` inside `handleGateEscalation` itself.
 
+**TODO (round-4 P2 follow-ups, tracked in `docs/gate-convergence/FOLLOWUPS.md` after merge)**:
+- **FUP-3 (resume replay test coverage)**: add a `tests/phases/gate-resume-escalation.test.ts` case that exercises `handleResume` → `show_escalation` → derived `retryIndex` → `handleGateEscalation` and asserts the resumed archive path matches `gate-N-cycle-C-retry-${GATE_RETRY_LIMIT - 1}-feedback.md`. Not currently in §5/§8 because the replay path is also tested indirectly via existing `gate-resume.test.ts`, but an explicit archive-name assertion would close the verification gap.
+- **FUP-4 (raw comments preservation on resume)**: today `src/resume.ts` `show_escalation` replay loads `comments = readFileSync(action.feedbackPaths[0], 'utf-8')` — which is the *formatted* `gate-N-feedback.md` (headers + "## Reviewer Comments" block). Passing that back through `saveGateFeedback` would nest the markdown. Mitigation options:  (a) resume parses the `## Reviewer Comments` body before the call, or (b) persist raw `comments` in `pendingAction.rawComments` at pause time. Option (b) is preferred long-term (no parse fragility), but is a schema change; for this bundle, **option (a) is the minimum bar** and must be included in the resume-path fix during implementation. If deferred, the archive written on resume will diverge from the live-path archive and violate the "same content" archive invariant.
+
 State type addition (`src/types.ts`):
 ```ts
 export interface HarnessState {
@@ -311,7 +315,7 @@ Verification is deterministic; the plan includes `.harness-eval.json` with:
 1. **typecheck** — `pnpm tsc --noEmit` → exit 0.
 2. **tests** — `pnpm vitest run` → exit 0, 617 → 621+ passed, 1 skipped.
 3. **build** — `pnpm build` → exit 0, `dist/src/phases/runner.js` + `dist/src/preflight.js` + `dist/src/artifact.js` exist.
-4. **T8-a signatures + archive path** — `src/phases/runner.ts` `saveGateFeedback` takes 5 params (`retryIndex: number, cycleIndex: number`). `handleGateEscalation` takes `retryIndex` param. `grep -q "cycle-.*-retry-.*-feedback.md" src/phases/runner.ts`. `src/types.ts` exports `gateEscalationCycles?: Record<'2' | '4' | '7', number>` on `HarnessState`.
+4. **T8-a signatures + archive path** — `src/phases/runner.ts` `saveGateFeedback` takes 5 params (`retryIndex: number, cycleIndex: number`). `handleGateEscalation` takes `retryIndex` param. `grep -q "cycle-.*-retry-.*-feedback.md" src/phases/runner.ts`. `src/types.ts` exports `gateEscalationCycles?: Partial<Record<'2' | '4' | '7', number>>` on `HarnessState` (inner `Partial<>` supports type-safe `{}` initialization at the increment site). `src/resume.ts` `show_escalation` replay derives `retryIndex` from `state.gateRetries` before calling `handleGateEscalation` (grep: `grep -q "handleGateEscalation(.*retryIndex" src/resume.ts`).
 5. **T8-b constant** — `grep -q "WATCHDOG_DELAY_MS" src/phases/runner.ts`.
 6. **T8-c string** — `grep -q "timeout: 10_\\?000" src/preflight.ts`.
 7. **T8-d commit-count + shared helper** — dedicated test verifies for N verify rounds within a verify cycle (1 initial + `verifyRetries`), Phase 6 commit count == `verifyRetries + 1` (one per round), all message titles contain `rev K eval report` for K ∈ {1..verifyRetries+1}. Resume-from-staged-D scenario commits exactly one additional `rev K eval report`. `src/artifact.ts` exports `commitEvalReport(state, cwd)`; `grep -q "commitEvalReport" src/phases/runner.ts` AND `grep -q "commitEvalReport" src/resume.ts` (both live path and both resume recovery sites route through the shared helper).
