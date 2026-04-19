@@ -8,11 +8,19 @@ export interface ModelPreset {
   effort: string;
 }
 
+// Model effort axes (per Anthropic 2026-04 guidance):
+//   - Opus 4.7: high < xHigh < max (three distinct tiers)
+//   - Sonnet 4.6: high < max (two tiers; no xHigh)
+// The catalog registers every tier on each axis so users can make explicit
+// cost/quality tradeoffs via `promptModelConfig`. PHASE_DEFAULTS still points
+// at the conservative tier; `max` variants are opt-in.
 export const MODEL_PRESETS: ModelPreset[] = [
-  { id: 'opus-xhigh',   label: 'Claude Opus 4.7 / xHigh',  runner: 'claude', model: 'claude-opus-4-7',   effort: 'xHigh' },
-  { id: 'opus-high',    label: 'Claude Opus 4.7 / high',   runner: 'claude', model: 'claude-opus-4-7',   effort: 'high' },
-  { id: 'sonnet-high',  label: 'Claude Sonnet 4.6 / high', runner: 'claude', model: 'claude-sonnet-4-6', effort: 'high' },
-  { id: 'codex-high',   label: 'Codex / high',             runner: 'codex',  model: 'gpt-5.4',           effort: 'high' },
+  { id: 'opus-max',     label: 'Claude Opus 4.7 / max',    runner: 'claude', model: 'claude-opus-4-7',   effort: 'max'    },
+  { id: 'opus-xhigh',   label: 'Claude Opus 4.7 / xHigh',  runner: 'claude', model: 'claude-opus-4-7',   effort: 'xHigh'  },
+  { id: 'opus-high',    label: 'Claude Opus 4.7 / high',   runner: 'claude', model: 'claude-opus-4-7',   effort: 'high'   },
+  { id: 'sonnet-max',   label: 'Claude Sonnet 4.6 / max',  runner: 'claude', model: 'claude-sonnet-4-6', effort: 'max'    },
+  { id: 'sonnet-high',  label: 'Claude Sonnet 4.6 / high', runner: 'claude', model: 'claude-sonnet-4-6', effort: 'high'   },
+  { id: 'codex-high',   label: 'Codex / high',             runner: 'codex',  model: 'gpt-5.4',           effort: 'high'   },
   { id: 'codex-medium', label: 'Codex / medium',           runner: 'codex',  model: 'gpt-5.4',           effort: 'medium' },
 ];
 
