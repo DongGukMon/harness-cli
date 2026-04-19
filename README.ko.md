@@ -4,7 +4,7 @@
 
 지원 기능:
 - **7단계 full flow**: spec → spec gate → plan → plan gate → implement → verify → eval gate
-- 작은 작업을 위한 **4단계 light flow**: design+plan → implement → verify → eval gate
+- 작은 작업을 위한 **5단계 light flow**: design+plan → pre-impl gate → implement → verify → eval gate
 - 시작/재개 시점의 **phase별 모델 preset 선택**
 - `resume`, `status`, `list`, `skip`, `jump`를 통한 **tmux 기반 복구/제어**
 - **선택적 세션 로깅**과 경과 시간·토큰 수를 보여주는 live footer
@@ -52,14 +52,15 @@ P1 spec → P2 spec gate → P3 plan → P4 plan gate → P5 implement → P6 ve
 ### Light flow (`phase-harness start --light "task"`)
 
 ```text
-P1 design+plan → P5 implement → P6 verify → P7 eval gate
+P1 design+plan → P2 pre-impl gate → P5 implement → P6 verify → P7 eval gate
 ```
 
 light flow에서는:
-- **2 / 3 / 4 phase**가 `skipped` 상태로 처리됩니다
+- **3 / 4 phase**가 `skipped` 상태로 처리됩니다 (P2/P7 Codex gate는 활성)
 - phase 1이 `## Complexity`, `## Open Questions`, `## Implementation Plan`이 들어간 결합 문서를 만들어야 합니다
+- **P2 (pre-impl gate)**: Codex가 결합 설계 문서를 light flow 전용 design rubric으로 리뷰합니다. REJECT 시 phase 1을 reopen하고, 피드백은 `pendingAction.feedbackPaths`로만 전달됩니다 (Gate 2는 `carryoverFeedback`를 쓰지 않음).
 - phase 7 피드백이 구현 범위면 **phase 5**, 설계/혼합 범위면 **phase 1**을 다시 엽니다
-- light flow의 gate retry 한도는 **5**이고, full flow는 **3**입니다
+- gate retry 한도: **light P2 = 3**, **light P7 = 5**, full flow = 3
 - flow는 run 생성 시점에 고정되므로 `phase-harness resume --light`는 거부됩니다
 
 ---
@@ -212,7 +213,7 @@ phase-harness start --root /tmp/demo "task"
 - `--require-clean` — working tree에 uncommitted change가 하나라도 있으면 차단
 - `--auto` — escalation 처리 시 autonomous mode 사용
 - `--enable-logging` — `~/.harness/sessions/...` 아래에 세션 로그 저장
-- `--light` — 4단계 light flow 사용
+- `--light` — 5단계 light flow 사용 (P1 design+plan → P2 pre-impl gate → P5 → P6 → P7)
 - `--codex-no-isolate` — Codex subprocess의 per-run `CODEX_HOME` isolation 비활성화; 권장하지 않음
 - 전역 `--root <dir>` — harness root를 `<dir>/.harness`로 강제
 
