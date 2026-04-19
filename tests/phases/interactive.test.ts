@@ -597,50 +597,26 @@ describe('validatePhaseArtifacts — Phase 3', () => {
 });
 
 describe('validatePhaseArtifacts — Phase 5', () => {
-  it('returns true when HEAD has advanced and working tree is clean', () => {
+  it('returns true when HEAD has advanced', () => {
     const repoDir = createTestRepo();
     const head = execSync('git rev-parse HEAD', { cwd: repoDir, encoding: 'utf-8' }).trim();
-
-    // Create a new commit so HEAD advances
     fs.writeFileSync(path.join(repoDir, 'impl.txt'), 'implementation');
     execSync('git add impl.txt && git commit -m "impl"', { cwd: repoDir });
-    const newHead = execSync('git rev-parse HEAD', { cwd: repoDir, encoding: 'utf-8' }).trim();
-    expect(newHead).not.toBe(head);
 
     const state = makeState({ implRetryBase: head });
     const result = validatePhaseArtifacts(5, state, repoDir, repoDir);
     expect(result).toBe(true);
   });
 
-  it('returns false when HEAD has not advanced (no commits made)', () => {
+  it('returns false when HEAD has not advanced and implCommit is null', () => {
     const repoDir = createTestRepo();
     const head = execSync('git rev-parse HEAD', { cwd: repoDir, encoding: 'utf-8' }).trim();
-
-    const state = makeState({ implRetryBase: head });
-    const result = validatePhaseArtifacts(5, state, repoDir, repoDir);
-    expect(result).toBe(false);
-  });
-
-  it('returns false when working tree is dirty', () => {
-    const repoDir = createTestRepo();
-    const head = execSync('git rev-parse HEAD', { cwd: repoDir, encoding: 'utf-8' }).trim();
-
-    // Make a commit (HEAD advances)
-    fs.writeFileSync(path.join(repoDir, 'impl.txt'), 'implementation');
-    execSync('git add impl.txt && git commit -m "impl"', { cwd: repoDir });
-
-    // Leave an untracked file (dirty)
-    fs.writeFileSync(path.join(repoDir, 'dirty.txt'), 'dirty');
-
-    const state = makeState({ implRetryBase: head });
+    const state = makeState({ implRetryBase: head, implCommit: null });
     const result = validatePhaseArtifacts(5, state, repoDir, repoDir);
     expect(result).toBe(false);
   });
 
   it('accepts zero-commit reopen when implCommit is already set', () => {
-    // A Phase 6 verify-failure reopen may require only gitignored artifact
-    // fixes (e.g., checklist.json). Claude writes the sentinel without new
-    // commits; validation must not fail.
     const repoDir = createTestRepo();
     const head = execSync('git rev-parse HEAD', { cwd: repoDir, encoding: 'utf-8' }).trim();
     const state = makeState({ implRetryBase: head, implCommit: 'prior-impl-sha' });
@@ -648,54 +624,16 @@ describe('validatePhaseArtifacts — Phase 5', () => {
     expect(result).toBe(true);
   });
 
-  it('auto-recovers a dirty tree with ignorable artifacts and returns true', () => {
+  it('returns true when HEAD advanced even if working tree is dirty (no dirty-tree gate)', () => {
     const repoDir = createTestRepo();
-    execSync('git config user.email "t@t" && git config user.name "t"', { cwd: repoDir });
-    const head = execSync('git rev-parse HEAD', { cwd: repoDir, encoding: 'utf-8' }).trim();
-    // Tracked scaffold so __pycache__/ surfaces directly in porcelain.
-    fs.mkdirSync(path.join(repoDir, 'app'), { recursive: true });
-    fs.writeFileSync(path.join(repoDir, 'app/main.py'), 'print("hi")');
-    execSync('git add app/main.py && git commit -q -m "impl"', { cwd: repoDir });
-    fs.mkdirSync(path.join(repoDir, 'app/__pycache__'), { recursive: true });
-    fs.writeFileSync(path.join(repoDir, 'app/__pycache__/foo.pyc'), 'x');
-    const runDir = makeTmpDir();
-    const state = makeState({ implRetryBase: head });
-    const result = validatePhaseArtifacts(5, state, repoDir, runDir);
-    expect(result).toBe(true);
-    const gitignore = fs.readFileSync(path.join(repoDir, '.gitignore'), 'utf-8');
-    expect(gitignore).toMatch(/__pycache__\//);
-  });
-
-  it('blocks on non-ignorable residual and writes diagnostic', () => {
-    const repoDir = createTestRepo();
-    execSync('git config user.email "t@t" && git config user.name "t"', { cwd: repoDir });
     const head = execSync('git rev-parse HEAD', { cwd: repoDir, encoding: 'utf-8' }).trim();
     fs.writeFileSync(path.join(repoDir, 'impl.txt'), 'implementation');
-    execSync('git add impl.txt && git commit -q -m "impl"', { cwd: repoDir });
-    fs.writeFileSync(path.join(repoDir, 'unexpected.txt'), 'not ignorable');
-    const runDir = makeTmpDir();
-    const state = makeState({ implRetryBase: head });
-    const result = validatePhaseArtifacts(5, state, repoDir, runDir);
-    expect(result).toBe(false);
-    const diag = fs.readFileSync(path.join(runDir, 'phase-5-dirty-tree.md'), 'utf-8');
-    expect(diag).toMatch(/unexpected\.txt/);
-  });
+    execSync('git add impl.txt && git commit -m "impl"', { cwd: repoDir });
+    fs.writeFileSync(path.join(repoDir, 'dirty.txt'), 'untracked scratch');
 
-  it('strictTree=true skips auto-recovery and writes strict-tree diagnostic', () => {
-    const repoDir = createTestRepo();
-    execSync('git config user.email "t@t" && git config user.name "t"', { cwd: repoDir });
-    const head = execSync('git rev-parse HEAD', { cwd: repoDir, encoding: 'utf-8' }).trim();
-    fs.mkdirSync(path.join(repoDir, 'app'), { recursive: true });
-    fs.writeFileSync(path.join(repoDir, 'app/main.py'), 'print("hi")');
-    execSync('git add app/main.py && git commit -q -m "impl"', { cwd: repoDir });
-    fs.mkdirSync(path.join(repoDir, 'app/__pycache__'), { recursive: true });
-    fs.writeFileSync(path.join(repoDir, 'app/__pycache__/foo.pyc'), 'x');
-    const runDir = makeTmpDir();
-    const state = makeState({ implRetryBase: head, strictTree: true });
-    const result = validatePhaseArtifacts(5, state, repoDir, runDir);
-    expect(result).toBe(false);
-    const diag = fs.readFileSync(path.join(runDir, 'phase-5-dirty-tree.md'), 'utf-8');
-    expect(diag).toMatch(/strict-tree enabled/);
+    const state = makeState({ implRetryBase: head });
+    const result = validatePhaseArtifacts(5, state, repoDir, repoDir);
+    expect(result).toBe(true);
   });
 });
 

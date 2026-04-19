@@ -87,6 +87,10 @@ export function readClaudeSessionUsage(input: ReadClaudeSessionUsageInput): Clau
     try {
       const { tokens, skippedLines } = parseSessionFile(pinnedPath);
       if (skippedLines > 0) warn(`skipped ${skippedLines} malformed line(s) in ${pinnedPath}`);
+      // 3-state contract: zero tokens means no assistant response was logged
+      // before Claude exited. Return null so the caller omits claudeTokens
+      // from phase_end instead of writing a misleading all-zero object.
+      if (tokens.total === 0) return null;
       return tokens;
     } catch (err) {
       warn(`failed to read pinned session ${pinnedPath}: ${(err as Error).message}`);
@@ -133,6 +137,7 @@ export function readClaudeSessionUsage(input: ReadClaudeSessionUsageInput): Clau
   try {
     const { tokens, skippedLines } = parseSessionFile(path.join(projectDir, winner.file));
     if (skippedLines > 0) warn(`skipped ${skippedLines} malformed line(s) in ${winner.file}`);
+    if (tokens.total === 0) return null;
     return tokens;
   } catch (err) {
     warn(`fallback read failed ${winner.file}: ${(err as Error).message}`);

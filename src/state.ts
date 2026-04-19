@@ -97,7 +97,6 @@ export function migrateState(raw: any): HarnessState {
   }
   if (raw.loggingEnabled === undefined) raw.loggingEnabled = false;
   if (raw.codexNoIsolate === undefined) raw.codexNoIsolate = false;
-  if (raw.strictTree === undefined) raw.strictTree = false;
   if (!raw.phaseReopenSource || typeof raw.phaseReopenSource !== 'object') {
     raw.phaseReopenSource = { '1': null, '3': null, '5': null };
   }
@@ -200,7 +199,6 @@ export function createInitialState(
   loggingEnabled: boolean = false,
   flow: 'full' | 'light' = 'full',
   codexNoIsolate: boolean = false,
-  strictTree: boolean = false,
 ): HarnessState {
   const phasePresets: Record<string, string> = {};
   for (const phase of REQUIRED_PHASE_KEYS) {
@@ -282,6 +280,5 @@ export function createInitialState(
     loggingEnabled,
     phaseReopenSource: { '1': null, '3': null, '5': null },
     codexNoIsolate,
-    strictTree,
   };
 }

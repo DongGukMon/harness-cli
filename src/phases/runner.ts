@@ -242,7 +242,7 @@ export async function runPhaseLoop(
       continue;
     }
 
-    renderControlPanel(state);
+    renderControlPanel(state, logger, 'loop-top');
 
     if (isInteractivePhase(phase)) {
       await handleInteractivePhase(phase, state, harnessDir, runDir, cwd, logger);
@@ -333,7 +333,7 @@ export async function handleInteractivePhase(
     if (state.currentPhase !== phase) {
       clearWatchdog();
       printInfo(`Phase ${phase} interrupted by control signal → phase ${state.currentPhase}`);
-      renderControlPanel(state);
+      renderControlPanel(state, logger, 'interactive-redirect');
       logger.logEvent({
         event: 'phase_end',
         phase,
@@ -392,7 +392,7 @@ export async function handleInteractivePhase(
       state.currentPhase = next;
 
       clearWatchdog();
-      renderControlPanel(state);
+      renderControlPanel(state, logger, 'interactive-complete');
       writeState(runDir, state);
 
       const completedTokens = collectClaudeTokens();
@@ -472,7 +472,7 @@ export async function handleGatePhase(
   // not apply the verdict (would overwrite jump destination) or the error (same).
   if (state.currentPhase !== phase) {
     printInfo(`Phase ${phase} interrupted by control signal → phase ${state.currentPhase}`);
-    renderControlPanel(state);
+    renderControlPanel(state, logger, 'gate-redirect');
     return;
   }
 
@@ -519,7 +519,7 @@ export async function handleGatePhase(
       } else {
         const next = nextPhase(phase);
         state.currentPhase = next;
-        renderControlPanel(state);
+        renderControlPanel(state, logger, 'gate-approve');
         writeState(runDir, state);
       }
 
@@ -945,7 +945,7 @@ export async function handleVerifyPhase(
     } catch { /* best-effort: may not exist */ }
 
     logger.logEvent({ event: 'phase_end', phase: 6, status: 'completed', durationMs });
-    renderControlPanel(state);
+    renderControlPanel(state, logger, 'verify-complete');
   } else if (outcome.type === 'fail') {
     logger.logEvent({ event: 'verify_result', passed: false, retryIndex, durationMs });
     logger.logEvent({ event: 'phase_end', phase: 6, status: 'failed', durationMs });
@@ -961,7 +961,7 @@ export async function handleVerifyPhase(
         durationMs,
         details: { reason: 'redirected' },
       });
-      renderControlPanel(state);
+      renderControlPanel(state, logger, 'verify-redirect');
       return;
     }
     // error (non-throw): NO verify_result per spec — only phase_end

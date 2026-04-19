@@ -191,7 +191,6 @@ Flags:
 - `--enable-logging` — write session logs under `~/.harness/sessions/...`
 - `--light` — use the 4-phase light flow
 - `--codex-no-isolate` — disable per-run `CODEX_HOME` isolation for Codex subprocesses; not recommended
-- `--strict-tree` — disable phase-5 dirty-tree auto-recovery and write diagnostics instead
 - global `--root <dir>` — use `<dir>/.harness` as the harness root
 
 Important behavior:
@@ -215,6 +214,12 @@ Resume handles three cases automatically:
 3. no tmux session → recreate tmux and continue from saved state
 
 On resume, harness again prompts for presets for the remaining phases.
+
+### Terminal-state UI
+
+When `runPhaseLoop` returns, the control panel stays on screen instead of dropping you to a shell:
+- **Failed phase** → an inline action prompt appears with `[R]esume` (re-runs the failed phase in place), `[J]ump` (single-key prompt for an interactive phase: `1/3/5` in full flow, `1/5` in light), and `[Q]uit` (clean exit). Errors during R/J keep the panel open so you can try a different action.
+- **Run complete** → an idle summary panel shows the eval report path, commit range, and wall time. Press Ctrl+C to exit.
 
 ### `harness status`
 
@@ -308,9 +313,6 @@ Run `harness list` to discover existing runs, or start a new one.
 
 **`flow is frozen at run creation`**  
 `--light` is a start-time choice only. Resume the existing run as-is, or start a fresh light run.
-
-**Dirty tree failure in phase 5**  
-Retry normally first. If you need a hard failure instead of auto-recovery for ignorable leftovers, start the run with `--strict-tree`.
 
 **Need to inspect current progress from another terminal?**  
 Use `harness status`, `harness skip`, or `harness jump <phase>`.

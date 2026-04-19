@@ -88,10 +88,6 @@ export interface HarnessState {
   // codex-phase spawn runs inside <runDir>/codex-home/ with only auth.json
   // symlinked in. Persisted so that `harness resume` honors the decision.
   codexNoIsolate: boolean;
-  // Phase 5 dirty-tree auto-recovery opt-out. When true, `validatePhaseArtifacts`
-  // skips `tryAutoRecoverDirtyTree` and fails immediately on non-empty porcelain.
-  // Persisted so that `harness resume` honors the original `--strict-tree` choice.
-  strictTree: boolean;
 }
 
 export interface LockData {
@@ -189,6 +185,17 @@ export interface ClaudeTokens {
 
 // --- Session Logging Events ---
 
+export type RenderCallsite =
+  | 'loop-top'
+  | 'interactive-redirect'
+  | 'interactive-complete'
+  | 'gate-redirect'
+  | 'gate-approve'
+  | 'verify-complete'
+  | 'verify-redirect'
+  | 'terminal-failed'
+  | 'terminal-complete';
+
 // Distributive Omit: applies Omit to each member of a union separately,
 // preserving discriminated-union specificity (needed for LogEvent variants).
 export type DistributiveOmit<T, K extends keyof any> = T extends any ? Omit<T, K> : never;
@@ -248,6 +255,18 @@ export type LogEvent =
   | (LogEventBase & { event: 'verify_result'; passed: boolean; retryIndex: number; durationMs: number; failedChecks?: string[] })
   | (LogEventBase & { event: 'phase_end'; phase: number; attemptId?: string | null; status: 'completed' | 'failed'; durationMs: number; details?: { reason: string }; claudeTokens?: ClaudeTokens | null })
   | (LogEventBase & { event: 'state_anomaly'; kind: string; details: Record<string, unknown> })
+  | (LogEventBase & {
+      event: 'ui_render';
+      phase: number;
+      phaseStatus: PhaseStatus;
+      callsite: RenderCallsite;
+    })
+  | (LogEventBase & {
+      event: 'terminal_action';
+      action: 'resume' | 'jump' | 'quit';
+      fromPhase: number;
+      targetPhase?: number;
+    })
   | (LogEventBase & { event: 'session_end'; status: 'completed' | 'paused' | 'interrupted'; totalWallMs: number });
 
 export interface SessionMeta {

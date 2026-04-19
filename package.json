@@ -26,6 +26,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "tsc --noEmit",
+    "sessions:summary": "node scripts/sessions-summary.mjs",
     "prepublishOnly": "pnpm run build"
   },
   "keywords": [

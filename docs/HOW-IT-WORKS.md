@@ -183,7 +183,7 @@ Important fields include:
 - `specCommit`, `planCommit`, `implCommit`, `evalCommit`, `verifiedAtHead`
 - `phaseAttemptId`, `phaseOpenedAt`
 - tmux/session bookkeeping
-- `loggingEnabled`, `codexNoIsolate`, `strictTree`
+- `loggingEnabled`, `codexNoIsolate`
 
 Artifact locations:
 - spec/design doc: `docs/specs/<runId>-design.md`
@@ -213,6 +213,12 @@ Recovery is built from:
 `harness jump <phase>` only moves backward unless the run is already complete.
 In light flow, jumping into skipped phases is rejected.
 
+When `runPhaseLoop` returns, the inner process keeps the control panel alive instead of exiting:
+- A failed phase enters an inline action loop (`[R]esume` / `[J]ump` / `[Q]uit`); R and J reset state and re-enter `runPhaseLoop` in place. Q is a clean exit.
+- A completed run renders an idle summary panel (eval report path, commit range, wall time) and waits for `SIGINT`.
+
+This is implemented in `src/phases/terminal-ui.ts`; outer-process `commands/resume.ts` and `commands/jump.ts` (tmux/lock/SIGUSR1 plumbing) are unchanged and still drive the cross-process recovery flow above.
+
 ---
 
 ## Logging and footer
@@ -227,7 +233,7 @@ When enabled, harness writes under:
   summary.json
 ```
 
-Important logged events include `phase_start`, `phase_end`, `gate_verdict`, `gate_error`, `gate_retry`, `verify_result`, and `session_end`.
+Important logged events include `phase_start`, `phase_end`, `gate_verdict`, `gate_error`, `gate_retry`, `verify_result`, `ui_render`, `terminal_action`, and `session_end`.
 The control-pane footer aggregates elapsed time plus Claude/gate token totals from those logs.
 
 ---

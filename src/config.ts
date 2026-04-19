@@ -88,29 +88,6 @@ export const TERMINAL_PHASE = 8;
 export const INTERACTIVE_PHASES = [1, 3, 5] as const;
 export const GATE_PHASES = [2, 4, 7] as const;
 
-// P5 dirty-tree auto-recovery allowlist. Matched against untracked (`??`)
-// lines from `git status --porcelain`; tracked-modified paths never qualify.
-// Python / Node / macOS coverage only — Rust/Go/Java/Ruby deferred.
-export interface IgnorablePattern {
-  label: string;
-  pathRegex: RegExp;
-  gitignoreGlob: string;
-}
-
-export const IGNORABLE_ARTIFACTS: readonly IgnorablePattern[] = [
-  { label: 'Python bytecode cache',    pathRegex: /(?:^|\/)__pycache__\//,    gitignoreGlob: '__pycache__/' },
-  { label: 'Python compiled file',     pathRegex: /\.pyc$/,                   gitignoreGlob: '*.pyc' },
-  { label: 'Python optimized file',    pathRegex: /\.pyo$/,                   gitignoreGlob: '*.pyo' },
-  { label: 'pytest cache',             pathRegex: /(?:^|\/)\.pytest_cache\//, gitignoreGlob: '.pytest_cache/' },
-  { label: 'Python venv',              pathRegex: /(?:^|\/)\.venv\//,         gitignoreGlob: '.venv/' },
-  { label: 'mypy cache',               pathRegex: /(?:^|\/)\.mypy_cache\//,   gitignoreGlob: '.mypy_cache/' },
-  { label: 'ruff cache',               pathRegex: /(?:^|\/)\.ruff_cache\//,   gitignoreGlob: '.ruff_cache/' },
-  { label: 'Python coverage',          pathRegex: /(?:^|\/)\.coverage(\.|$)/, gitignoreGlob: '.coverage' },
-  { label: 'Python tox',               pathRegex: /(?:^|\/)\.tox\//,          gitignoreGlob: '.tox/' },
-  { label: 'Node modules',             pathRegex: /(?:^|\/)node_modules\//,   gitignoreGlob: 'node_modules/' },
-  { label: 'macOS Finder metadata',    pathRegex: /(?:^|\/)\.DS_Store$/,      gitignoreGlob: '.DS_Store' },
-];
-
 export const PHASE_ARTIFACT_FILES: Record<number, string[]> = {
   1: ['spec', 'decisionLog'],
   3: ['plan', 'checklist'],

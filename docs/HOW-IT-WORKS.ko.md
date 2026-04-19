@@ -183,7 +183,7 @@ verify PASS면 eval report를 auto-commit하고, FAIL이면 `verify-feedback.md`
 - `specCommit`, `planCommit`, `implCommit`, `evalCommit`, `verifiedAtHead`
 - `phaseAttemptId`, `phaseOpenedAt`
 - tmux/session bookkeeping
-- `loggingEnabled`, `codexNoIsolate`, `strictTree`
+- `loggingEnabled`, `codexNoIsolate`
 
 아티팩트 경로:
 - spec/design 문서: `docs/specs/<runId>-design.md`
@@ -213,6 +213,12 @@ verify PASS면 eval report를 auto-commit하고, FAIL이면 `verify-feedback.md`
 `harness jump <phase>`는 완료된 run이 아닌 이상 backward-only입니다.
 light flow에서는 skipped phase로 jump할 수 없습니다.
 
+`runPhaseLoop`가 종료해도 inner process는 즉시 종료하지 않고 control panel을 유지합니다:
+- 실패한 phase가 있으면 인라인 액션 루프(`[R]esume` / `[J]ump` / `[Q]uit`)에 진입합니다. R/J는 state를 정리한 뒤 그대로 `runPhaseLoop`에 재진입하고, Q는 정상 종료합니다.
+- 전체 완료 시에는 idle 요약 패널(eval report 경로, commit range, wall time)이 뜨고 `SIGINT`를 기다립니다.
+
+이 동작은 `src/phases/terminal-ui.ts`에 있으며, 위에서 설명한 outer-process `commands/resume.ts` / `commands/jump.ts` (tmux/lock/SIGUSR1 plumbing)는 변경되지 않은 채 cross-process 복구 흐름을 그대로 담당합니다.
+
 ---
 
 ## 로깅과 footer
@@ -227,7 +233,7 @@ light flow에서는 skipped phase로 jump할 수 없습니다.
   summary.json
 ```
 
-주요 이벤트는 `phase_start`, `phase_end`, `gate_verdict`, `gate_error`, `gate_retry`, `verify_result`, `session_end` 등입니다.
+주요 이벤트는 `phase_start`, `phase_end`, `gate_verdict`, `gate_error`, `gate_retry`, `verify_result`, `ui_render`, `terminal_action`, `session_end` 등입니다.
 control pane footer는 이 로그를 바탕으로 경과 시간과 Claude/gate 토큰 합계를 집계합니다.
 
 ---

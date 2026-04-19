@@ -58,25 +58,6 @@ describe('phaseCodexSessions (spec §4.1 / §5)', () => {
     expect(migrated.codexNoIsolate).toBe(true);
   });
 
-  it('migrateState defaults strictTree=false when missing (P5 auto-recovery opt-out)', () => {
-    const legacy = JSON.parse(JSON.stringify(makeState()));
-    delete legacy.strictTree;
-    const migrated = migrateState(legacy);
-    expect(migrated.strictTree).toBe(false);
-  });
-
-  it('migrateState preserves existing strictTree=true', () => {
-    const legacy = JSON.parse(JSON.stringify(makeState()));
-    legacy.strictTree = true;
-    const migrated = migrateState(legacy);
-    expect(migrated.strictTree).toBe(true);
-  });
-
-  it('createInitialState threads strictTree parameter through to state', () => {
-    const state = createInitialState('r', 't', 'b', false, false, 'full', false, true);
-    expect(state.strictTree).toBe(true);
-  });
-
   it('migrateState discards malformed GateSessionInfo entries', () => {
     const base = makeState();
     (base as any).phaseCodexSessions = {
