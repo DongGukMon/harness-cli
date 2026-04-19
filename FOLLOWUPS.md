@@ -116,47 +116,6 @@ watchdog: if `phase_start` fired >30s ago without activity, control
 pane prints "No output yet? Check the Claude window (`C-b 1`) — may be
 waiting on folder-trust."
 
-## Open — Priority 3
-
-### P3.1  `summary.json` gate token total does not include `gate_error.tokensTotal`
-
-Carried forward from the control-pane footer PR (P2.1 implementation,
-2026-04-19). The footer aggregator intentionally counts
-`gate_error.tokensTotal` in the displayed live total because users
-care about spend that actually happened, including on gate runs that
-errored. `FileSessionLogger.finalizeSummary` at
-`src/logger.ts:218-220`, however, only increments `gateErrors++` on
-`gate_error` and never adds `e.tokensTotal` to the persisted
-`summary.json.totals.gateTokens`. The result is a known, documented
-divergence between the live footer and the post-run summary on runs
-that experience any gate error.
-
-Reconciliation is out of scope for the footer PR — touching
-`finalizeSummary` would change a persisted artifact shape and needs
-its own spec/plan/gate pass. Spec ref:
-`docs/specs/2026-04-19-control-pane-counters-design.md` §3.6.1
-("Intentional divergence from `summary.json.totals.gateTokens` — NOT
-a consistency guarantee").
-
-Proposed change (separate PR):
-1. Add `tokensTotal` accumulation alongside `gateErrors++` in
-   `src/logger.ts:218-220`, guarded by the same
-   `recoveredFromSidecar` + `authoritativeErrors` dedup as
-   `gate_verdict`.
-2. Update `tests/logger.test.ts` sidecar-replay expectations so the
-   summary total now includes `gate_error.tokensTotal` (single-count).
-3. Once landed, tighten the footer aggregator comment in
-   `src/metrics/footer-aggregator.ts` to drop the "intentional
-   divergence" note, and update spec §3.6.1 accordingly (or supersede
-   with a new ADR).
-
-The sidecar dedup semantics from spec §3.6.1 must remain intact when
-the follow-up lands — the goal is to converge the two totals, not to
-remove the dedup.
-
-Tracking: issue number TBD — open post-merge and link here and in the
-footer PR body once the PR is in the tree.
-
 ## Context / provenance
 
 - All observations were produced by a single dogfood-full run on

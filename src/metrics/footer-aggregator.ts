@@ -243,7 +243,6 @@ function getTokenTotals(events: LogEvent[]): { claudeTokens: number; gateTokens:
       if (event.recoveredFromSidecar === true && authoritativeErrors.has(event.phase)) {
         continue;
       }
-      // Intentional divergence from summary.json.totals.gateTokens — NOT a consistency guarantee.
       if (typeof event.tokensTotal === 'number') {
         gateTokens += event.tokensTotal;
       }
