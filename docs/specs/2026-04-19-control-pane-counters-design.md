@@ -76,14 +76,14 @@ Task prescribes polling; polling at 1 Hz is sufficient and simpler. `fs.readFile
 `total = claudeTokens + gateTokens`.
 
 #### 3.6.1 Sidecar replay deduplication
-`FileSessionLogger.finalizeSummary` already dedupes sidecar-replayed gate events to avoid double-counting on resumed runs (`src/logger.ts:182–220`, asserted in `tests/logger.test.ts:278–305`). The footer aggregator mirrors the same rule:
+`FileSessionLogger.finalizeSummary` already dedupes sidecar-replayed gate events to avoid double-counting on resumed runs (`src/logger.ts:182–220`, asserted in `tests/logger.test.ts:278–305`). The footer aggregator mirrors the same dedup rule:
 
 1. First pass: collect "authoritative" keys from events where `recoveredFromSidecar !== true`.
    - `authoritativeVerdicts`: `Set<"${phase}:${retryIndex}">` for `gate_verdict`.
    - `authoritativeErrors`: `Set<phase>` for `gate_error`.
 2. Second pass (token accumulation): for a `gate_verdict` with `recoveredFromSidecar === true`, skip if the key is already in `authoritativeVerdicts`. For `gate_error` with `recoveredFromSidecar === true`, skip if `phase` is in `authoritativeErrors`.
 
-This guarantees footer totals stay consistent with `summary.json.totals.gateTokens`.
+**Intentional divergence from `summary.json.totals.gateTokens` — NOT a consistency guarantee.** `src/logger.ts:218–220` currently increments `gateErrors++` on `gate_error` but does **not** add `e.tokensTotal` to `gateTokens`. The footer counts `gate_error.tokensTotal` (it's spend that occurred and users care about live cost tracking) while `finalizeSummary` does not. The two totals will therefore differ on runs that experience a `gate_error`. This is a known pre-existing asymmetry in `finalizeSummary`; reconciling it is **out of scope** for this spec (recorded as a plan TODO per the round-2 gate feedback). The dedup rule above still applies so sidecar replay does not double-count either side.
 
 ### 3.7 Current phase + attempt (hybrid — state.json + events)
 
@@ -210,10 +210,15 @@ interface SessionLogger {
 
 ### 4.4 Wiring: `src/commands/inner.ts`
 
-After `inputManager.enterPhaseLoop()` (line 194) and before `runPhaseLoop`:
+After `inputManager.enterPhaseLoop()` (line 194) and before `runPhaseLoop`, derive `stateJsonPath` from the existing `runDir` and inject both `logger` and `stateJsonPath` into the ticker:
 
 ```ts
-const footerTimer = startFooterTicker({ logger, intervalMs: 1000 });
+const stateJsonPath = path.join(runDir, 'state.json');
+const footerTimer = startFooterTicker({
+  logger,
+  stateJsonPath,
+  intervalMs: 1000,
+});
 process.on('SIGWINCH', footerTimer.forceTick);
 try {
   await runPhaseLoop(...);
@@ -224,30 +229,63 @@ try {
 }
 ```
 
-`startFooterTicker` lives in a new helper `src/commands/footer-ticker.ts`. On construction it:
+`stateJsonPath` is the same file that `src/state.ts::writeState` updates atomically at every phase transition; `runDir` is already in scope (e.g. `src/commands/inner.ts:L100–L190` runtime context). No new state plumbing is introduced — the ticker merely adds a read-only consumer of a file that already exists for the lifetime of the run.
+
+`startFooterTicker` lives in a new helper `src/commands/footer-ticker.ts`. Signature:
+
+```ts
+export interface FooterTickerOptions {
+  logger: SessionLogger;
+  stateJsonPath: string;
+  intervalMs: number;
+}
+export interface FooterTicker {
+  stop(): void;
+  forceTick(): void;
+}
+export function startFooterTicker(opts: FooterTickerOptions): FooterTicker;
+```
+
+On construction it:
 - Reads `logger.getEventsPath()` once. If `null` → returns an inert object (all methods no-op) so the happy-path wiring doesn't need a branch.
-- Starts `setInterval(..., intervalMs)`.
+- Captures `stateJsonPath` for use on every tick.
+- Starts `setInterval(onTick, intervalMs)`.
 - Registers a `process.on('exit', onProcessExit)` listener (§3.14) that synchronously clears the footer row.
 
 On each tick (non-inert):
-1. `readEventsJsonl(path)` (skip if file missing).
-2. `aggregateFooter(events, Date.now())` → `FooterSummary | null`.
-3. If summary present and stderr is TTY with known `rows` + `columns`, call `writeFooterToPane(formatFooter(summary, cols), rows, cols)`.
+1. `readEventsJsonl(eventsPath)` — skip tick if file missing (per §3.12).
+2. `readStateSlice(stateJsonPath)` — if it returns `null` (missing / malformed / atomic-rename race per `writeState`), **silent skip this tick** (no stderr warn, next tick retries; see §3.12 error handling contract). This matches FOLLOWUPS.md "footer failure never crashes the run".
+3. `aggregateFooter(events, stateSlice, Date.now())` → `FooterSummary | null`. If `null` (no `session_start` / `session_resumed` yet), skip render.
+4. If summary present and `process.stderr.isTTY` is true with `stderr.columns > 0` and `stderr.rows > 0`, call `writeFooterToPane(formatFooter(summary, cols), rows, cols)`. Otherwise skip render (per §3.10, §3.12).
+
+`forceTick()` simply invokes `onTick` synchronously — used by the SIGWINCH handler in `inner.ts` (§3.11) so terminal resizes repaint within < 1 tick rather than waiting up to 1 s.
 
 Stop policy (`stop()`):
-1. `clearInterval`.
-2. Call `clearFooterRow(rows)` once (guard: stderr TTY, rows known).
-3. `process.removeListener('exit', onProcessExit)` so re-running `startFooterTicker` in tests does not accumulate listeners.
-4. Mark stopped-flag so subsequent `stop()` calls are no-ops.
+1. If already stopped, return (idempotent guard).
+2. `clearInterval(timerId)`.
+3. Call `clearFooterRow(rows)` once (guard: `process.stderr.isTTY` && `rows > 0`).
+4. `process.removeListener('exit', onProcessExit)` so re-running `startFooterTicker` in tests does not accumulate listeners.
+5. Mark stopped-flag so subsequent `stop()` calls are no-ops (also protects against the `exit` listener racing with the `finally` block — §3.14 `onProcessExit` re-checks the flag before acting).
 
 ### 4.5 Testing
 
-1. **Unit (aggregator):** fixture events.jsonl (multiple phase_starts, resumed session, phase_ends with and without claudeTokens, gate_verdicts, gate_errors) → assert FooterSummary fields including currentPhase / attempt / phaseRunningElapsedMs semantics.
-2. **Unit (formatter):** FooterSummary → assert wide / compact / phase-6 variants, unknown-columns → empty string.
-3. **Unit (logger):** `FileSessionLogger.getEventsPath()` returns the expected path; `NoopLogger.getEventsPath()` returns `null`.
-4. **Integration (ticker):** stub stderr.write; write a synthetic events.jsonl; run ticker for N ticks with fake timers; assert exact ANSI save/move/clear/restore bytes + correct summary text; assert `stop()` emits `clearFooterRow`; assert `process.on('exit')` listener is registered once and removed on stop.
-5. **Integration (logging off):** NoopLogger path — ticker is inert, no stderr writes, no exit listener registered.
-6. **Manual smoke:** run `harness run --enable-logging "demo"` in a real tmux session, observe footer updating live; send SIGINT and confirm footer row is cleared before process exits.
+All aggregator tests use the three-input signature `aggregateFooter(events, stateSlice, now)` with explicit `FooterStateSlice` fixtures — no state.json disk I/O inside pure unit tests. `readStateSlice` is covered separately in a filesystem test (case 2) and ticker test (case 5) so the pure aggregator remains deterministic.
+
+1. **Unit (aggregator) — pure (events, stateSlice, now) cases.** Fixture events.jsonl strings + `FooterStateSlice = { currentPhase, gateRetries }` literals + pinned `now`. Required cases:
+   - **Gate live (phase 2/4/7)**: state `{ currentPhase: 2, gateRetries: { '2': 1 } }` + events ending with `phase_end(phase=1)` → `FooterSummary.currentPhase === 2`, `attempt === 2` (retries+1), `phaseRunningElapsedMs` computed from the `phase_end(phase=1)` ts (§3.7 gate-elapsed rule).
+   - **Interactive live (phase 1/3/5)**: state `{ currentPhase: 5, gateRetries: {} }` + events with the most recent `phase_start(phase=5, attemptId='A5-1')` and no matching `phase_end` → `attempt` = count of `phase_start(phase=5)` since latest session-open = 1, `phaseRunningElapsedMs` = `now − ts_of_that_phase_start`.
+   - **Interactive idle (phase closed)**: same state but last event is a `phase_end(phase=5, attemptId='A5-1')` matching the latest `phase_start` → `phaseRunningElapsedMs === null`.
+   - **Phase 6 pairing**: state `{ currentPhase: 6, gateRetries: {} }` + two interleaved `phase_start(phase=6)` / `phase_end(phase=6)` sequences (neither `phase_end` carries `attemptId`/`retryIndex` per §3.9) → verify positional pairing decides running-vs-closed correctly.
+   - **Session resume**: two `session_start` + one `session_resumed` in the file → `sessionElapsedMs` measured from the latest open-event's ts (§3.3).
+   - **Sidecar dedup**: fixture contains both an authoritative `gate_verdict(phase=2, retryIndex=0, tokensTotal=1000)` (no `recoveredFromSidecar`) **and** a replayed `gate_verdict(phase=2, retryIndex=0, tokensTotal=1000, recoveredFromSidecar=true)` → `gateTokens` counts 1000 once (§3.6.1). Same for `gate_error`.
+   - **Token skip cases**: `phase_end.claudeTokens === null`, `phase_end.claudeTokens` field absent, `gate_verdict.tokensTotal` undefined → summary does not NaN/double-count; `totalTokens = claudeTokens + gateTokens`.
+   - **Empty events / no session-open**: `aggregateFooter` returns `null`.
+2. **Unit (`readStateSlice`):** tmpfs `state.json` fixtures — valid JSON with required fields → `FooterStateSlice`; missing file → `null`; malformed JSON → `null`; partial file (atomic-rename race simulated by writing-then-reading at midstream) → `null`; in all failure cases no `throw` escapes.
+3. **Unit (formatter):** FooterSummary → assert wide / compact / phase-6 variants, unknown-columns → empty string.
+4. **Unit (logger):** `FileSessionLogger.getEventsPath()` returns the expected path; `NoopLogger.getEventsPath()` returns `null`.
+5. **Integration (ticker):** stub `process.stderr.write`; write a synthetic `events.jsonl` + matching `state.json` in a tmp `runDir`; inject `stateJsonPath` via options; run ticker for N ticks with fake timers; assert exact ANSI save/move/clear/restore bytes + correct summary text reflecting the injected state slice; assert `stop()` emits `clearFooterRow`; assert `process.on('exit')` listener is registered once and removed on stop. Additional case: rewrite `state.json` mid-run (atomic temp+rename pattern that `writeState` uses) → next tick's summary reflects the new `currentPhase` without crashing.
+6. **Integration (logging off):** `NoopLogger` path — ticker is inert, no stderr writes, no exit listener registered, even when `stateJsonPath` points to a valid file.
+7. **Manual smoke:** run `harness run --enable-logging "demo"` in a real tmux session, observe footer updating live across a gate phase transition (must stay accurate during a 2/4/7 run, per §3.7 hybrid); send SIGINT and confirm footer row is cleared before process exits.
 
 ### 4.6 Files touched
 
@@ -269,10 +307,12 @@ Stop policy (`stop()`):
 - [ ] `pnpm tsc --noEmit` passes
 - [ ] `pnpm vitest run` passes, baseline 617 → ≥ 617 + new tests
 - [ ] `pnpm build` produces dist with no warnings
-- [ ] Unit tests cover: aggregator rules (3.6), current-phase (3.7), resume semantics (3.3), empty-events, missing file, malformed lines
+- [ ] Aggregator unit tests cover: §3.6 token rules, §3.6.1 sidecar dedup (verdict + error), §3.7 hybrid current-phase / attempt / phase-running-elapsed for gate-live + interactive-live + interactive-idle + phase-6-positional, §3.3 resume semantics, empty events, malformed line skip
+- [ ] `readStateSlice` unit tests cover: valid / missing / malformed / atomic-rename mid-write race (all non-throwing; failures return `null`)
 - [ ] Formatter tests cover: wide, compact, phase-6 variant, unknown-columns
 - [ ] Logger test asserts `getEventsPath` for both implementations
-- [ ] Manual smoke documented in PR body: screenshot or ASCII capture of footer updating
+- [ ] Ticker integration test asserts: exact ANSI sequence bytes on tick, state-slice-driven rendering, SIGWINCH forceTick, `stop()` clears footer + removes `exit` listener, inert NoopLogger path
+- [ ] Manual smoke documented in PR body: screenshot or ASCII capture of footer updating across gate + interactive phases, and clean footer after SIGINT
 
 ## 6. Open questions
 
@@ -285,3 +325,11 @@ None. All ambiguity resolved in §3.
 3. **Resume semantics may surprise users** expecting "since first session_start". Mitigation: document in PR body + footer naming (`session`) matches "this session", not "lifetime".
 4. **Footer persists on abnormal exit** (SIGINT/SIGTERM/uncaught). Mitigation: `process.on('exit')` listener in §3.14. SIGKILL out of scope.
 5. **Multiple exit listeners across test lifecycles.** Mitigation: `stop()` deregisters its own listener (§3.14).
+
+## 8. Deferred TODOs from gate reviews (carry into plan)
+
+These items were raised during the codex spec-gate review rounds and explicitly deferred per the project rule "P1만 처리하고 P2는 plan 내 TODO로 기록 후 다음 phase 진입". The implementation plan MUST list each of them as an explicit TODO (with the noted resolution direction) before the plan gate.
+
+- **[TODO-G2-P1 · round 2 P1 addressed in-spec]** `gate_error.tokensTotal` divergence between footer and `summary.json.totals.gateTokens`. In-scope: footer counts the value (per §3.6). Out-of-scope: reconciling `src/logger.ts:218–220` + `tests/logger.test.ts` so `summary.json.totals.gateTokens` also includes `gate_error.tokensTotal`. **Decision direction for plan:** record as a separate follow-up issue (FOLLOWUPS.md); do NOT include the `finalizeSummary` change in this PR. The spec §3.6.1 divergence note is the durable reference.
+- **[TODO-G2-P2a]** `FooterStateSlice` may need `phaseStatus: 'pending' | 'in_progress' | 'completed' | 'failed'` (sourced from `state.phases[phase]`) so the gate-elapsed branch (§3.7) can return `null` during the "escalation logged + phase re-set to `pending`" window (`src/phases/runner.ts:727–739`). Until then the gate-elapsed counter may briefly show a bogus running timer after a gate error re-enters retry. **Decision direction for plan:** add `phaseStatus` to `FooterStateSlice`; §3.7 gate-elapsed rule returns `null` when `phaseStatus !== 'in_progress'`. Plan must add a corresponding aggregator test fixture.
+- **[TODO-G2-P2b]** `currentPhase === 8` (TERMINAL_PHASE, `src/types.ts:43`) is written by phase-7 APPROVE/force-pass before `inner.ts` cleanup. `readStateSlice` / `aggregateFooter` currently assume `1..7`. **Decision direction for plan:** `readStateSlice` returns `null` when `currentPhase` is outside `1..7` (treats terminal state as "no footer"). Plan must add a dedicated test for this boundary.
