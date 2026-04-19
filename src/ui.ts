@@ -263,17 +263,16 @@ export async function promptModelConfig(
     console.error('');
     console.error(`  Phase ${phase} (${phaseLabels[phase]}) — model:`);
 
-    const presetKeys = new Set<string>();
     MODEL_PRESETS.forEach((p, i) => {
       const current = p.id === presets[phase] ? ` ${YELLOW}← current${RESET}` : '';
       console.error(`  [${i + 1}] ${p.label}${current}`);
-      presetKeys.add(String(i + 1));
     });
-    console.error(`  Select (1-${MODEL_PRESETS.length}):`);
+    console.error(`  Select (1-${MODEL_PRESETS.length}, Enter to cancel):`);
 
-    const choice = await inputManager.waitForKey(presetKeys);
+    const choice = (await inputManager.waitForLine()).trim();
+    if (choice === '') continue;
     const idx = Number(choice) - 1;
-    if (idx >= 0 && idx < MODEL_PRESETS.length) {
+    if (Number.isInteger(idx) && idx >= 0 && idx < MODEL_PRESETS.length) {
       presets[phase] = MODEL_PRESETS[idx].id;
     }
   }

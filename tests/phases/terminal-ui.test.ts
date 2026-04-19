@@ -8,6 +8,7 @@ import {
   performResume,
   performJump,
   anyPhaseFailed,
+  findFailedPhase,
 } from '../../src/phases/terminal-ui.js';
 import { InputManager } from '../../src/input.js';
 import type { HarnessState, SessionLogger } from '../../src/types.js';
@@ -95,6 +96,31 @@ describe('anyPhaseFailed', () => {
   });
   it('false when all phases are pending/completed/skipped/in_progress', () => {
     expect(anyPhaseFailed(makeState({ phases: { '1': 'completed', '2': 'completed', '3': 'pending', '4': 'pending', '5': 'pending', '6': 'pending', '7': 'pending' } }))).toBe(false);
+  });
+});
+
+describe('findFailedPhase', () => {
+  it('returns the lowest-numbered failed phase regardless of key insertion order', () => {
+    // Build phases map in reverse insertion order to defeat any
+    // implementation relying on insertion ordering.
+    const phases: Record<string, any> = {};
+    phases['7'] = 'failed';
+    phases['5'] = 'failed';
+    phases['3'] = 'pending';
+    phases['1'] = 'completed';
+    expect(findFailedPhase(makeState({ phases: phases as any }))).toBe(5);
+  });
+
+  it('returns null when no phase is failed/error', () => {
+    expect(findFailedPhase(makeState({
+      phases: { '1': 'completed', '2': 'completed', '3': 'completed', '4': 'completed', '5': 'completed', '6': 'completed', '7': 'pending' } as any,
+    }))).toBeNull();
+  });
+
+  it('treats "error" status as failed', () => {
+    expect(findFailedPhase(makeState({
+      phases: { '1': 'completed', '2': 'completed', '3': 'completed', '4': 'completed', '5': 'error', '6': 'pending', '7': 'pending' } as any,
+    }))).toBe(5);
   });
 });
 

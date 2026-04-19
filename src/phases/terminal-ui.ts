@@ -15,8 +15,11 @@ export function anyPhaseFailed(state: HarnessState): boolean {
   return Object.values(state.phases).some(s => s === 'failed' || s === 'error');
 }
 
-function findFailedPhase(state: HarnessState): number | null {
-  for (const key of Object.keys(state.phases)) {
+// Sort numerically so "lowest-numbered failed phase" doesn't depend on V8's
+// integer-like key enumeration order (which a JSON round-trip could disturb).
+export function findFailedPhase(state: HarnessState): number | null {
+  const sortedKeys = Object.keys(state.phases).sort((a, b) => Number(a) - Number(b));
+  for (const key of sortedKeys) {
     const s = state.phases[key];
     if (s === 'failed' || s === 'error') return Number(key);
   }
