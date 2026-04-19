@@ -110,10 +110,17 @@ Session meta: `~/.harness/sessions/<hash>/<runId>/{events.jsonl, meta.json, summ
 개발 라이프사이클은 `harness-cli` 자체를 dogfood로 실행한다:
 
 ```bash
-pnpm build                                    # 현 브랜치 변경분을 dist에 반영 (필수)
-harness run --enable-logging "<task>"         # 7-phase 풀 플로우
+pnpm build                                          # 현 브랜치 변경분을 dist에 반영 (필수)
+phase-harness run --enable-logging "<task>"         # 7-phase 풀 플로우
 # 또는 경량:
-harness start --light "<task>"                # 5-phase 경량 (P1 → P2 → P5 → P6 → P7)
+phase-harness start --light "<task>"                # 5-phase 경량 (P1 → P2 → P5 → P6 → P7)
+```
+
+스킬 설치:
+
+```bash
+phase-harness install-skills            # ~/.claude/skills/ 에 설치 (사용자 스코프)
+phase-harness install-skills --project  # ./.claude/skills/ 에 설치 (프로젝트 스코프)
 ```
 
 빌드 없이는 dist가 갱신되지 않으므로 소스 수정 직후엔 **항상 `pnpm build`** — 그 뒤 CLI 실행 결과가 실제 변경분을 반영한다. 내부 phase 순서·gate 규약·자율 모드 정책(Codex 3 reject → 4회째 강제 통과)은 전역 규칙 `harness-lifecycle` 섹션 참조.
