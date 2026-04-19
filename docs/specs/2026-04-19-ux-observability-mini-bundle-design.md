@@ -29,7 +29,7 @@ Summary:
 
 | T | Slice | P | What the user sees today | What they should see |
 |---|---|---|---|---|
-| a | Gate feedback archival | P2 | After Gate N APPROVE, `gate-N-feedback.md` still contains the last REJECT comments — misleading post-hoc. | Per-retry archives preserved; approve metadata saved to `gate-N-verdict.json`. |
+| a | Gate feedback archival | P2 | After Gate N APPROVE, `gate-N-feedback.md` still contains the last REJECT comments — misleading post-hoc. | Per-retry archives preserved (`gate-N-cycle-C-retry-K-feedback.md`); approve metadata saved to `gate-N-cycle-C-verdict.json`. |
 | b | Folder-trust watchdog | P2 | On first run, Claude blocks on folder-trust dialog; control pane stays silent at "Phase 1 ▶". | After 30s of silence post phase-start, control pane prints a one-shot hint. |
 | c | Preflight `@file` timeout | P3 | `⚠️ preflight: claude @file check timed out (5s); skipping …` prints on every happy-path run. | 10s timeout + softer "delayed" wording. |
 | d | Phase 6 double-commit | P3 | Each verify retry produces two commits (`reset eval report` + `eval report`). N verify rounds → 2·N−1 phase-6 commits (first round 1 commit, each subsequent retry +2). | One commit per verify round (`rev K eval report`), total = `verifyRetries + 1`. |
@@ -56,7 +56,7 @@ Summary:
 1. `gate-N-feedback.md` (existing path, overwrite — **mandatory**; callers `stat` this file, see Persistence semantics).
 2. `gate-N-retry-K-feedback.md` (new archive — best-effort).
 
-Additionally on APPROVE verdict, write `gate-N-verdict.json` (best-effort) with `{ verdict, retryIndex, codexSessionId?, tokensTotal?, durationMs?, timestamp }`.
+Additionally on APPROVE verdict, write `gate-N-cycle-C-verdict.json` (best-effort) with `{ verdict, retryIndex, cycleIndex, codexSessionId?, tokensTotal?, durationMs?, timestamp }`. Cycle-indexed filename prevents overwrites across Continue-escalation cycles — matches the feedback archive contract.
 
 **Naming scheme**: `gate-N-cycle-C-retry-K-feedback.md` where N = phase (2/4/7), **C = escalation cycle index** (0-based, increments on each user-chosen "Continue" after a gate retry-limit escalation), K = `retryIndex` at the moment of the write. Both `C` and `K` are threaded explicitly through every call site — `saveGateFeedback` gains `retryIndex: number` (4th param) AND `cycleIndex: number` (5th param). `handleGateEscalation` also gains `retryIndex: number` (propagated from `handleGateReject`, which captures the pre-mutation index at the retry-loop entry — currently runner.ts L467). The existing `gate_retry` event already carries the same `retryIndex`, so archive filenames align with the telemetry contract; `cycleIndex` is a new discriminator carried by this spec only.
 
@@ -74,7 +74,7 @@ With C + K both in the filename, re-escalation cycles never overwrite prior arch
 
 **Why not rename / abolish `gate-N-feedback.md`**: retained as the "last reject pointer" for codex resume Variant A (`gate.ts` L237 reads this exact path when `lastOutcome=reject`). Archival is purely additive.
 
-**Persistence semantics**: the legacy `gate-N-feedback.md` write is **mandatory** — failure throws (current behavior; callers immediately `fs.statSync(feedbackPath).size` the result, so a silent failure would break telemetry and `pendingAction.feedbackPaths` resume). The archive file `gate-N-retry-K-feedback.md` and the `gate-N-verdict.json` APPROVE metadata are **best-effort** — wrapped in try/catch with a single `printWarning(…)` line per failure. Helper signature unchanged (`: string`); archive failures never alter the returned path.
+**Persistence semantics**: the legacy `gate-N-feedback.md` write is **mandatory** — failure throws (current behavior; callers immediately `fs.statSync(feedbackPath).size` the result, so a silent failure would break telemetry and `pendingAction.feedbackPaths` resume). The archive file `gate-N-cycle-C-retry-K-feedback.md` and the `gate-N-cycle-C-verdict.json` APPROVE metadata are **best-effort** — wrapped in try/catch with a single `printWarning(…)` line per failure. Helper signature unchanged (`: string`); archive failures never alter the returned path.
 
 ### ADR-2 — Folder-trust watchdog (T8-b)
 
@@ -181,6 +181,8 @@ function saveGateApproveVerdict(
 ): void  // writes `gate-${phase}-cycle-${cycleIndex}-verdict.json`.
 ```
 
+**Call site for `saveGateApproveVerdict`**: invoked from the APPROVE branch of the gate phase handler (currently `handleGatePhase` / `handleGateApprove` in `src/phases/runner.ts`), immediately after verdict parsing and **before** state mutation (so captured `retryIndex` reflects pre-mutation state). Arguments: `retryIndex` from the same pre-mutation capture used by `saveGateFeedback`; `cycleIndex = state.gateEscalationCycles?.[String(phase)] ?? 0`; `metadata` extracted from the Codex runner result (`codexSessionId`, `tokensTotal`, `durationMs`). Failure is warning-only — does not block APPROVE advancement, matching the best-effort contract.
+
 Call-site propagation:
 ```ts
 // BEFORE
@@ -197,20 +199,32 @@ export async function handleGateEscalation(
 
 `handleGateReject` passes its captured `retryIndex` (runner.ts L467, pre-mutation) into the escalation branch (runner.ts L588). All three `saveGateFeedback` call sites (runner.ts L531 / L627 / L660) receive both a concrete `retryIndex` AND a concrete `cycleIndex` (latter read from `state.gateEscalationCycles[phase] ?? 0` at the call site).
 
+**Resume path (`show_escalation` replay, `src/resume.ts:753`)**: when `handleResume` replays a paused `show_escalation` pendingAction, the caller no longer has a pre-mutation capture for `retryIndex`. The spec requires resume.ts to **derive** it from persisted state before invoking `handleGateEscalation`:
+
+```ts
+// In the `show_escalation` case of handleResume (replacing current resume.ts L753)
+const retryIndex = Math.max(0, (state.gateRetries[String(gatePhase)] ?? GATE_RETRY_LIMIT) - 1);
+await handleGateEscalation(gatePhase, comments, retryIndex, state, runDir, cwd, createNoOpInputManager(), new NoopLogger());
+```
+
+Rationale: the quit branch of `handleGateEscalation` (runner.ts L657-671) does **not** reset `gateRetries`, so at resume time `state.gateRetries[phase]` still equals `GATE_RETRY_LIMIT` (the value reached that triggered escalation); `GATE_RETRY_LIMIT - 1` equals the pre-mutation `retryIndex` that would have been captured live. `Math.max(0, ...)` guards a defensive floor in the unlikely case a future code path resets the counter before pausing. `cycleIndex` does not need resume-time derivation because it is read from `state.gateEscalationCycles` inside `handleGateEscalation` itself.
+
 State type addition (`src/types.ts`):
 ```ts
 export interface HarnessState {
   // ...existing fields...
-  gateEscalationCycles?: Record<'2' | '4' | '7', number>;
+  gateEscalationCycles?: Partial<Record<'2' | '4' | '7', number>>;
   // Optional for backward compat with existing state.json files; readers use `?? 0`.
+  // Inner Partial<> lets callers materialize the record with `{}` (type-safe partial init).
 }
 ```
 
 Increment site: inside `handleGateEscalation` continue branch (runner.ts L621), AFTER `saveGateFeedback` returns and BEFORE `writeState`:
 ```ts
 state.gateEscalationCycles = state.gateEscalationCycles ?? {};
-state.gateEscalationCycles[String(phase)] =
-  (state.gateEscalationCycles[String(phase)] ?? 0) + 1;
+const key = String(phase) as '2' | '4' | '7';
+state.gateEscalationCycles[key] =
+  (state.gateEscalationCycles[key] ?? 0) + 1;
 ```
 
 ### 4.2 `WATCHDOG_DELAY_MS` (runner.ts)
