@@ -170,7 +170,7 @@ export async function innerCommand(runId: string, options: InnerOptions = {}): P
 
   // Step 5.8: Prompt for model selection. Snapshot prev presets to detect changes for §4.8 invalidation.
   const prevPresets = { ...state.phasePresets };
-  state.phasePresets = await promptModelConfig(state.phasePresets, inputManager, remainingPhases);
+  state.phasePresets = await promptModelConfig(state.phasePresets, inputManager, remainingPhases, state.flow);
   invalidatePhaseSessionsOnPresetChange(state, prevPresets, runDir);
 
   // Clear reopen_config pendingAction (written by onConfigCancel) — model selection succeeded

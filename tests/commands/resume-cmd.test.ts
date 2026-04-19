@@ -200,6 +200,56 @@ describe('resumeCommand', () => {
     expect(vi.mocked(tmux.createSession)).not.toHaveBeenCalled();
   });
 
+  it('Case 2 stale pane (reused-mode): outer session stays alive, recursion creates new control window', async () => {
+    const { harnessDir, runId, runDir } = setupRun(repo, {
+      tmuxSession: 'harness-reused',
+      tmuxControlPane: '%stale',
+      tmuxControlWindow: '@stale',
+      tmuxWindows: ['@stale'],
+      tmuxMode: 'reused',
+    });
+    setCurrentRun(harnessDir, runId);
+
+    const tmux = await import('../../src/tmux.js');
+    const lock = await import('../../src/lock.js');
+    const proc = await import('../../src/process.js');
+
+    vi.mocked(tmux.killWindow).mockClear();
+    vi.mocked(tmux.createSession).mockClear();
+    vi.mocked(tmux.createWindow).mockClear();
+    vi.mocked(lock.releaseLock).mockClear();
+
+    // Outer tmux session stays alive throughout. In the recursive call the
+    // short-circuit `state.tmuxSession !== ''` evaluates false (we cleared it),
+    // so sessionExists is never reached on the second call.
+    vi.mocked(tmux.sessionExists).mockReturnValue(true);
+    vi.mocked(tmux.paneExists).mockReturnValue(false);
+    vi.mocked(tmux.isInsideTmux).mockReturnValue(true); // reused Case 3 path
+    vi.mocked(tmux.getCurrentSessionName).mockReturnValue('harness-reused');
+    vi.mocked(tmux.getActiveWindowId).mockReturnValue('@orig');
+    vi.mocked(tmux.createWindow).mockReturnValue('@new-ctrl');
+    vi.mocked(tmux.getDefaultPaneId).mockReturnValue('%new-ctrl');
+    vi.mocked(lock.readLock).mockReturnValue({ cliPid: 999, handoff: false, childPid: null, childPhase: null, runId, startedAt: null, childStartedAt: null });
+    vi.mocked(proc.isPidAlive).mockReturnValue(false);
+    vi.mocked(lock.pollForHandoffComplete).mockReturnValue(true);
+
+    await resumeCommand(undefined, { root: repo.path });
+
+    // Final state: all control refs cleared then re-derived by Case 3 reused path
+    const savedState = JSON.parse(readFileSync(join(runDir, 'state.json'), 'utf-8'));
+    expect(savedState.tmuxControlPane).toBe('');                      // never set in reused Case 3
+    expect(savedState.tmuxMode).toBe('reused');                       // re-derived in Case 3
+    expect(savedState.tmuxSession).toBe('harness-reused');            // re-derived in Case 3
+    expect(savedState.tmuxControlWindow).toBe('@new-ctrl');           // Case 3 reused path assigns
+    expect(savedState.tmuxWindows).toEqual(['@new-ctrl']);            // Case 3 reused path pushes
+
+    // Stale cleanup path + recursion + reused Case 3
+    expect(vi.mocked(tmux.killWindow)).toHaveBeenCalledWith('harness-reused', '@stale');
+    expect(vi.mocked(lock.releaseLock)).toHaveBeenCalled();
+    expect(vi.mocked(tmux.createWindow)).toHaveBeenCalledWith('harness-reused', 'harness-ctrl', '');
+    expect(vi.mocked(tmux.createSession)).not.toHaveBeenCalled();
+  });
+
   describe('resumeCommand — loggingEnabled inheritance', () => {
     it('resume preserves state.loggingEnabled=true from original start', async () => {
       const { harnessDir, runId, runDir } = setupRun(repo, { loggingEnabled: true });

@@ -11,11 +11,14 @@
 ## Context & Decisions
 ## Requirements / Scope
 ## Design
+## Open Questions              (필수 헤더, 정확히 이 텍스트 — 불확실·후속 조사 항목 기록. 없으면 "없음"으로 명시)
 ## Implementation Plan       (필수 헤더, 정확히 이 텍스트)
   - Task 1: ...
   - Task 2: ...
 ## Eval Checklist Summary    (checklist.json 요약; 실제 검증 JSON은 별도 파일)
 ```
+
+`## Open Questions` 섹션은 설계 과정에서 미확인 사항·후속 조사 항목을 기록하라. 없으면 "없음"으로 명시해야 한다. 본 섹션이 누락되면 harness는 Phase 1을 실패로 간주한다.
 
 `## Implementation Plan` 섹션은 구현 태스크를 각각 1개 이상 체크리스트 아이템(또는 번호 목록)으로 분해하라. 본 섹션이 누락되면 harness는 Phase 1을 실패로 간주한다.
 

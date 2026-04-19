@@ -505,6 +505,7 @@ export function completeInteractivePhaseFromFreshSentinel(
           : join(cwd, state.artifacts.spec);
         try {
           const body = readFileSync(specAbs, 'utf-8');
+          if (!/^##\s+Open\s+Questions\s*$/m.test(body)) return false;
           if (!/^##\s+Implementation\s+Plan\s*$/m.test(body)) return false;
         } catch {
           return false;

@@ -1,5 +1,5 @@
 import { MODEL_PRESETS, REQUIRED_PHASE_KEYS, getPresetById } from './config.js';
-import type { HarnessState } from './types.js';
+import type { HarnessState, FlowMode } from './types.js';
 import type { InputManager } from './input.js';
 
 // ANSI color codes
@@ -17,9 +17,9 @@ export function separator(): string {
   return '━'.repeat(width);
 }
 
-function phaseLabel(phase: number): string {
+function phaseLabel(phase: number, flow: FlowMode = 'full'): string {
   const labels: Record<number, string> = {
-    1: 'Spec 작성',
+    1: flow === 'light' ? '설계+플랜' : 'Spec 작성',
     2: 'Spec Gate',
     3: 'Plan 작성',
     4: 'Plan Gate',
@@ -36,7 +36,7 @@ export function renderControlPanel(state: HarnessState): void {
   console.error(`${GREEN}▶${RESET} Harness Control Panel`);
   console.error(separator());
   console.error(`  Run:   ${state.runId}`);
-  console.error(`  Phase: ${state.currentPhase}/7 — ${phaseLabel(state.currentPhase)}`);
+  console.error(`  Phase: ${state.currentPhase}/7 — ${phaseLabel(state.currentPhase, state.flow)}`);
   const preset = getPresetById(state.phasePresets?.[String(state.currentPhase)] ?? '');
   if (preset) console.error(`  Model: ${preset.label}`);
   console.error('');
@@ -51,7 +51,7 @@ export function renderControlPanel(state: HarnessState): void {
       : ' ';
     const statusLabel = isSkipped ? '(skipped)' : `(${status})`;
     const current = p === state.currentPhase ? ' ← current' : '';
-    console.error(`  [${icon}] Phase ${p}: ${phaseLabel(p)} ${statusLabel}${current}`);
+    console.error(`  [${icon}] Phase ${p}: ${phaseLabel(p, state.flow)} ${statusLabel}${current}`);
   }
   console.error('');
   console.error(separator());
@@ -136,6 +136,7 @@ export function renderWelcome(runId: string): void {
 export function renderModelSelection(
   phasePresets: Record<string, string>,
   editablePhases?: Set<string>,
+  flow: FlowMode = 'full',
 ): void {
   process.stdout.write('\x1b[2J\x1b[H');
   console.error(separator());
@@ -143,7 +144,8 @@ export function renderModelSelection(
   console.error(separator());
 
   const phaseLabels: Record<string, string> = {
-    '1': 'Spec 작성', '2': 'Spec Gate', '3': 'Plan 작성',
+    '1': flow === 'light' ? '설계+플랜' : 'Spec 작성',
+    '2': 'Spec Gate', '3': 'Plan 작성',
     '4': 'Plan Gate', '5': '구현', '7': 'Eval Gate',
   };
 
@@ -164,13 +166,14 @@ export async function promptModelConfig(
   currentPresets: Record<string, string>,
   inputManager: InputManager,
   editablePhases?: string[],
+  flow: FlowMode = 'full',
 ): Promise<Record<string, string>> {
   const presets = { ...currentPresets };
   const editable = editablePhases ? new Set(editablePhases) : new Set(REQUIRED_PHASE_KEYS as readonly string[]);
   const validPhaseKeys = new Set([...editable, '\r', '\n']);
 
   while (true) {
-    renderModelSelection(presets, editable);
+    renderModelSelection(presets, editable, flow);
     const key = await inputManager.waitForKey(validPhaseKeys);
 
     if (key === '\r' || key === '\n' || key === '') {
@@ -181,7 +184,8 @@ export async function promptModelConfig(
     if (!editable.has(phase)) continue;
 
     const phaseLabels: Record<string, string> = {
-      '1': 'Spec 작성', '2': 'Spec Gate', '3': 'Plan 작성',
+      '1': flow === 'light' ? '설계+플랜' : 'Spec 작성',
+      '2': 'Spec Gate', '3': 'Plan 작성',
       '4': 'Plan Gate', '5': '구현', '7': 'Eval Gate',
     };
     console.error('');
