@@ -4,7 +4,7 @@
 
 ## 프로젝트 한 줄
 
-`harness-cli`는 AI 에이전트 개발 라이프사이클을 7단계 파이프라인(spec → gate → plan → gate → impl → verify → eval gate)으로 강제하는 CLI. Claude Code가 구현자, Codex가 독립 리뷰어. `--light` flag로 5-slot 경량 모드(P1 → P2 → P5 → P6 → P7) 구현 완료.
+`harness-cli`는 AI 에이전트 개발 라이프사이클을 7단계 파이프라인(spec → gate → plan → gate → impl → verify → eval gate) 또는 `--light` 5단계 파이프라인(P1 → P2 → P5 → P6 → P7)으로 실행하는 CLI. runner/model은 phase preset으로 결정되고, 기본 gate runner는 Codex CLI, 기본 interactive runner는 Claude Code CLI다.
 
 ## 먼저 읽을 것
 
@@ -14,12 +14,19 @@
 2. `docs/specs/2026-04-12-harness-cli-design.md` — 원 설계 rationale (ADR)
 3. `docs/specs/2026-04-14-tmux-rearchitecture-design.md` — 현 tmux 아키텍처 ADR
 4. `docs/specs/2026-04-14-claude-harness-skill-design.md` — `/harness` 슬래시 커맨드 플러그인 설계
-5. **최근 shipped 설계** (main에 merged):
-   - `docs/specs/2026-04-18-gate-prompt-hardening-design.md` + `docs/plans/2026-04-18-gate-prompt-hardening.md` (PR #11) — BUG-A/B/C 수정 + phase-start preset 로깅
-   - `docs/specs/2026-04-18-harness-skills-synthesis-{INTENT,design}.md` + `docs/plans/2026-04-18-harness-skills-synthesis.md` (PR #12 + #15) — **T1–T7 전부 완료**. PR #15가 assembler inline(T4) + thin `phase-{1,3,5}.md` binding(T5) + E2E/docs(T7) 마감.
-   - `docs/specs/2026-04-18-claude-token-capture-design.md` (PR #16) — interactive phase_end에 `claudeTokens` 필드 추가. 5 라운드 gate 리뷰를 거친 설계 + 구현.
-6. **Shipped 설계** (이 브랜치에서 구현 완료):
-   - `docs/specs/2026-04-18-light-flow-design.md` + `docs/plans/2026-04-18-light-flow.md` (PR #10 spec + PR #17 plan) — `harness start --light` 경량 5-slot 플로우. Phase 2 pre-impl Codex gate 활성화(ADR-15~20). `docs/specs/2026-04-19-untitled-2-design.md` 참조.
+5. **현재 코드와 직접 연결된 설계/배경 문서**:
+   - `docs/specs/2026-04-18-gate-prompt-hardening-design.md` + `docs/plans/2026-04-18-gate-prompt-hardening.md`
+   - `docs/specs/2026-04-18-harness-skills-synthesis-{INTENT,design}.md` + `docs/plans/2026-04-18-harness-skills-synthesis.md`
+   - `docs/specs/2026-04-18-claude-token-capture-design.md`
+   - `docs/specs/2026-04-18-light-flow-design.md` + `docs/plans/2026-04-18-light-flow.md` (light flow 초기 설계; ADR-4는 `2026-04-19-untitled-2-design.md` ADR-15로 대체됨)
+   - `docs/specs/2026-04-19-untitled-2-design.md` + `docs/plans/2026-04-19-untitled-2.md` — light flow Phase 2 pre-impl Codex gate 활성화 (ADR-15~20)
+
+## 문서 동기화 의무
+
+- 구현체를 바꿔서 사용자/운영자 관찰 가능 동작이 달라지면, **반드시 같은 변경에서** `README.md`, `README.ko.md`, `docs/HOW-IT-WORKS.md`, `docs/HOW-IT-WORKS.ko.md`의 영향 범위를 검토한다.
+- 변경된 동작이 CLI 플래그, phase 흐름, reopen/retry 규칙, runner 선택, preset 기본값, state/artifact 경로, verify/gate 동작, tmux/attach 동작, logging/footer에 영향을 주면 관련 문서를 즉시 최신화한다.
+- 문서 영향이 없다고 판단한 경우에도 PR/커밋 설명에 `README/HOW-IT-WORKS 검토 결과 문서 변경 불필요`라는 취지의 근거를 남긴다.
+- 임시 실험 메모·handoff·세션 산출물은 장기 문서처럼 취급하지 말고, 기준 문서는 `README*`와 `docs/HOW-IT-WORKS*`로 유지한다.
 
 ## 코드 탐색 entry points
 
@@ -44,7 +51,7 @@
 
 ```bash
 pnpm tsc --noEmit   # typecheck (= pnpm lint; package.json에서 alias)
-pnpm vitest run     # 전체 테스트 스위트 (현재 baseline: 514 passed / 1 skipped — PR #15/#16 이후)
+pnpm vitest run     # 전체 테스트 스위트
 pnpm build          # tsc + scripts/copy-assets.mjs (dist 생성)
 ```
 
@@ -77,26 +84,14 @@ Session meta: `~/.harness/sessions/<hash>/<runId>/{events.jsonl, meta.json, summ
 
 ## 실행 모드 defaults
 
-- **Logging 기본 on**: `harness run` / `/harness` 실행 시 **항상 `--enable-logging` 포함**. (전역 메모리 규칙)
+- **Logging은 opt-in**: 코드 기본값은 off이며, 세션 증적이 필요할 때만 `--enable-logging`을 명시한다.
 - **Gate escalation**: P1만 처리하고 P2는 plan 내 TODO로 기록 후 다음 phase 진입. (전역 메모리 규칙)
 - **Autonomous mode**: 사용자가 "에스컬레이션 없이 진행" 지시 시 활성. 단일 안건에 대해 Codex 최대 3회 거절, 4회째 강제 통과.
 
-## 현재 open issues
+## 현재 이슈 메모 취급
 
-### 레거시 (전 세션 이월)
-
-| # | 요지 | 상태 |
-|---|---|---|
-| 1 | Gate reject 루프 비수렴 | **부분 완화 shipped**: light flow는 Phase 7 REJECT 시 `Scope: impl` 이면 Phase 5 reopen, `design|mixed|missing` 이면 Phase 1 reopen, retry limit 5를 사용한다(full은 3 유지). post-ship 측정은 events.jsonl 확장 대신 `.harness/<runId>/gate-7-raw.txt` verdict-raw artifact 샘플링으로 false fast-path를 확인한다. rollback threshold는 아직 문서화되지 않았고 후속 dogfood에서 결정한다. |
-| 5 | Phase 3 interactive 폭주 (37분 runaway 이력) | 원인 미파악. 재현 실험 선행 후 soft-timeout 설계. |
-
-### 2026-04-18 dog-fooding에서 확인된 신규 이슈 (`~/Desktop/projects/harness/experimental-todo/observations.md` 참조)
-
-| # | 요지 | 심각도 | 상태 |
-|---|---|---|---|
-| 8 | Phase 1 default preset 과중 — 간단한 CLI 한 번에 5.4M 토큰 (2026-04-18 dogfood-full 재측정) | P1 | **부분 해결**: (1) PR #22로 legacy `opus-max`(effort=xHigh) id를 `opus-xhigh`로 rename하고, 2026-04-19 PR로 `opus-max`(effort=max)·`sonnet-max`(effort=max) 두 preset을 카탈로그에 **신규 등록** — Opus 4.7의 3-tier(high/xHigh/max) + Sonnet 4.6의 2-tier(high/max) 축을 모두 노출. (2) PHASE_DEFAULTS[1]·LIGHT_PHASE_DEFAULTS[1]은 `opus-high`로 완화된 상태 유지 — max/xHigh는 `promptModelConfig`에서 수동 선택. `--heavy` CLI flag / 자동 난이도 힌트는 별도 follow-up (FOLLOWUPS.md P1.4). |
-| 9 | `printAdvisorReminder` orphan text (control-pane tip이 Claude로 전달 안 됨) | P2 UX | PR #11 `HARNESS FLOW CONSTRAINT`가 `advisor()` 금지로 실질 무효화. **제거 PR 진행 중** (`fix/remove-advisor-reminder`, Group C). |
-| 13 | Codex `HOME` 격리 미도입 — BUG-C alternative fix | P3 | PR #11 `REVIEWER_CONTRACT` scope-rules로 일단 해결. **영구 격리 PR 진행 중** (`feat/codex-home-isolation`, Group D). |
+- 세션성 이슈 메모나 과거 dogfood 산출물은 쉽게 stale해진다. 현재 동작 판단에는 우선순위를 주지 말고, 필요 시 이슈 트래커/PR/코드로 재검증할 것.
+- 장기적으로 유지할 사실은 `README*`, `docs/HOW-IT-WORKS*`, 그리고 해당 설계/spec 문서에 반영한다.
 
 ## Worktree 관례
 
@@ -116,7 +111,7 @@ Session meta: `~/.harness/sessions/<hash>/<runId>/{events.jsonl, meta.json, summ
 pnpm build                                    # 현 브랜치 변경분을 dist에 반영 (필수)
 harness run --enable-logging "<task>"         # 7-phase 풀 플로우
 # 또는 경량:
-harness start --light "<task>"                # 4-phase 경량 (P1 → P5 → P6 → P7)
+harness start --light "<task>"                # 5-phase 경량 (P1 → P2 → P5 → P6 → P7)
 ```
 
 빌드 없이는 dist가 갱신되지 않으므로 소스 수정 직후엔 **항상 `pnpm build`** — 그 뒤 CLI 실행 결과가 실제 변경분을 반영한다. 내부 phase 순서·gate 규약·자율 모드 정책(Codex 3 reject → 4회째 강제 통과)은 전역 규칙 `harness-lifecycle` 섹션 참조.

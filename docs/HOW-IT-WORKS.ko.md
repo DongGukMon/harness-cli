@@ -1,439 +1,257 @@
 # harness-cli 동작 원리
 
-이 문서는 `harness run "task"`를 실행했을 때 실제로 어떤 일이 일어나는지를 설명합니다. 각 phase에서 사용하는 AI 에이전트, 모델, 입출력 위치, 세션 클리어 시점을 상세히 다룹니다.
-
-전체 설계 근거(왜 multi-session인지, 왜 파일 기반 컨텍스트 전달인지)는 `docs/specs/2026-04-12-harness-cli-design.md`를 참조하세요.
+이 문서는 `src/` 구현 기준의 현재 `harness-cli` 런타임 동작을 설명합니다.
+문서와 코드가 충돌하면 코드를 우선하고, 같은 변경에서 이 문서도 같이 갱신하세요.
 
 ---
 
 ## 개요
 
-```
-harness run "task"
-  │
-  ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│  Phase 1: 브레인스토밍    claude    opus-4-6      interactive        │
-│    ↓ spec + decisions (파일)                                        │
-│  Phase 2: Spec Gate       codex     (자체 모델)    automated         │
-│    ↓ APPROVE / REJECT                                               │
-│  Phase 3: 계획 작성       claude    sonnet-4-6    interactive        │
-│    ↓ plan + checklist                                               │
-│  Phase 4: Plan Gate       codex     (자체 모델)    automated         │
-│    ↓ APPROVE / REJECT                                               │
-│  Phase 5: 구현            claude    sonnet-4-6    interactive        │
-│    ↓ git commits                                                    │
-│  Phase 6: 자동 검증        bash      N/A           automated         │
-│    ↓ eval report                                                    │
-│  Phase 7: Eval Gate       codex     (자체 모델)    automated         │
-│    ↓ APPROVE → run 완료                                             │
-└─────────────────────────────────────────────────────────────────────┘
+`harness-cli`는 tmux 기반 control/workspace 레이아웃 안에서 작업을 실행하고, 상태를 `.harness/<runId>/` 아래에 저장합니다.
+기본 라이프사이클은 다음과 같습니다.
+
+```text
+Full flow
+P1 spec → P2 spec gate → P3 plan → P4 plan gate → P5 implement → P6 verify → P7 eval gate
+
+Light flow (`--light`)
+P1 design+plan → P2 pre-impl gate → P5 implement → P6 verify → P7 eval gate
 ```
 
-**핵심 불변식**: 각 phase는 독립된 OS 프로세스에서 실행됩니다. Phase 간에 유지되는 "메인 Claude 세션" 같은 것은 존재하지 않습니다. 컨텍스트는 모두 파일로 전달됩니다.
+핵심 불변식:
+- 모든 phase는 새 OS 프로세스에서 실행됩니다
+- phase 간 컨텍스트는 채팅 메모리가 아니라 파일과 `state.json`으로 전달됩니다
+- interactive/gate phase는 시작/재개 시 고른 preset에 따라 runner가 결정됩니다
+- Phase 6은 항상 고정된 verify 스크립트이며 AI runner를 쓰지 않습니다
 
 ---
 
-## 경량 플로우 (`harness start --light`)
+## 내장 preset과 기본값
 
-중간 규모 작업(≈1–4시간, ≤~500 LoC, 모듈 ≤3개)에는 풀 플로우의 3회 interactive
-세션 + 3회 Codex gate가 과합니다. `--light`는 plan 산출물을 Phase 1 결합 문서에
-흡수하고 중간 interactive 페이즈 2개를 제거한 5-slot 파이프라인을 선택합니다:
+내장 preset은 `src/config.ts`에 정의되어 있습니다.
 
-```
-P1 design(=brainstorm+plan) → P2 pre-impl review → [P3/P4 skipped] → P5 impl → P6 verify → P7 eval-gate
-                                                                                                    │
-                                                    P7 REJECT → P1 reopen (+ carryoverFeedback) ┘
-                                                                     └─> P5 reopen (carryover 소비) ─> P6 ─> P7
-                                                    P6 FAIL → P5 reopen (직접)
-```
+| id | runner | model | effort |
+|---|---|---|---|
+| `opus-1m-max` | claude | `claude-opus-4-7[1m]` | `max` |
+| `opus-1m-xhigh` | claude | `claude-opus-4-7[1m]` | `xHigh` |
+| `opus-1m-high` | claude | `claude-opus-4-7[1m]` | `high` |
+| `sonnet-1m-max` | claude | `claude-sonnet-4-6[1m]` | `max` |
+| `sonnet-1m-high` | claude | `claude-sonnet-4-6[1m]` | `high` |
+| `opus-max` | claude | `claude-opus-4-7` | `max` |
+| `opus-xhigh` | claude | `claude-opus-4-7` | `xHigh` |
+| `opus-high` | claude | `claude-opus-4-7` | `high` |
+| `sonnet-max` | claude | `claude-sonnet-4-6` | `max` |
+| `sonnet-high` | claude | `claude-sonnet-4-6` | `high` |
+| `codex-high` | codex | `gpt-5.4` | `high` |
+| `codex-medium` | codex | `gpt-5.4` | `medium` |
 
-- **state.flow**: `'full' | 'light'`, run 생성 시점에 고정. `harness resume --light`는 거부됩니다.
-- **skipped phases**: `phases['3'|'4']`가 `'skipped'` status로 초기화되어 `runPhaseLoop`가 건너뜁니다. `renderControlPanel`은 em-dash 아이콘과 `(skipped)` 라벨로 표시합니다. Phase 2는 활성(`'pending'`) 상태로 결합 design spec Codex 리뷰를 실행합니다.
-- **Phase 1 산출물**: `docs/specs/<runId>-design.md` 하나의 결합 문서에 필수 `## Implementation Plan` 섹션을 포함합니다. `checklist.json`은 `scripts/harness-verify.sh`가 파싱해야 하므로 별도 파일로 유지.
-- **Phase 2 (pre-impl gate)**: Codex가 4축 루브릭으로 결합 design doc(spec+plan)을 리뷰합니다. REJECT 시 즉시 P1 재진입 — feedback은 `pendingAction.feedbackPaths` 로만 전달되고 `state.carryoverFeedback`는 설정되지 않습니다 (ADR-18). 게이트 retry limit 3 (풀 플로우 P2와 동일). 이 변경 이전에 생성된 legacy light run은 `phases['2']='skipped'` 상태를 유지합니다 — activation은 `createInitialState`를 통한 forward-only이고 retroactive migration이 아닙니다 (ADR-19).
-- **Phase 7 REJECT**: `Scope: impl`이면 Phase 5 재진입, `Scope: design|mixed` 또는 scope 누락이면 Phase 1 재진입. `state.carryoverFeedback`이 Phase 1 완료 이후에도 살아남아 Phase 5 재진입 시 소비됩니다.
-- **기본 preset**: P1 = `opus-high`, P2 = `codex-high`, P5 = `sonnet-high`, P7 = `codex-high`.
-- **Gate retry limit**: light P2 gate = 3, light P7 gate = 5, 풀 플로우 = 3.
-- **활성화**: `harness start --light "태스크"` (또는 `harness run --light …`). `--light`는 `--auto`와 직교.
-- **풀 플로우가 더 나은 경우**: 마이그레이션/보안/계약 변경처럼 pre-impl 독립 리뷰 가치가 큰 작업.
+기본 매핑:
+- full flow: P1 `opus-1m-high`, P2 `codex-high`, P3 `sonnet-1m-high`, P4 `codex-high`, P5 `sonnet-1m-high`, P7 `codex-high`
+- light flow: P1 `opus-1m-high`, P2 `codex-high`, P5 `sonnet-1m-high`, P7 `codex-high`
 
----
-
-## Phase별 상세 설명
-
-### Phase 1 — 브레인스토밍
-
-| | |
-|---|---|
-| **에이전트** | Claude Code CLI (`claude`) |
-| **모델** | `claude-opus-4-6` |
-| **모드** | Interactive (harness CLI에서 TTY 상속) |
-| **실행 명령** | `claude --model claude-opus-4-6 @<init-prompt-file>` |
-| **입력** | `.harness/<runId>/task.md` (`harness run`에 전달한 태스크 설명) |
-| **출력** | `docs/specs/<runId>-design.md` (설계 스펙)<br>`.harness/<runId>/decisions.md` (ADR, 제약조건, 해소된 모호성 등 decision log) |
-| **완료 신호** | `.harness/<runId>/phase-1.done` 파일 생성, 내용은 현재 `phaseAttemptId` (UUID v4) 한 줄 |
-
-**동작 과정**: CLI가 Claude를 spawn하면서 task 파일을 가리키는 초기 프롬프트를 주입합니다. Claude는 질문을 주고받으며 접근 방식을 제안하고, 사용자가 승인하면 spec + decision log를 작성합니다. `phaseAttemptId`를 담은 sentinel 파일을 만들고 종료합니다.
-
-**아티팩트 포맷**:
-- Spec: 상단에 `## Context & Decisions` 섹션(ADR 포함)이 있는 마크다운
-- Decision log: "핵심 결정사항 / 제약 조건 / 해소된 모호성 / 구현 시 주의사항" 구조의 마크다운
-
-**완료 후 처리**: CLI가 아티팩트를 검증(존재, 비어있지 않음, mtime ≥ `phaseOpenedAt[1]`)하고, spec doc에 대해 `normalizeArtifactCommit`을 실행(decisions.md는 `.harness/` 하위이므로 gitignored, 커밋 대상 아님)한 뒤 `specCommit = git rev-parse HEAD`를 기록하고 Phase 2로 진행합니다.
+사용자는 `harness start` / `harness resume` 때 모든 non-verify phase preset을 바꿀 수 있고,
+선택값은 `state.phasePresets`에 저장됩니다.
+기존 saved run은 자동으로 1M 기본값으로 마이그레이션되지 않고, 새로 만드는 run에만 1M 기본값이 자동 적용됩니다.
 
 ---
 
-### Phase 2 — Spec Gate
+## Full flow와 light flow
 
-| | |
-|---|---|
-| **에이전트** | Codex companion (독립 리뷰어) |
-| **모델** | Codex 내부 모델 (companion 바이너리가 관리) |
-| **모드** | Automated (non-interactive, 프롬프트는 stdin으로 전달) |
-| **실행 명령** | `node <codexPath> task --effort high` |
-| **입력** | `docs/specs/<runId>-design.md` (프롬프트에 인라인) + 공통 reviewer contract |
-| **출력** | 구조화된 verdict를 stdout으로:<br>`## Verdict` (APPROVE/REJECT)<br>`## Comments` (P0/P1/P2/P3 severity + 위치 명시)<br>`## Summary` |
-| **Sidecar 파일 (임시)** | `.harness/<runId>/gate-2-raw.txt` (raw stdout)<br>`.harness/<runId>/gate-2-result.json` ({exitCode, timestamp})<br>`.harness/<runId>/gate-2-error.md` (에러 시)<br>`.harness/<runId>/gate-2-feedback.md` (REJECT 시 — 다음 phase로 전달) |
-| **타임아웃** | 120초 |
+### Full flow
 
-**동작 과정**: Codex가 spec을 독립적으로 리뷰합니다. 공통 reviewer contract(모든 gate에서 동일)는 "P0/P1 이슈가 0개일 때만 APPROVE; 모든 코멘트는 구체적 위치를 인용해야 함"을 강제합니다.
+구현 전에 독립 리뷰가 중요한 작업에 적합합니다.
+주요 산출물은 다음과 같습니다.
+- P1 → `docs/specs/<runId>-design.md` + `.harness/<runId>/decisions.md`
+- P3 → `docs/plans/<runId>.md` + `.harness/<runId>/checklist.json`
+- P5 → git commits
+- P6 → `docs/process/evals/<runId>-eval.md`
 
-**결과별 분기**:
-- **APPROVE**: sidecar 파일 삭제, Phase 3 진행
-- **REJECT** (retry < 3): Phase 1이 `gate-2-feedback.md`를 주입받아 재오픈됨. `gateRetries[2]` 증가.
-- **REJECT** (retry ≥ 3): 에스컬레이션 메뉴 — `[C]ontinue` (리셋 후 재오픈), `[S]kip` (강제 통과), `[Q]uit` (일시정지)
-- **Error** (exit 0 아님, timeout, 또는 `## Verdict` 헤더 없음): Retry/Skip/Quit 메뉴. `gate-N-error.md`에 에러 저장.
+### Light flow (`harness start --light`)
+
+light flow는 phase 3/4를 `skipped`로 초기화하고 phase loop가 그대로 건너뜁니다.
+Phase 2는 활성(`pending`) 상태로 결합 design doc에 대한 pre-impl Codex 리뷰를 실행합니다.
+control panel에서 skipped phase는 `(skipped)`로 표시됩니다.
+
+light flow 특이사항:
+- P1은 결합 design+plan 문서를 `docs/specs/<runId>-design.md`에 작성합니다
+- 결합 문서에는 `## Complexity`, `## Open Questions`, `## Implementation Plan`이 반드시 있어야 합니다
+- `checklist.json`은 여전히 `.harness/<runId>/checklist.json`으로 별도 유지됩니다
+- flow는 run 생성 시 고정되므로 `harness resume --light`는 거부됩니다
+- P2 (pre-impl gate): Codex가 결합 design doc를 4축 루브릭으로 리뷰합니다. REJECT 시 즉시 P1 재진입 — feedback은 `pendingAction.feedbackPaths`로만 전달되고 `state.carryoverFeedback`는 Gate 2에서 설정되지 않습니다. Gate retry limit 3 (풀 플로우 P2와 동일). P2 활성화 이전에 생성된 legacy light run은 `phases['2']='skipped'` 상태를 유지합니다 — activation은 `createInitialState`를 통한 forward-only이고 retroactive migration이 아닙니다.
+- gate retry limit: light P2 = 3회, light P7 = 5회, 풀 플로우 = 3회
+- P7 `REJECT` 시:
+  - `Scope: impl` → P5 재오픈
+  - `Scope: design`, `Scope: mixed`, scope 누락 → P1 재오픈 + carryover feedback을 P5까지 유지
 
 ---
 
-### Phase 3 — 계획 작성
+## Phase별 요약
 
-| | |
-|---|---|
-| **에이전트** | Claude Code CLI (`claude`) |
-| **모델** | `claude-sonnet-4-6` |
-| **모드** | Interactive |
-| **실행 명령** | `claude --model claude-sonnet-4-6 @<init-prompt-file>` |
-| **입력** | spec doc 경로 + decision log 경로 (Claude가 파일을 직접 읽음) |
-| **출력** | `docs/plans/<runId>.md` (구현 계획)<br>`.harness/<runId>/checklist.json` (검증 체크리스트) |
-| **완료 신호** | `.harness/<runId>/phase-3.done` + `phaseAttemptId` |
+| Phase | 기본 preset | runner 유형 | 주요 산출물 | reject/fail 시 |
+|---|---|---|---|---|
+| P1 Spec / Design+Plan | `opus-1m-high` | interactive | spec/design 문서 + decisions + checklist(light) | Gate 2 reject 시 P1 재오픈, light P7 design/mixed reject도 P1 재오픈 |
+| P2 Spec Gate | `codex-high` | gate | verdict + feedback sidecar | P1 재오픈 |
+| P3 Plan | `sonnet-1m-high` | interactive | plan + checklist | Gate 4 reject 시 P3 재오픈 |
+| P4 Plan Gate | `codex-high` | gate | verdict + feedback sidecar | P3 재오픈 |
+| P5 Implement | `sonnet-1m-high` | interactive | git commits | P6 fail, full-flow P7 reject, light-flow impl reject 시 P5 재오픈 |
+| P6 Verify | 고정 스크립트 | 자동 셸 | eval report + verify sidecar | fail 시 P5 재오픈, retry limit 3 |
+| P7 Eval Gate | `codex-high` | gate | verdict + feedback sidecar | full은 P5, light는 scope에 따라 P5 또는 P1 |
 
-**Checklist 포맷** (완료 시 CLI가 스키마 검증):
+현재 timeout 상수(`src/config.ts`):
+- interactive: 30분
+- gate: 6분
+- verify: 5분
 
-```json
-{
-  "checks": [
-    { "name": "Type Check", "command": "pnpm run lint" },
-    { "name": "Unit Tests", "command": "pnpm test" }
-  ]
-}
+---
+
+## Runner 동작
+
+### Claude interactive phase
+
+선택된 preset의 runner가 `claude`이면, harness는 tmux workspace pane 안에서 Claude를 실행하고 현재 `phaseAttemptId`를 Claude session ID로 고정합니다.
+
+```bash
+claude --session-id <attemptId> --model <model> --effort <effort> @<prompt-file>
 ```
 
-**완료 후 처리**: CLI가 plan + checklist 스키마를 검증하고, plan에 대해 `normalizeArtifactCommit` 실행(checklist는 gitignored), `planCommit` 기록 후 Phase 4로 진행.
+현재 동작:
+- PID는 `claude-<phase>-<attemptId>.pid` 파일로 캡처됩니다
+- Claude 토큰 사용량은 pinned session JSONL에서 다시 읽어 `phase_end.claudeTokens`에 붙습니다
+- 새 Claude interactive phase를 띄우기 전에 이전 workspace PID를 종료하려 시도해, 오래된 Claude 프롬프트에 입력이 타이핑되는 것을 막습니다
 
----
+### Codex interactive phase
 
-### Phase 4 — Plan Gate
+선택된 preset의 runner가 `codex`이면 다음 형태로 실행합니다.
 
-| | |
-|---|---|
-| **에이전트** | Codex companion |
-| **모드** | Automated |
-| **입력** | spec doc + plan doc (둘 다 인라인) |
-| **출력** | Phase 2와 동일한 구조화된 verdict |
-| **Sidecar** | `gate-4-raw.txt`, `gate-4-result.json`, `gate-4-error.md`, `gate-4-feedback.md` |
-| **타임아웃** | 120초 |
-
-**REJECT 시**: Phase 3가 feedback과 함께 재오픈됩니다. Phase 2와 동일한 retry/escalation 규칙.
-
----
-
-### Phase 5 — 구현
-
-| | |
-|---|---|
-| **에이전트** | Claude Code CLI (`claude`) |
-| **모델** | `claude-sonnet-4-6` |
-| **모드** | Interactive (**NEW 세션 — 명시적 클리어 지점**) |
-| **실행 명령** | `claude --model claude-sonnet-4-6 @<init-prompt-file>` |
-| **입력** | spec doc, plan doc, decision log, feedback 파일들 (경로만 전달; Claude가 직접 읽음) |
-| **출력** | Git commits (코드 변경 자체) |
-| **완료 신호** | `.harness/<runId>/phase-5.done` + `phaseAttemptId` |
-| **추가 완료 조건** | `implRetryBase` 이후 ≥ 1개 commit + working tree clean |
-
-**동작 과정**: 이 시점이 라이프사이클 첫 번째 **명시적 세션 클리어 지점**입니다. Phase 5는 완전히 새로운 Claude 프로세스로 실행되며, Phase 1의 브레인스토밍 대화 내용은 모두 버려집니다. Claude는 committed된 설계 문서만 읽고 그에 따라 구현합니다.
-
-Claude는 반드시 코드 변경을 `git commit`해야 합니다. 초기 프롬프트에서 명시적으로 경고합니다: "commit 없이 세션을 종료하면 eval gate에서 변경분을 볼 수 없어 run이 실패한다."
-
-**완료 후 처리**: CLI가 commit 존재(`git log <implRetryBase>..HEAD`가 비어있지 않음) + working tree clean을 검증. `implCommit = git rev-parse HEAD` 기록.
-
-**Feedback 전달**: Phase 7이 나중에 reject하면 Phase 5가 재오픈됩니다. Phase 6이 이전에 fail한 상태(verify-feedback.md 존재)라면 `gate-7-feedback.md`와 `verify-feedback.md`를 모두 프롬프트에 포함해서 Claude가 양쪽 피드백을 모두 반영하도록 합니다.
-
----
-
-### Phase 6 — 자동 검증
-
-| | |
-|---|---|
-| **에이전트** | 셸 스크립트 (`~/.claude/scripts/harness-verify.sh`) |
-| **모드** | Automated (AI 미사용) |
-| **실행 명령** | `~/.claude/scripts/harness-verify.sh <checklistPath> <evalReportPath>` |
-| **입력** | `.harness/<runId>/checklist.json` (실행할 체크 목록) |
-| **출력** | `docs/process/evals/<runId>-eval.md` (평가 리포트) |
-| **Sidecar** | `verify-result.json` ({exitCode, hasSummary, timestamp})<br>`verify-feedback.md` (FAIL 시 eval report 복사본)<br>`verify-error.md` (ERROR 시) |
-| **타임아웃** | 300초 |
-
-**사전 조건** (spawn 전 순서대로 실행):
-1. Staged 변경 검사 — eval report 외 staged 파일 있으면 실패
-2. Unstaged/untracked 검사 — eval report 외 dirty 파일 있으면 실패
-3. Eval report 정리 — 파일 상태에 따라 다르게 처리:
-   - untracked → `rm`
-   - staged new → `git restore --staged` + `rm`
-   - git-tracked → `git rm -f` + `git commit`
-4. 최종 clean-tree 재검증
-
-**Eval report 포맷**: 스크립트는 먼저 헤더를 쓰고, 모든 체크를 실행한 뒤 마지막에 `## Summary`를 추가합니다. CLI는 `## Summary` 존재 여부로 FAIL(스크립트 완료, 일부 체크 실패) vs ERROR(스크립트 중간 crash)를 구분합니다.
-
-**결과별 분기**:
-- **PASS** (exitCode 0 + `## Summary` 있음): eval report에 `normalizeArtifactCommit` 실행 → `evalCommit` + `verifiedAtHead` 기록 → Phase 7 진행
-- **FAIL** (exitCode ≠ 0 + `## Summary` 있음): eval report를 `verify-feedback.md`로 복사 → Phase 5 재오픈 → `verifyRetries` 증가
-- **ERROR** (exitCode ≠ 0 + `## Summary` 없음, 또는 `verify-result.json` 없음/parse 실패): `verify-error.md` 저장 → Retry/Quit 메뉴
-
-**Verify retry 한도**: 3. 3회 연속 FAIL 시 에스컬레이션 메뉴(`[C]ontinue / [S]kip / [Q]uit`). `[S]kip`은 "VERIFY SKIPPED" 레이블의 synthetic eval report를 생성하고 Phase 7로 진행합니다.
-
----
-
-### Phase 7 — Eval Gate
-
-| | |
-|---|---|
-| **에이전트** | Codex companion |
-| **모드** | Automated |
-| **입력** | spec doc + plan doc + eval report + `git diff <baseCommit>...HEAD` + 메타데이터 블록 |
-| **출력** | 동일한 구조화된 verdict |
-| **Sidecar** | `gate-7-raw.txt`, `gate-7-result.json`, `gate-7-error.md`, `gate-7-feedback.md` |
-| **타임아웃** | 120초 |
-
-**프롬프트 메타데이터 블록** (외부 커밋 감지 여부와 무관하게 항상 포함):
-
-```
-Harness implementation range: <baseCommit>..<implCommit> (Phase 1–5 commits).
-Harness eval report commit: <evalCommit> (the commit that last modified the eval report).
-Verified at HEAD: <verifiedAtHead> (most recent Phase 6 run).
-Focus review on changes within the harness ranges above.
+```bash
+codex exec --model <model> -c model_reasoning_effort="<effort>" --sandbox <level> --full-auto -
 ```
 
-**Diff 조립**:
-- 일반 모드: `git diff <baseCommit>...HEAD` (전체 harness 범위)
-- 외부 커밋 감지 시: `git diff <baseCommit>...<implCommit>` + `git show <evalCommit>` + `## External Commits (not reviewed)` 섹션으로 분리
+sandbox 레벨:
+- phase 1, 3 → `workspace-write`
+- phase 5 → `danger-full-access`
 
-**크기 제한**: 파일별 diff > 20KB는 truncation 마커와 함께 자름; 개별 파일 > 200KB → gate execution error; 최종 프롬프트 > 500KB → gate execution error.
+Codex interactive phase는 sentinel 파일을 쓰지 않고, subprocess 종료 후 harness가 산출물을 직접 검증합니다.
 
-**결과별 분기**:
-- **APPROVE**: `run.status = "completed"`, `currentPhase = 8` (terminal sentinel)
-- **REJECT** (retry < 3): Phase 5 재오픈 — `gate-7-feedback.md` + 기존 `verify-feedback.md` 모두 주입. `gateRetries[7]` 증가. `verifyRetries` 리셋.
-- **REJECT** (retry ≥ 3): 에스컬레이션 메뉴
-- **Error**: Retry/Skip/Quit 메뉴
+### Gate phase
 
----
+gate phase도 preset 기반입니다.
+기본적으로는 예전 companion 경로가 아니라 실제 `codex` CLI를 사용합니다.
 
-## 세션 클리어 시점
-
-"세션 클리어"란 이전 Claude 세션의 메모리 상 컨텍스트가 완전히 사라지는 것을 의미합니다. CLI는 새 OS 프로세스를 spawn함으로써 명시적 클리어 지점을 만듭니다.
-
-### 자동 클리어 (모든 phase 경계)
-
-모든 phase는 새 프로세스입니다. 따라서 **연속되는 모든 phase 쌍 사이에서** 이전 세션의 메모리는 사라집니다. 컨텍스트는 파일로만 전달됩니다.
-
-### 명시적 "hard" 클리어 (설계 스펙에서 언급)
-
-모든 phase 경계가 클리어지만, 두 지점은 특히 "명시적 세션 클리어 지점"으로 명시됩니다:
-
-1. **Phase 3 → Phase 5**: 계획 작성 컨텍스트 폐기; 구현은 spec + plan + decisions만 읽고 fresh하게 시작
-2. **Phase 5 → Phase 7**: 구현 컨텍스트 폐기; eval gate는 아티팩트 + diff만 봄
-
-이 두 경계는 가장 확실한 break 지점입니다. 특히 Phase 5는 설계에서 "NEW SESSION"으로 명시되어 있으며, 구현자는 Phase 1의 브레인스토밍이나 Phase 3의 계획 작성 대화 히스토리 없이 fresh하게 시작합니다.
-
-### Phase 내부 (클리어 없음)
-
-Phase 1/3/5용 Claude가 spawn되면 그 세션은 완료될 때까지 유지됩니다. CLI는 phase 중간에 Claude를 재시작하지 않습니다. Reopen 시나리오(gate REJECT 또는 verify FAIL 이후)에서 feedback은 **새 Claude 프로세스**를 spawn할 때 초기 프롬프트에 파일 경로를 주입하는 방식으로 전달됩니다 — Claude가 직접 파일을 읽습니다.
-
-### Reopen 시 (Gate REJECT / Verify FAIL)
-
-Phase N이 이후 phase의 reject로 재오픈될 때 **새 Claude 프로세스**가 spawn되며, 초기 프롬프트에 다음을 포함합니다:
-- 기존 컨텍스트 파일들 (phase에 맞게 spec, plan, decisions)
-- Feedback 파일 경로 (`gate-N-feedback.md`, `verify-feedback.md`)
-- 새로운 `phaseAttemptId` (UUID v4)
-
-이전 sentinel 파일은 새 `phaseAttemptId`와 비교되어 — 불일치(stale)하면 삭제되고 새 세션이 fresh sentinel을 씁니다.
-
----
-
-## 상태 관리
-
-### Run 디렉토리 구조
-
-```
-.harness/
-├── repo.lock               # repo 전역 lock (JSON: {cliPid, childPid, childPhase, runId, startedAt, childStartedAt})
-├── current-run             # 현재 활성 runId (텍스트 파일)
-└── <runId>/               # 예: 2026-04-12-graphql-api/
-    ├── state.json          # 권위 있는 run state (아래 참조)
-    ├── run.lock            # run 단위 marker (빈 파일)
-    ├── task.md             # 원본 태스크 설명
-    ├── decisions.md        # Phase 1 출력 (gitignored)
-    ├── checklist.json      # Phase 3 출력 (gitignored)
-    ├── phase-1.done        # sentinel (phaseAttemptId 내용)
-    ├── phase-3.done
-    ├── phase-5.done
-    ├── gate-2-raw.txt      # 임시 (state 갱신 후 삭제)
-    ├── gate-2-result.json
-    ├── gate-2-error.md     # 에러 시만
-    ├── gate-2-feedback.md  # REJECT 시만 (reopen 위해 보존)
-    ├── gate-4-*
-    ├── gate-7-*
-    ├── verify-result.json
-    ├── verify-feedback.md  # FAIL 시만
-    └── verify-error.md     # ERROR 시만
+```bash
+codex exec --model <model> -c model_reasoning_effort="<effort>" -
 ```
 
-### `state.json` 내용
+gate phase를 Claude preset으로 강제로 매핑한 경우에만 `claude --print` gate subprocess를 사용합니다.
 
-```json
-{
-  "runId": "2026-04-12-graphql-api",
-  "currentPhase": 3,
-  "status": "in_progress",
-  "autoMode": false,
-  "task": "GraphQL API 추가",
-  "baseCommit": "<sha>",
-  "implRetryBase": "<sha>",
-  "codexPath": "/Users/.../codex-companion.mjs",
-  "externalCommitsDetected": false,
-  "artifacts": { "spec": "...", "plan": "...", "decisionLog": "...", "checklist": "...", "evalReport": "..." },
-  "phases": { "1": "completed", "2": "completed", "3": "in_progress", "4": "pending", ... },
-  "gateRetries": { "2": 0, "4": 0, "7": 0 },
-  "verifyRetries": 0,
-  "pauseReason": null,
-  "specCommit": "<sha>",   // Phase 1 normalize 후 설정
-  "planCommit": null,
-  "implCommit": null,      // Phase 5 완료 후 설정
-  "evalCommit": null,      // Phase 6 normalize 후 설정
-  "verifiedAtHead": null,
-  "pausedAtHead": null,
-  "pendingAction": null,   // crash-recovery hint
-  "phaseOpenedAt": { "1": 1744444800000, "3": null, "5": null },
-  "phaseAttemptId": { "1": "uuid-v4", "3": null, "5": null }
-}
+### Codex isolation
+
+기본적으로 Codex subprocess는 `<runDir>/codex-home/` 안에서 실행되고, 그 안에는 `auth.json`만 symlink됩니다.
+이렇게 해야 사용자 전역 `CODEX_HOME` 규칙이 런타임에 섞여들지 않습니다.
+`--codex-no-isolate`는 이 안전장치를 끕니다.
+
+Claude Code 환경에서 1M context를 사용할 수 없다면, 모델 선택기에서 기존 non-1M Claude preset을 계속 사용하거나 자체 포크의 `src/config.ts` 기본값을 바꾸면 됩니다.
+
+---
+
+## Verify 동작 (Phase 6)
+
+Phase 6은 항상 번들된 `harness-verify.sh` 스크립트를 실행합니다.
+스크립트 경로는 설치된 패키지 내부를 우선 사용하고, 없으면 레거시 fallback으로 `~/.claude/scripts/harness-verify.sh`를 사용합니다.
+
+입출력:
+- 입력: `.harness/<runId>/checklist.json`
+- 출력: `docs/process/evals/<runId>-eval.md`
+- sidecar: `verify-result.json`, `verify-feedback.md`, `verify-error.md`
+
+verify 실행 전에는 eval report 경로를 제외한 working tree가 깨끗해야 하며,
+기존 eval report가 있으면 상태에 맞게 정리/교체합니다.
+verify PASS면 eval report를 auto-commit하고, FAIL이면 `verify-feedback.md`를 남기고 P5를 재오픈합니다.
+
+---
+
+## 상태와 아티팩트
+
+권위 있는 run 상태는 `.harness/<runId>/state.json`입니다.
+중요 필드는 다음과 같습니다.
+- `flow`: `full` / `light`
+- `currentPhase`, `status`, `phases`
+- `phasePresets`
+- `gateRetries`, `verifyRetries`
+- `pendingAction`
+- `carryoverFeedback` (light P7 design/mixed reject 핸드오프)
+- `specCommit`, `planCommit`, `implCommit`, `evalCommit`, `verifiedAtHead`
+- `phaseAttemptId`, `phaseOpenedAt`
+- tmux/session bookkeeping
+- `loggingEnabled`, `codexNoIsolate`, `strictTree`
+
+아티팩트 경로:
+- spec/design 문서: `docs/specs/<runId>-design.md`
+- plan 문서: `docs/plans/<runId>.md` (full flow만)
+- decisions: `.harness/<runId>/decisions.md`
+- checklist: `.harness/<runId>/checklist.json`
+- eval report: `docs/process/evals/<runId>-eval.md`
+
+상태 파일은 항상 atomic하게 기록됩니다: `state.json.tmp` 쓰기 → fsync → rename.
+
+---
+
+## Resume와 복구
+
+`harness resume`는 세 경우를 처리합니다.
+1. tmux session alive + inner alive → attach만 수행
+2. tmux session alive + inner dead → 가능한 경우 기존 control pane에서 inner 재시작
+3. tmux session 없음 → tmux를 다시 만들고 저장 상태부터 계속 진행
+
+복구 메커니즘:
+- atomic state write
+- Claude interactive phase용 sentinel 기반 완료 판정
+- `pendingAction` replay
+- artifact commit anchor (`specCommit`, `planCommit`, `implCommit`, `evalCommit`)
+- gate / verify sidecar
+
+`harness jump <phase>`는 완료된 run이 아닌 이상 backward-only입니다.
+light flow에서는 skipped phase로 jump할 수 없습니다.
+
+---
+
+## 로깅과 footer
+
+세션 로깅은 `--enable-logging`으로 켜는 opt-in 기능입니다.
+켜면 다음 경로에 기록됩니다.
+
+```text
+~/.harness/sessions/<repoKey>/<runId>/
+  meta.json
+  events.jsonl
+  summary.json
 ```
 
-### Atomic write
-
-모든 `state.json` 갱신은 `state.json.tmp 쓰기 → fsync → rename` 패턴을 사용합니다. POSIX rename은 atomic이므로 `state.json`은 항상 이전 버전 또는 새 버전 중 하나 — 중간 상태 없음.
-
-### Commit anchor
-
-CLI는 각 phase 경계에서 git SHA를 기록하여 resume 시 ancestry 검증을 가능하게 합니다:
-
-| Anchor | 설정 시점 | 용도 |
-|--------|-----------|------|
-| `baseCommit` | `harness run` (.gitignore 커밋 후) | Phase 7 diff 시작점 |
-| `specCommit` | Phase 1 normalize | Resume ancestry + artifact dirty check |
-| `planCommit` | Phase 3 normalize | 동일 |
-| `implCommit` | Phase 5 완료 | Phase 7 diff 종료점 (harness 범위) |
-| `evalCommit` | Phase 6 normalize | Phase 7 eval 리뷰 |
-| `verifiedAtHead` | Phase 6 PASS (및 skip) | Phase 7 메타데이터 |
-| `pausedAtHead` | 모든 의도적 exit 시 | Resume 시 외부 커밋 감지 |
+주요 이벤트는 `phase_start`, `phase_end`, `gate_verdict`, `gate_error`, `gate_retry`, `verify_result`, `session_end` 등입니다.
+control pane footer는 이 로그를 바탕으로 경과 시간과 Claude/gate 토큰 합계를 집계합니다.
 
 ---
 
-## 동시성 제어
+## Preflight와 플랫폼 가정
 
-### 두 단계 락
-
-1. **repo 전역 락** `.harness/repo.lock` — `fs.openSync(path, 'wx')` (O_EXCL)로 atomic하게 생성. 동일 repo에서 두 개의 `harness` 프로세스가 동시에 실행되는 것을 방지. JSON 포맷으로 PID + start time 메타데이터를 담아 PID 재사용 감지 가능.
-
-2. **run 단위 락** `.harness/<runId>/run.lock` — presence-only marker 파일. `repo.lock`과 함께 생성/삭제. 버려진 `repo.lock`이 어느 run에 속했는지 식별에 사용.
-
-### Liveness check (PGID 기반)
-
-다른 락이 발견되면 CLI가 다음을 검사합니다:
-- `cliPid`가 살아있는가? → `kill(cliPid, 0)` + start time 일치 검사
-- CLI가 죽어있다면, child process group이 살아있는가? → `kill(-childPid, 0)` (음수 PID = PGID)
-- PGID alive → 항상 active로 판정 (orphan children을 놓치는 것보다 false-positive "active"가 더 안전)
-- PGID dead (ESRCH) → stale, 두 락 모두 삭제 후 진행
-
-### Process group
-
-모든 subprocess spawn은 `detached: true`를 사용합니다. 이로써 child가 자신의 process group leader가 됩니다. CLI는 `process.kill(-childPid, 'SIGTERM')` → 5초 대기 → `SIGKILL`로 종료하여 child가 spawn한 손자 프로세스까지 모두 정리합니다.
-
-정상 완료 시 CLI는 PGID `ESRCH` 확인 후에만 lock의 `childPid`를 null로 갱신합니다 — 다음 phase가 이전 phase의 orphan이 사라지기 전에 spawn되는 것을 방지.
+핵심 preflight는 Node, tmux, TTY, platform, verify script, `jq`, 그리고 다음 phase에 필요한 runner CLI를 검사합니다.
+지원 플랫폼은 macOS와 Linux입니다.
+tmux 밖에서 시작하면 iTerm2를 먼저 시도하고, 그다음 Terminal.app, 마지막으로 수동 `tmux attach` 명령을 출력합니다.
 
 ---
 
-## Signal 처리
+## 실제 동작 확인용 소스 파일
 
-`harness run`과 `harness resume` (그리고 phase loop에 진입한 후의 `skip`/`jump`)은 `SIGINT` + `SIGTERM` 핸들러를 등록합니다. Signal 수신 시:
-
-1. Child process group kill: SIGTERM → 5초 대기 → SIGKILL
-2. `pausedAtHead = git rev-parse HEAD` 저장
-3. Phase 상태 갱신 (interactive → `failed`, automated → `error` + `pendingAction`)
-4. Atomic state 쓰기
-5. 두 lock 파일 모두 삭제
-6. Exit code 130 (SIGINT 관례)
-
-따라서 Ctrl-C는 항상 안전합니다. 상태가 보존되고 `harness resume`으로 저장된 체크포인트에서 이어갈 수 있습니다.
-
----
-
-## 에러 복구
-
-Crash-safe 복구는 다음 메커니즘으로 달성됩니다:
-
-1. **Atomic state writes** — `state.json`은 중간에 corrupt되지 않음
-2. **Sentinel-based completion** — interactive phase 완료는 `phaseAttemptId`와 일치하는 fresh sentinel을 요구. Crash한 부분 세션은 매치되지 않음.
-3. **pendingAction replay** — state 전환 전에 의도한 action을 atomic하게 기록. Resume 시 idempotent하게 replay.
-4. **Committed artifacts** — spec, plan, eval report는 auto-commit됨. Resume이 `*Commit` anchor 기준으로 변조 여부를 검증.
-5. **Lock `.tmp` recovery** — lock 갱신 중 crash가 발생하면 `.tmp` 파일을 parse하고 liveness check 후 안전하게 정리
-
-권위 있는 resume 알고리즘은 `src/resume.ts`에 있습니다. 주요 분기:
-
-- `pendingAction` non-null → type별 replay (`reopen_phase`, `rerun_gate`, `rerun_verify`, `show_escalation`, `show_verify_error`, `skip_phase`)
-- Phase 1/3/5가 `in_progress`/`failed` + fresh sentinel → inline 완료 (respawn 없음)
-- Phase 1/3가 `error` + valid artifacts → normalize_artifact_commit 재시도
-- Phase 6가 `in_progress` + `verify-result.json` → 저장된 PASS/FAIL/ERROR 결과 적용
-- Phase 6가 `error` + valid eval report → normalize 재시도
-
----
-
-## Preflight
-
-모든 명령은 실제 작업 전에 의존성 검사를 실행합니다:
-
-| 항목 | 검사 방법 |
-|------|-----------|
-| git | `git rev-parse --show-toplevel` |
-| head | `git rev-parse HEAD` (빈 repo 거부) |
-| node | `node --version` |
-| claude | `which claude` |
-| claudeAtFile | `claude --model claude-sonnet-4-6 @<tmpfile> --print ''` (weak signal) |
-| verifyScript | `~/.claude/scripts/harness-verify.sh` 존재 + 실행 권한 |
-| jq | `jq --version` |
-| codexPath | `~/.claude/plugins/cache/openai-codex/codex/*/scripts/codex-companion.mjs` glob 탐색 |
-| platform | `process.platform`이 `darwin` 또는 `linux` (win32 거부) |
-| tty | `process.stdin.isTTY && process.stdout.isTTY` (`status`/`list`은 건너뜀) |
-
-각 명령은 필요한 부분집합만 실행합니다:
-
-- `harness run` → 10개 항목 모두
-- `harness resume` / `jump` / `skip` → 다음 실행될 phase에 필요한 항목만
-- `harness status` / `list` → platform만 (TTY 불필요)
-
----
-
-## 추가 자료
-
-- `docs/specs/2026-04-12-harness-cli-design.md` — ADR과 모든 엣지 케이스 근거가 담긴 전체 설계 스펙
-- `docs/plans/2026-04-12-harness-cli.md` — 구현 계획 (태스크 분해)
-- `docs/process/evals/2026-04-12-harness-cli-eval.md` — 자동 검증 리포트
+행동이 헷갈릴 때는 먼저 아래 파일을 보세요.
+- `src/config.ts`
+- `src/commands/start.ts`
+- `src/commands/resume.ts`
+- `src/commands/inner.ts`
+- `src/phases/runner.ts`
+- `src/phases/interactive.ts`
+- `src/phases/gate.ts`
+- `src/phases/verify.ts`
+- `src/runners/claude.ts`
+- `src/runners/codex.ts`
+- `src/runners/codex-isolation.ts`
+- `src/state.ts`

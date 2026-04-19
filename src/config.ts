@@ -8,13 +8,23 @@ export interface ModelPreset {
   effort: string;
 }
 
+export interface PhasePresetMap {
+  [phase: number]: string;
+}
+
 // Model effort axes (per Anthropic 2026-04 guidance):
 //   - Opus 4.7: high < xHigh < max (three distinct tiers)
 //   - Sonnet 4.6: high < max (two tiers; no xHigh)
-// The catalog registers every tier on each axis so users can make explicit
-// cost/quality tradeoffs via `promptModelConfig`. PHASE_DEFAULTS still points
-// at the conservative tier; `max` variants are opt-in.
+// The catalog registers both the legacy tiers and explicit 1M-context tiers so
+// users can choose compatibility vs. long-context defaults via
+// `promptModelConfig`. New runs prefer the conservative 1M tiers; legacy tiers
+// remain available as manual fallback choices.
 export const MODEL_PRESETS: ModelPreset[] = [
+  { id: 'opus-1m-max',   label: 'Claude Opus 4.7 1M / max',    runner: 'claude', model: 'claude-opus-4-7[1m]',   effort: 'max'    },
+  { id: 'opus-1m-xhigh', label: 'Claude Opus 4.7 1M / xHigh',  runner: 'claude', model: 'claude-opus-4-7[1m]',   effort: 'xHigh'  },
+  { id: 'opus-1m-high',  label: 'Claude Opus 4.7 1M / high',   runner: 'claude', model: 'claude-opus-4-7[1m]',   effort: 'high'   },
+  { id: 'sonnet-1m-max', label: 'Claude Sonnet 4.6 1M / max',  runner: 'claude', model: 'claude-sonnet-4-6[1m]', effort: 'max'    },
+  { id: 'sonnet-1m-high',label: 'Claude Sonnet 4.6 1M / high', runner: 'claude', model: 'claude-sonnet-4-6[1m]', effort: 'high'   },
   { id: 'opus-max',     label: 'Claude Opus 4.7 / max',    runner: 'claude', model: 'claude-opus-4-7',   effort: 'max'    },
   { id: 'opus-xhigh',   label: 'Claude Opus 4.7 / xHigh',  runner: 'claude', model: 'claude-opus-4-7',   effort: 'xHigh'  },
   { id: 'opus-high',    label: 'Claude Opus 4.7 / high',   runner: 'claude', model: 'claude-opus-4-7',   effort: 'high'   },
@@ -24,7 +34,19 @@ export const MODEL_PRESETS: ModelPreset[] = [
   { id: 'codex-medium', label: 'Codex / medium',           runner: 'codex',  model: 'gpt-5.4',           effort: 'medium' },
 ];
 
-export const PHASE_DEFAULTS: Record<number, string> = {
+export const PHASE_DEFAULTS: PhasePresetMap = {
+  1: 'opus-1m-high',
+  2: 'codex-high',
+  3: 'sonnet-1m-high',
+  4: 'codex-high',
+  5: 'sonnet-1m-high',
+  7: 'codex-high',
+};
+
+// Existing saved runs should keep the historical non-1M defaults when older
+// state.json files are migrated. Only newly-created runs should pick up the
+// new 1M defaults above.
+export const LEGACY_PHASE_DEFAULTS: PhasePresetMap = {
   1: 'opus-high',
   2: 'codex-high',
   3: 'sonnet-high',
@@ -96,7 +118,14 @@ export const PHASE_ARTIFACT_FILES: Record<number, string[]> = {
 
 export const LIGHT_REQUIRED_PHASE_KEYS = ['1', '2', '5', '7'] as const;
 
-export const LIGHT_PHASE_DEFAULTS: Record<number, string> = {
+export const LIGHT_PHASE_DEFAULTS: PhasePresetMap = {
+  1: 'opus-1m-high',
+  2: 'codex-high',
+  5: 'sonnet-1m-high',
+  7: 'codex-high',
+};
+
+export const LEGACY_LIGHT_PHASE_DEFAULTS: PhasePresetMap = {
   1: 'opus-high',
   2: 'codex-high',
   5: 'sonnet-high',
@@ -109,6 +138,10 @@ export function getRequiredPhaseKeys(flow: FlowMode): readonly string[] {
 
 export function getPhaseDefaults(flow: FlowMode): Record<number, string> {
   return flow === 'light' ? LIGHT_PHASE_DEFAULTS : PHASE_DEFAULTS;
+}
+
+export function getLegacyPhaseDefaults(flow: FlowMode): Record<number, string> {
+  return flow === 'light' ? LEGACY_LIGHT_PHASE_DEFAULTS : LEGACY_PHASE_DEFAULTS;
 }
 
 export function getPhaseArtifactFiles(

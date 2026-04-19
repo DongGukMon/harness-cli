@@ -220,6 +220,7 @@ export class FileSessionLogger implements SessionLogger {
         } else if (e.event === 'gate_error') {
           if (e.recoveredFromSidecar && seenErrorPhases.has(e.phase)) continue;
           gateErrors++;
+          if (e.tokensTotal) gateTokens += e.tokensTotal;
         } else if (e.event === 'escalation') {
           escalations++;
         } else if (e.event === 'force_pass') {

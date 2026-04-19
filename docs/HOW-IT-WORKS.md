@@ -1,253 +1,42 @@
 # How harness-cli works
 
-This document describes what actually happens when you run `harness run "task"` — each phase, the AI agent used, the model, the input/output locations, and when sessions are cleared between phases.
-
-For the overall rationale (why multi-session, why file-based context transfer), see `docs/specs/2026-04-12-harness-cli-design.md`.
+This document describes the current runtime behavior of `harness-cli` as implemented in `src/`.
+If this document ever disagrees with the code, treat the code as the source of truth and update this file in the same change.
 
 ---
 
 ## Overview
 
-```
-harness run "task"
-  │
-  ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│  Phase 1: Brainstorming     claude    opus-4-6      interactive     │
-│    ↓ spec + decisions (files)                                       │
-│  Phase 2: Spec Gate         codex     (its own)     automated       │
-│    ↓ APPROVE / REJECT                                               │
-│  Phase 3: Planning          claude    sonnet-4-6    interactive     │
-│    ↓ plan + checklist                                               │
-│  Phase 4: Plan Gate         codex     (its own)     automated       │
-│    ↓ APPROVE / REJECT                                               │
-│  Phase 5: Implementation    claude    sonnet-4-6    interactive     │
-│    ↓ git commits                                                    │
-│  Phase 6: Auto Verify       bash      N/A           automated       │
-│    ↓ eval report                                                    │
-│  Phase 7: Eval Gate         codex     (its own)     automated       │
-│    ↓ APPROVE → run complete                                         │
-└─────────────────────────────────────────────────────────────────────┘
+`harness-cli` runs work inside a tmux control/workspace layout and persists state under `.harness/<runId>/`.
+The default lifecycle is:
+
+```text
+Full flow
+P1 spec → P2 spec gate → P3 plan → P4 plan gate → P5 implement → P6 verify → P7 eval gate
+
+Light flow (`--light`)
+P1 design+plan → P2 pre-impl gate → P5 implement → P6 verify → P7 eval gate
 ```
 
-**Key invariant**: each phase runs in a fresh OS process. There is no "main Claude session" that stays open across phases. Context is passed through files.
+Key invariants:
+- every phase runs in a fresh OS process
+- phase-to-phase context is passed through files and `state.json`, not chat memory
+- interactive phases and gate phases are preset-driven at run start/resume
+- Phase 6 is always the bundled verify script, not an AI runner
 
 ---
 
-## Light Flow (`harness start --light`)
+## Built-in presets and defaults
 
-For medium tasks (≈1–4h, ≤~500 LoC, ≤3 modules) the default full flow's three
-interactive sessions and three Codex gates are overkill. `--light` selects a
-5-slot pipeline that folds the plan artifact into the Phase 1 design doc and
-removes the two middle interactive phases:
-
-```
-P1 design(=brainstorm+plan) → P2 pre-impl review → [P3/P4 skipped] → P5 impl → P6 verify → P7 eval-gate
-                                                                                                    │
-                                                    P7 REJECT → P1 reopen (+ carryoverFeedback) ┘
-                                                                     └─> P5 reopen (carryover 소비) ─> P6 ─> P7
-                                                    P6 FAIL → P5 reopen (직접)
-```
-
-- **state.flow**: `'full' | 'light'`, frozen at run creation. `harness resume --light` is rejected.
-- **skipped phases**: `phases['3'|'4']` initialize to `'skipped'`. `runPhaseLoop` short-circuits past them; `renderControlPanel` shows them with an em-dash glyph and `(skipped)` label. Phase 2 is active (`'pending'`) and runs a combined design-spec Codex review.
-- **Phase 1 output**: single combined doc at `docs/specs/<runId>-design.md` containing a mandatory `## Implementation Plan` section. `checklist.json` stays a separate file so `scripts/harness-verify.sh` still parses it.
-- **Phase 2 (pre-impl gate)**: Codex reviews the combined design doc (spec + plan) using a 4-axis rubric. REJECT → immediate P1 reopen with feedback delivered via `pendingAction.feedbackPaths` only; `state.carryoverFeedback` remains unset for Gate 2 (ADR-18). Gate retry limit 3 (same as full-flow P2). Legacy light runs created before this change keep `phases['2']='skipped'` — activation is forward-only via `createInitialState`, not retroactive migration (ADR-19).
-- **Phase 7 REJECT**: `Scope: impl`이면 Phase 5 reopen, `Scope: design|mixed` 또는 scope 누락이면 Phase 1 reopen. Phase 1 reopen일 때는 combined doc를 다시 작성하고, `state.carryoverFeedback` 는 그 completion 이후에도 살아남아 Phase 5 on re-entry에서 소비된다.
-- **Gate retry limit**: light P2 gate = 3, light P7 gate = 5, full flow = 3.
-- **Defaults**: P1 = `opus-high`, P2 = `codex-high`, P5 = `sonnet-high`, P7 = `codex-high`.
-- **Activation**: `harness start --light "task"` (or `harness run --light …`). `--light` composes with `--auto`.
-- **Measurement source**: rollout 후 scope 분류 점검은 events.jsonl schema를 늘리지 않고 `.harness/<runId>/gate-7-raw.txt` verdict-raw artifact를 샘플링해 수행한다. rollback threshold는 아직 codify되지 않았다.
-- **When full flow is still right**: migration/security/contract work, or any task where an independent pre-impl review adds real value.
-
----
-
-## Phase-by-phase breakdown
-
-### Phase 1 — Brainstorming
-
-| | |
-|---|---|
-| **Agent** | Claude Code CLI (`claude`) |
-| **Model** | `claude-opus-4-6` |
-| **Mode** | Interactive (TTY inherits from harness CLI) |
-| **Spawn command** | `claude --model claude-opus-4-6 @<init-prompt-file>` |
-| **Input** | `.harness/<runId>/task.md` (the task description you passed to `harness run`) |
-| **Output** | `docs/specs/<runId>-design.md` (spec document)<br>`.harness/<runId>/decisions.md` (decision log with ADRs, constraints, resolved ambiguities) |
-| **Completion signal** | Claude writes `.harness/<runId>/phase-1.done` containing the current `phaseAttemptId` (UUID v4) |
-
-**What happens**: The CLI spawns Claude with an initial prompt that points Claude at the task file. Claude asks clarifying questions, proposes approaches, presents a design, and when you approve, writes the spec + decision log. Claude creates the sentinel file with its `phaseAttemptId` to signal completion, then exits.
-
-**Artifact format**:
-- Spec: Markdown with `## Context & Decisions` section at the top (contains ADRs)
-- Decision log: Markdown structured by "핵심 결정사항 / 제약 조건 / 해소된 모호성 / 구현 시 주의사항"
-
-**On completion**: CLI validates the artifacts (existence, non-empty, mtime ≥ `phaseOpenedAt[1]`), runs `normalizeArtifactCommit` for the spec doc (decisions.md is gitignored under `.harness/`), records `specCommit = git rev-parse HEAD`, and advances to Phase 2.
-
----
-
-### Phase 2 — Spec Gate
-
-| | |
-|---|---|
-| **Agent** | Codex companion (external reviewer) |
-| **Model** | Codex's internal model (controlled by the companion binary) |
-| **Mode** | Automated (non-interactive, reads prompt from stdin) |
-| **Spawn command** | `node <codexPath> task --effort high` |
-| **Input** | `docs/specs/<runId>-design.md` (inlined into prompt) + shared reviewer contract |
-| **Output** | Structured verdict to stdout:<br>`## Verdict` (APPROVE/REJECT)<br>`## Comments` (with P0/P1/P2/P3 severity + locations)<br>`## Summary` |
-| **Sidecar files (transient)** | `.harness/<runId>/gate-2-raw.txt` (raw stdout)<br>`.harness/<runId>/gate-2-result.json` ({exitCode, timestamp})<br>`.harness/<runId>/gate-2-error.md` (only on error)<br>`.harness/<runId>/gate-2-feedback.md` (only on REJECT, persisted for next phase) |
-| **Timeout** | 120 seconds |
-
-**What happens**: Codex reviews the spec independently. The reviewer contract (shared across all gates) instructs it to return `APPROVE` only if zero P0/P1 findings exist; every comment must cite a specific location.
-
-**Outcomes**:
-- **APPROVE**: sidecar files deleted, advance to Phase 3
-- **REJECT** (retries < 3): Phase 1 reopens with `gate-2-feedback.md` injected into Claude's prompt. `gateRetries[2]` increments.
-- **REJECT** (retries ≥ 3): Escalation menu — `[C]ontinue` (reset retries, reopen), `[S]kip` (force-pass), `[Q]uit` (paused)
-- **Error** (non-zero exit, timeout, or no `## Verdict` header): Retry/Skip/Quit menu; `gate-N-error.md` saved for inspection
-
----
-
-### Phase 3 — Planning
-
-| | |
-|---|---|
-| **Agent** | Claude Code CLI (`claude`) |
-| **Model** | `claude-sonnet-4-6` |
-| **Mode** | Interactive |
-| **Spawn command** | `claude --model claude-sonnet-4-6 @<init-prompt-file>` |
-| **Input** | Spec doc path + decision log path (Claude reads the files) |
-| **Output** | `docs/plans/<runId>.md` (implementation plan)<br>`.harness/<runId>/checklist.json` (verification checklist) |
-| **Completion signal** | `.harness/<runId>/phase-3.done` with `phaseAttemptId` |
-
-**Checklist format** (validated by CLI at completion):
-
-```json
-{
-  "checks": [
-    { "name": "Type Check", "command": "pnpm run lint" },
-    { "name": "Unit Tests", "command": "pnpm test" }
-  ]
-}
-```
-
-**On completion**: CLI validates plan + checklist schema, runs `normalizeArtifactCommit` for the plan (checklist is gitignored), records `planCommit`, advances to Phase 4.
-
----
-
-### Phase 4 — Plan Gate
-
-| | |
-|---|---|
-| **Agent** | Codex companion |
-| **Mode** | Automated |
-| **Input** | Spec doc + plan doc (both inlined) |
-| **Output** | Same structured verdict as Phase 2 |
-| **Sidecar files** | `gate-4-raw.txt`, `gate-4-result.json`, `gate-4-error.md`, `gate-4-feedback.md` |
-| **Timeout** | 120 seconds |
-
-**On REJECT**: Phase 3 reopens with feedback. Same retry/escalation mechanics as Phase 2.
-
----
-
-### Phase 5 — Implementation
-
-| | |
-|---|---|
-| **Agent** | Claude Code CLI (`claude`) |
-| **Model** | `claude-sonnet-4-6` |
-| **Mode** | Interactive (**NEW session — explicit clear point**) |
-| **Spawn command** | `claude --model claude-sonnet-4-6 @<init-prompt-file>` |
-| **Input** | Spec doc, plan doc, decision log, feedback files (all paths; Claude reads them) |
-| **Output** | Git commits (the code changes themselves) |
-| **Completion signal** | `.harness/<runId>/phase-5.done` with `phaseAttemptId` |
-| **Additional completion requirements** | ≥ 1 commit since `implRetryBase` + working tree clean |
-
-**What happens**: This is the first explicit session clear point in the lifecycle. Phase 5 runs in a completely fresh Claude process, with only the spec/plan/decisions files as context. Phase 1's brainstorming dialog is discarded — Claude reads the committed design docs and implements against them.
-
-Claude must `git commit` the code changes. The initial prompt explicitly warns: "commit 없이 세션을 종료하면 eval gate에서 변경분을 볼 수 없어 run이 실패한다."
-
-**On completion**: CLI validates commits exist (`git log <implRetryBase>..HEAD` non-empty) and working tree is clean. Records `implCommit = git rev-parse HEAD`.
-
-**Feedback flow**: If Phase 7 later rejects, Phase 5 reopens. If Phase 6 previously failed (verify-feedback.md exists), both `gate-7-feedback.md` and `verify-feedback.md` are passed in the prompt so Claude addresses both.
-
----
-
-### Phase 6 — Automated Verification
-
-| | |
-|---|---|
-| **Agent** | Shell script (`~/.claude/scripts/harness-verify.sh`) |
-| **Mode** | Automated (no AI) |
-| **Spawn command** | `~/.claude/scripts/harness-verify.sh <checklistPath> <evalReportPath>` |
-| **Input** | `.harness/<runId>/checklist.json` (the checks to run) |
-| **Output** | `docs/process/evals/<runId>-eval.md` (evaluation report) |
-| **Sidecar files** | `verify-result.json` ({exitCode, hasSummary, timestamp})<br>`verify-feedback.md` (only on FAIL, copy of eval report)<br>`verify-error.md` (only on ERROR) |
-| **Timeout** | 300 seconds |
-
-**Preconditions** (run before spawn, in this order):
-1. Staged changes check — fail if non-eval-report files are staged
-2. Unstaged/untracked check — fail if non-eval-report files are dirty
-3. Eval report cleanup — delete existing eval report based on git status:
-   - untracked → `rm`
-   - staged new → `git restore --staged` + `rm`
-   - git-tracked → `git rm -f` + `git commit`
-4. Final clean-tree verification
-
-**Eval report format**: The script writes a header first, runs all checks, then appends `## Summary`. The CLI uses presence of `## Summary` to distinguish between FAIL (script completed, some checks failed) vs ERROR (script crashed mid-run).
-
-**Outcomes**:
-- **PASS** (exitCode 0 + `## Summary` present): `normalizeArtifactCommit` for eval report → `evalCommit` + `verifiedAtHead` set → advance to Phase 7
-- **FAIL** (exitCode ≠ 0 + `## Summary` present): Copy eval report to `verify-feedback.md` → Phase 5 reopens with feedback → `verifyRetries` increments
-- **ERROR** (exitCode ≠ 0 + no `## Summary`, or `verify-result.json` missing, or parse failure): `verify-error.md` saved → Retry/Quit menu
-
-**Verify retry limit**: 3. On the 3rd consecutive FAIL, escalation menu appears (`[C]ontinue / [S]kip / [Q]uit`). `[S]kip` creates a synthetic eval report labeled "VERIFY SKIPPED" and advances to Phase 7.
-
----
-
-### Phase 7 — Eval Gate
-
-| | |
-|---|---|
-| **Agent** | Codex companion |
-| **Mode** | Automated |
-| **Input** | Spec doc + plan doc + eval report + `git diff <baseCommit>...HEAD` + metadata block |
-| **Output** | Same structured verdict |
-| **Sidecar files** | `gate-7-raw.txt`, `gate-7-result.json`, `gate-7-error.md`, `gate-7-feedback.md` |
-| **Timeout** | 120 seconds |
-
-**Prompt metadata block** (always present, regardless of external commits):
-
-```
-Harness implementation range: <baseCommit>..<implCommit> (Phase 1–5 commits).
-Harness eval report commit: <evalCommit> (the commit that last modified the eval report).
-Verified at HEAD: <verifiedAtHead> (most recent Phase 6 run).
-Focus review on changes within the harness ranges above.
-```
-
-**Diff assembly**:
-- Normal mode: `git diff <baseCommit>...HEAD` (full harness range)
-- External commits detected: split into `git diff <baseCommit>...<implCommit>` + `git show <evalCommit>` + `## External Commits (not reviewed)` section
-
-**Size limits**: per-file diff > 20KB is truncated with marker; per-input file > 200KB → gate execution error; total assembled prompt > 500KB → gate execution error.
-
-**Outcomes**:
-- **APPROVE**: `run.status = "completed"`, `currentPhase = 8` (terminal sentinel)
-- **REJECT** (retries < limit): full flow는 Phase 5 reopen. light flow는 `Scope: impl` 이면 Phase 5 reopen, `Scope: design|mixed|missing` 이면 Phase 1 reopen. `gate-7-feedback.md` 는 저장되고, light flow의 Phase 1 reopen 경로에서는 `carryoverFeedback` 으로 다시 전달된다. `gateRetries[7]` increments. `verifyRetries` resets.
-- **REJECT** (retries ≥ limit): Escalation menu. retry limit은 full 3 / light 5.
-- **Error**: Retry/Skip/Quit menu
-
----
-
-## Model Selection
-
-Each interactive phase (1, 3, 5) and each gate phase (2, 4, 7) has a configurable model preset. Phase 6 (automated shell verification) has no AI model. At the start of every `harness run` or `harness resume`, the CLI presents a model-selection UI (via `promptModelConfig()` in `src/ui.ts`) that lets the user assign a preset to each remaining phase before any phase work begins.
-
-Available presets are defined in `MODEL_PRESETS` in `src/config.ts`. They cover the full Anthropic 2026-04 effort axes plus a Codex axis:
+Built-in presets come from `src/config.ts`:
 
 | id | runner | model | effort |
 |---|---|---|---|
+| `opus-1m-max` | claude | `claude-opus-4-7[1m]` | `max` |
+| `opus-1m-xhigh` | claude | `claude-opus-4-7[1m]` | `xHigh` |
+| `opus-1m-high` | claude | `claude-opus-4-7[1m]` | `high` |
+| `sonnet-1m-max` | claude | `claude-sonnet-4-6[1m]` | `max` |
+| `sonnet-1m-high` | claude | `claude-sonnet-4-6[1m]` | `high` |
 | `opus-max` | claude | `claude-opus-4-7` | `max` |
 | `opus-xhigh` | claude | `claude-opus-4-7` | `xHigh` |
 | `opus-high` | claude | `claude-opus-4-7` | `high` |
@@ -256,254 +45,213 @@ Available presets are defined in `MODEL_PRESETS` in `src/config.ts`. They cover 
 | `codex-high` | codex | `gpt-5.4` | `high` |
 | `codex-medium` | codex | `gpt-5.4` | `medium` |
 
-Opus 4.7 exposes three distinct tiers (`high < xHigh < max`); Sonnet 4.6 exposes two (`high < max` — there is no xHigh on that axis). Default per-phase assignments come from `PHASE_DEFAULTS` (phase 1 → `opus-high`, phases 3 and 5 → `sonnet-high`, gates 2/4/7 → `codex-high`). The model shown in each phase table above is the default preset; users can override per-phase at run start — pick `opus-xhigh`, `opus-max`, or `sonnet-max` when the task genuinely warrants the extra reasoning. Selections are persisted in `state.phasePresets` and survive resume; `migrateState()` in `src/state.ts` backfills defaults for older state files that predate the preset system. The legacy `opus-max` → `opus-xhigh` rewrite (PR #22) was dropped on 2026-04-19 when `opus-max` became a real max-effort preset — older state.json from before PR #22 that still holds `opus-max` now resumes at the real max tier.
+Default assignments:
+- full flow: P1 `opus-1m-high`, P2 `codex-high`, P3 `sonnet-1m-high`, P4 `codex-high`, P5 `sonnet-1m-high`, P7 `codex-high`
+- light flow: P1 `opus-1m-high`, P2 `codex-high`, P5 `sonnet-1m-high`, P7 `codex-high`
+
+Users can change every non-verify phase preset during `harness start` and `harness resume`.
+Selections persist in `state.phasePresets`.
+Existing saved runs are not auto-migrated to the new 1M defaults; only newly created runs pick them up automatically.
 
 ---
 
-## Phase 1/3/5 Wrapper Skill Layer (2026-04-18 rev)
+## Full flow vs light flow
 
-Interactive phase prompts are composed from a three-layer structure so the CLI-driven run and the `/harness` slash-command plugin converge on the same contract:
+### Full flow
 
-1. **`phase-N.md` template** (`src/context/prompts/phase-{1,3,5}.md`) — thin binding. Each template is only a `{{wrapper_skill}}` placeholder plus a "Harness Runtime Context" reference block that names `runId`, `phaseAttemptId`, artifact paths, and (optionally) previous feedback. The template itself carries no harness-specific process rules.
-2. **Wrapper skill** (`src/context/skills/harness-phase-{1,3,5}-*.md`) — the harness-specific process overlay. Each wrapper has YAML frontmatter (`name`, `description`), a `## Context` gate-rubric summary, `## Inputs` with `@`-refs and optional feedback guarded by `{{#if feedback_path}}`, a numbered `## Process`, and `## Invariants` that carries the sentinel rule, gate-level reminders (e.g. Open Questions for Phase 1), and the `HARNESS FLOW CONSTRAINT` block (advisor() forbidden, scope locked to harness artifacts). `assembleInteractivePrompt` in `src/context/assembler.ts` strips the frontmatter, renders all `{{…}}` vars against the wrapper body, and injects the result into the thin template.
-3. **Auxiliary playbooks** (`src/context/playbooks/`) — agent-skills playbooks vendored at a pinned upstream SHA (see `VENDOR.md`). Phase 5 wrapper `@`-refs `@{{playbookDir}}/context-engineering.md` and `@{{playbookDir}}/git-workflow-and-versioning.md`; `playbookDir` is resolved from the assembler module location so the path lands under `dist/src/context/playbooks/` at runtime and `src/context/playbooks/` in dev.
+Use the full flow when independent pre-implementation review matters.
+Phase outputs are:
+- P1 → `docs/specs/<runId>-design.md` + `.harness/<runId>/decisions.md`
+- P3 → `docs/plans/<runId>.md` + `.harness/<runId>/checklist.json`
+- P5 → git commits
+- P6 → `docs/process/evals/<runId>-eval.md`
 
-Gate prompts (phases 2/4/7) are a separate layer: `REVIEWER_CONTRACT_BY_GATE` combines the shared `REVIEWER_CONTRACT_BASE` preamble with a per-gate 5-axis rubric (`FIVE_AXIS_SPEC_GATE` / `FIVE_AXIS_PLAN_GATE` / `FIVE_AXIS_EVAL_GATE`), and each gate prompt also carries a `<harness_lifecycle>` stanza (see `buildLifecycleContext`) so the reviewer knows which later-phase artifacts do not yet exist.
+### Light flow (`harness start --light`)
 
----
+Light flow skips phases 3 and 4 by initializing them as `skipped`.
+Phase 2 is active (`pending`) and runs a pre-impl Codex review of the combined design doc.
+The control panel renders skipped phases as `(skipped)` and the phase loop jumps past them.
 
-## Runner Architecture
-
-Phases that involve an AI agent are dispatched to one of two runners depending on the preset's `runner` field (`claude` or `codex`).
-
-**`src/runners/claude.ts`** handles Claude interactive and gate modes. Interactive: Claude is launched inside the tmux workspace pane via `sendKeysToPane` using a wrapper that writes the Claude process PID to a sentinel file (`claude-<phase>-<attemptId>.pid`); the harness polls `pollForPidFile` to capture the PID, then watches for the phase completion sentinel (`phase-N.done`) using chokidar + PID polling. Gate: a `claude --print` subprocess is spawned with stdio piped; stdout is captured for verdict parsing. **`src/runners/codex.ts`** handles Codex interactive and gate modes. Interactive: a `codex exec --sandbox <level> --full-auto -` subprocess reads the assembled prompt from stdin and streams `[codex]`-prefixed progress lines to the control panel; there is no sentinel file — artifacts are validated directly after subprocess exit. Gate: `codex exec -` with stdin prompt, stdout captured.
-
-Shared verdict helpers (`parseVerdict`, `buildGateResult`) live in `src/phases/verdict.ts` to avoid circular imports between the runner files and `src/phases/gate.ts`. Phase dispatch: `runGatePhase()` in `src/phases/gate.ts` and `runInteractivePhase()` in `src/phases/interactive.ts` both call `getPresetById(state.phasePresets[phase])` to resolve the preset and then branch on `preset.runner`.
-
----
-
-## Session clear points
-
-A "session clear" means a previous Claude session's in-memory context is completely discarded. The CLI creates explicit clear points by spawning fresh OS processes.
-
-### Automatic clears (every phase boundary)
-
-Every phase is a new process. So between **every pair of consecutive phases**, the previous session's memory is gone. Context flows only through files.
-
-### Explicit "hard" clears (mentioned in design spec)
-
-While all phase boundaries are clears, two are specifically called out as "explicit session clear points":
-
-1. **Phase 3 → Phase 5**: Planning context discarded; impl starts fresh reading only spec + plan + decisions
-2. **Phase 5 → Phase 7**: Impl context discarded; eval gate sees only artifacts + diff
-
-These two boundaries are the hardest breaks. Phase 5 specifically is called out as "NEW SESSION" in the design because the implementer starts fresh with no dialog history from Phase 1's brainstorming or Phase 3's planning.
-
-### Within a phase (no clear)
-
-Once Claude is spawned for Phase 1/3/5, its session runs to completion. The CLI does not restart Claude mid-phase. Feedback for reopen scenarios (after a gate REJECT or verify FAIL) is delivered by spawning a NEW Claude process with feedback file paths in the initial prompt — Claude reads the files itself.
-
-### On reopen (Gate REJECT / Verify FAIL)
-
-When Phase N reopens due to a later phase rejecting, a **new Claude process** is spawned with:
-- All original context files (spec, plan, decisions as appropriate)
-- Feedback file paths injected (`gate-N-feedback.md`, `verify-feedback.md`)
-- A fresh `phaseAttemptId` (UUID v4)
-
-The previous sentinel file is checked against the new `phaseAttemptId` — if stale, it's deleted so the new session can write a fresh one.
+Light-flow specifics:
+- P1 writes a combined design+plan doc to `docs/specs/<runId>-design.md`
+- the combined doc must include `## Complexity`, `## Open Questions`, and `## Implementation Plan`
+- `checklist.json` still exists as a separate file under `.harness/<runId>/checklist.json`
+- `harness resume --light` is rejected because flow is frozen at run creation
+- P2 (pre-impl gate): Codex reviews the combined design doc using a 4-axis rubric. REJECT → immediate P1 reopen with feedback delivered via `pendingAction.feedbackPaths` only; `state.carryoverFeedback` is not set at Gate 2. Gate retry limit 3 (same as full-flow P2). Legacy light runs created before P2 activation keep `phases['2']='skipped'` — activation is forward-only via `createInitialState`, not retroactive migration.
+- gate retry limit: light P2 = 3, light P7 = 5, full flow = 3
+- on P7 `REJECT`:
+  - `Scope: impl` → reopen P5
+  - `Scope: design`, `Scope: mixed`, or missing scope → reopen P1 and preserve carryover feedback for P5
 
 ---
 
-## State management
+## Phase-by-phase summary
 
-### Run directory layout
+| Phase | Default preset | Runner type | Main outputs | On reject/fail |
+|---|---|---|---|---|
+| P1 Spec / Design+Plan | `opus-1m-high` | interactive | spec/design doc + decisions + checklist (light only) | Gate 2 reject reopens P1; light-flow P7 design/mixed reject also reopens P1 |
+| P2 Spec Gate | `codex-high` | gate | verdict + optional feedback sidecars | reopen P1 |
+| P3 Plan | `sonnet-1m-high` | interactive | plan + checklist | Gate 4 reject reopens P3 |
+| P4 Plan Gate | `codex-high` | gate | verdict + optional feedback sidecars | reopen P3 |
+| P5 Implement | `sonnet-1m-high` | interactive | git commits | P6 fail reopens P5; P7 full-flow reject reopens P5; light-flow impl reject reopens P5 |
+| P6 Verify | fixed script | automated shell | eval report + verify sidecars | fail reopens P5; retry limit 3 |
+| P7 Eval Gate | `codex-high` | gate | verdict + optional feedback sidecars | full: reopen P5; light: reopen P5 or P1 based on scope |
 
-```
-.harness/
-├── repo.lock               # repo-global lock (JSON: {cliPid, childPid, childPhase, runId, startedAt, childStartedAt})
-├── current-run             # text file: runId of the currently active run
-└── <runId>/               # e.g. 2026-04-12-graphql-api/
-    ├── state.json          # authoritative run state (see below)
-    ├── run.lock            # run-level marker (empty file)
-    ├── task.md             # original task description
-    ├── decisions.md        # Phase 1 output (gitignored)
-    ├── checklist.json      # Phase 3 output (gitignored)
-    ├── phase-1.done        # sentinel (contains phaseAttemptId)
-    ├── phase-3.done
-    ├── phase-5.done
-    ├── gate-2-raw.txt      # transient (deleted after state advance)
-    ├── gate-2-result.json
-    ├── gate-2-error.md     # only on error
-    ├── gate-2-feedback.md  # only on REJECT (persisted for reopen)
-    ├── gate-4-*
-    ├── gate-7-*
-    ├── verify-result.json
-    ├── verify-feedback.md  # only on FAIL
-    └── verify-error.md     # only on ERROR
+Current timeout constants (`src/config.ts`):
+- interactive phases: 30 minutes
+- gate phases: 6 minutes
+- verify: 5 minutes
+
+---
+
+## Runner behavior
+
+### Claude interactive phases
+
+When the selected preset runner is `claude`, harness launches Claude inside the tmux workspace pane and pins the Claude session to the current `phaseAttemptId`:
+
+```bash
+claude --session-id <attemptId> --model <model> --effort <effort> @<prompt-file>
 ```
 
-### `state.json` contents
+Current behavior:
+- the PID is captured via `claude-<phase>-<attemptId>.pid`
+- Claude token usage is read back from the pinned session JSONL and attached to `phase_end.claudeTokens` when available
+- before launching a new Claude interactive phase, harness tries to stop the previous saved workspace PID to avoid typing into an old Claude prompt
 
-```json
-{
-  "runId": "2026-04-12-graphql-api",
-  "currentPhase": 3,
-  "status": "in_progress",
-  "autoMode": false,
-  "task": "GraphQL API 추가",
-  "baseCommit": "<sha>",
-  "implRetryBase": "<sha>",
-  "codexPath": "/Users/.../codex-companion.mjs",
-  "externalCommitsDetected": false,
-  "artifacts": { "spec": "...", "plan": "...", "decisionLog": "...", "checklist": "...", "evalReport": "..." },
-  "phases": { "1": "completed", "2": "completed", "3": "in_progress", "4": "pending", ... },
-  "gateRetries": { "2": 0, "4": 0, "7": 0 },
-  "verifyRetries": 0,
-  "pauseReason": null,
-  "specCommit": "<sha>",   // set after Phase 1 normalize
-  "planCommit": null,
-  "implCommit": null,      // set after Phase 5 completion
-  "evalCommit": null,      // set after Phase 6 normalize
-  "verifiedAtHead": null,
-  "pausedAtHead": null,
-  "pendingAction": null,   // crash-recovery hint
-  "phaseOpenedAt": { "1": 1744444800000, "3": null, "5": null },
-  "phaseAttemptId": { "1": "uuid-v4", "3": null, "5": null }
-}
+### Codex interactive phases
+
+When the selected preset runner is `codex`, harness runs:
+
+```bash
+codex exec --model <model> -c model_reasoning_effort="<effort>" --sandbox <level> --full-auto -
 ```
 
-### Atomic writes
+Sandbox level:
+- phases 1 and 3 → `workspace-write`
+- phase 5 → `danger-full-access`
 
-All `state.json` updates use: `write to state.json.tmp → fsync → rename`. POSIX rename is atomic, so `state.json` is always either the old version or the new version — never corrupted mid-write.
+Codex interactive phases do not use sentinel files; harness validates artifacts after the subprocess exits.
 
-### Commit anchors
+### Gate phases
 
-The CLI records git SHAs at each phase boundary to enable ancestry validation on resume:
+Gate phases are preset-driven too.
+By default they run through the real `codex` CLI, not the older companion-path flow:
 
-| Anchor | Set at | Used for |
-|--------|--------|----------|
-| `baseCommit` | `harness run` (after `.gitignore` commit) | Phase 7 diff start |
-| `specCommit` | Phase 1 normalize | Resume ancestry + artifact dirty check |
-| `planCommit` | Phase 3 normalize | Same |
-| `implCommit` | Phase 5 completion | Phase 7 diff end (harness range) |
-| `evalCommit` | Phase 6 normalize | Phase 7 eval review |
-| `verifiedAtHead` | Phase 6 PASS (and skip) | Phase 7 metadata |
-| `pausedAtHead` | Every intentional exit | External commit detection on resume |
+```bash
+codex exec --model <model> -c model_reasoning_effort="<effort>" -
+```
 
----
+If a gate phase is explicitly mapped to a Claude preset, harness instead runs a `claude --print` gate subprocess.
 
-## Concurrency control
+### Codex isolation
 
-### Two-level locking
+By default, Codex subprocesses run inside `<runDir>/codex-home/` with only `auth.json` symlinked in.
+This avoids inheriting unrelated user-level `CODEX_HOME` conventions.
+`--codex-no-isolate` disables that safeguard.
 
-1. **repo-global lock** `.harness/repo.lock` — atomically created via `fs.openSync(path, 'wx')` (O_EXCL). Prevents two `harness` processes from operating on the same repo simultaneously. JSON format with PID + start time metadata for PID-reuse detection.
-
-2. **run-level lock** `.harness/<runId>/run.lock` — presence-only marker file created/deleted alongside `repo.lock`. Helps identify which run owned an abandoned `repo.lock`.
-
-### Liveness check (PGID-based)
-
-When another lock is found, the CLI checks:
-- Is `cliPid` alive? → check via `kill(cliPid, 0)` + start time match
-- If CLI is dead, is the child process group still alive? → `kill(-childPid, 0)` (negative PID = PGID)
-- If PGID alive → ALWAYS active (safer false-positive than missing orphan children)
-- If PGID dead (ESRCH) → stale, delete both locks and proceed
-
-### Process groups
-
-Every subprocess spawn uses `detached: true`. This makes the child the leader of its own process group. The CLI kills via `process.kill(-childPid, 'SIGTERM')` → 5s wait → `SIGKILL` to ensure any subprocesses the child spawned are also terminated.
-
-On normal completion, the CLI waits for PGID `ESRCH` before clearing `childPid` in the lock — prevents the next phase from spawning before the previous one's orphans are gone.
+If your Claude Code environment does not support 1M context, keep using the legacy non-1M Claude presets from the model picker or change the defaults in `src/config.ts` in your own fork.
 
 ---
 
-## Signal handling
+## Verify behavior (Phase 6)
 
-`harness run` and `harness resume` (and `skip`/`jump` once they enter the phase loop) register `SIGINT` + `SIGTERM` handlers. On signal:
+Phase 6 always runs the bundled `harness-verify.sh` script.
+The script path is resolved from the installed package first, with legacy fallback to `~/.claude/scripts/harness-verify.sh`.
 
-1. Kill child process group: SIGTERM → 5s wait → SIGKILL
-2. Save `pausedAtHead = git rev-parse HEAD`
-3. Update phase status (interactive → `failed`, automated → `error` with `pendingAction`)
-4. Atomic state write
-5. Release both lock files
-6. Exit code 130 (SIGINT convention)
+Inputs and outputs:
+- input: `.harness/<runId>/checklist.json`
+- output: `docs/process/evals/<runId>-eval.md`
+- sidecars: `verify-result.json`, `verify-feedback.md`, `verify-error.md`
 
-So hitting Ctrl-C is always safe: state is preserved, and `harness resume` picks up from the saved checkpoint.
-
----
-
-## InputManager
-
-`src/input.ts` exports `InputManager`, which owns stdin in raw mode for the entire lifetime of the `__inner` process. It is started (`inputManager.start('configuring')`) before model selection and stopped (`inputManager.stop()`) only after the phase loop exits. Without raw-mode ownership, arrow-key presses while no readline prompt is active emit raw ANSI sequences (`^[[A`) that clutter the control panel output.
-
-The manager tracks four internal states: `idle` (phase loop running, Claude owns the terminal), `configuring` (model-selection UI active), `prompt-single` (waiting for a single keypress via `waitForKey(validKeys)`), and `prompt-line` (text input via `waitForLine()`). Ctrl+C routing depends on the `isPreLoop` flag: before `enterPhaseLoop()` is called (during model selection), Ctrl+C invokes `onConfigCancel`, which persists state as paused and exits cleanly. After `enterPhaseLoop()`, Ctrl+C is forwarded as `SIGINT` to trigger the normal shutdown handler. The initial task prompt (when no `task.md` exists yet) uses a standard readline interface rather than InputManager — per ADR-6/7, stdin raw mode is not active at that point.
+Before verify runs, harness enforces a clean tree outside the eval report path and cleans/replaces any existing eval report artifact as needed.
+A verify pass auto-commits the eval report.
+A verify fail copies the eval report to `verify-feedback.md` and reopens P5.
 
 ---
 
-## Error recovery
+## State and artifacts
 
-Crash-safe recovery is achieved through:
+The authoritative run state lives in `.harness/<runId>/state.json`.
+Important fields include:
+- `flow`: `full` or `light`
+- `currentPhase`, `status`, `phases`
+- `phasePresets`
+- `gateRetries`, `verifyRetries`
+- `pendingAction`
+- `carryoverFeedback` (light-flow P7 design/mixed rejection handoff)
+- `specCommit`, `planCommit`, `implCommit`, `evalCommit`, `verifiedAtHead`
+- `phaseAttemptId`, `phaseOpenedAt`
+- tmux/session bookkeeping
+- `loggingEnabled`, `codexNoIsolate`, `strictTree`
 
-1. **Atomic state writes** — `state.json` is never corrupted mid-write
-2. **Sentinel-based completion** — interactive phase completion requires a fresh sentinel matching `phaseAttemptId`; a partial Claude session that crashed won't match
-3. **pendingAction replay** — before making a state transition, the runner writes the intended action atomically. On resume, the action is replayed idempotently.
-4. **Committed artifacts** — spec, plan, eval report are auto-committed. Resume validates each against its `*Commit` anchor to detect tampering.
-5. **Lock `.tmp` recovery** — if a crash happens during a lock update, the `.tmp` file is parsed, liveness-checked, and safely cleaned up on next startup
+Artifact locations:
+- spec/design doc: `docs/specs/<runId>-design.md`
+- plan doc: `docs/plans/<runId>.md` (full flow only)
+- decisions: `.harness/<runId>/decisions.md`
+- checklist: `.harness/<runId>/checklist.json`
+- eval report: `docs/process/evals/<runId>-eval.md`
 
-The authoritative resume algorithm is in `src/resume.ts`. Key branches:
-
-- `pendingAction` non-null → replay by type (`reopen_phase`, `rerun_gate`, `rerun_verify`, `show_escalation`, `show_verify_error`, `skip_phase`)
-- Phase 1/3/5 in `in_progress`/`failed` with fresh sentinel → complete inline (no respawn)
-- Phase 1/3 in `error` with valid artifacts → retry normalize_artifact_commit
-- Phase 6 in `in_progress` with `verify-result.json` → apply stored PASS/FAIL/ERROR outcome
-- Phase 6 in `error` with valid eval report → retry normalize
-
----
-
-## Resume + Config-Cancel
-
-`harness resume` passes a `--resume` flag through to `__inner`; `inner.ts` receives it as `options.resume`. When the flag is set and a `task.md` already exists, `inner.ts` skips the task-prompt step and immediately processes any `pendingAction` stored in `state.json`. This allows recovery from any paused state — including mid-phase crashes, gate escalations, and the config-cancel flow described below.
-
-Config-cancel is a special pause mode triggered when the user presses Ctrl+C during the model-selection step. The InputManager's `onConfigCancel` handler sets `state.pauseReason = 'config-cancel'` and `state.pendingAction = { type: 'reopen_config' }`, writes state atomically, and exits. On resume, `inner.ts` sees the existing task, loads the state, calls `getEffectiveReopenTarget()` (defined in `src/config.ts`) to compute which phase to show in the model selector, and re-enters the selection UI — effectively restarting from just before any phase was launched. `getEffectiveReopenTarget` resolves the target phase from the pending action: `reopen_phase` → `targetPhase`; `show_escalation` → `sourcePhase`; `reopen_config` → uses `currentPhase` directly.
+State writes are atomic: write `state.json.tmp` → fsync → rename.
 
 ---
 
-## Bug Fixes
+## Resume and recovery
 
-Two durable state fields address races that could corrupt artifacts or leave orphan processes:
+`harness resume` handles three cases:
+1. tmux session alive + inner alive → attach only
+2. tmux session alive + inner dead → restart inner in the existing control pane when possible
+3. no tmux session → recreate tmux and continue from saved state
 
-`state.phaseReopenFlags` (a `Record<'1'|'3'|'5', boolean>`) is set to `true` before a phase is queued to reopen after a gate REJECT. `preparePhase()` in `src/phases/interactive.ts` reads this flag via `isReopen` and, when true, skips deleting the phase's artifacts — preserving the existing spec or plan so Claude can edit rather than start from scratch. The flag is cleared to `false` at the end of `preparePhase()`.
+Recovery is built from:
+- atomic state writes
+- sentinel-based completion for Claude interactive phases
+- `pendingAction` replay for skipped/reopened/error states
+- artifact commit anchors (`specCommit`, `planCommit`, `implCommit`, `evalCommit`)
+- gate sidecars and verify sidecars
 
-`state.lastWorkspacePid` + `state.lastWorkspacePidStartTime` track the PID and start-time of the most recently spawned Claude workspace process. Before launching a new interactive phase, `runClaudeInteractive()` checks whether the previous PID is still alive (verified by start-time to guard against PID reuse) and sends it a Ctrl+C before proceeding. `handleShutdown` in `src/signal.ts` performs a dual-PID kill: it terminates both the current child process group (via the repo lock's `childPid`) and the saved `lastWorkspacePid`, preventing orphan Claude sessions from persisting after harness exits.
-
----
-
-## Preflight
-
-Every command runs dependency checks before doing any work:
-
-| Item | Check |
-|------|-------|
-| git | `git rev-parse --show-toplevel` |
-| head | `git rev-parse HEAD` (rejects empty repos) |
-| node | `node --version` |
-| claude | `which claude` |
-| claudeAtFile | `claude --model claude-sonnet-4-6 @<tmpfile> --print ''` (weak signal) |
-| verifyScript | `~/.claude/scripts/harness-verify.sh` exists + executable |
-| jq | `jq --version` |
-| codexPath | glob resolution in `~/.claude/plugins/cache/openai-codex/codex/*/scripts/codex-companion.mjs` |
-| platform | `process.platform` must be `darwin` or `linux` (rejects win32) |
-| tty | `process.stdin.isTTY && process.stdout.isTTY` (skipped for `status`/`list`) |
-
-Each command runs only the subset it needs:
-
-- `harness run` → all 10 items
-- `harness resume` / `jump` / `skip` → items for the phase that will execute next
-- `harness status` / `list` → platform only (TTY-free)
+`harness jump <phase>` only moves backward unless the run is already complete.
+In light flow, jumping into skipped phases is rejected.
 
 ---
 
-## Further reading
+## Logging and footer
 
-- `docs/specs/2026-04-12-harness-cli-design.md` — full design spec with ADRs and every edge case rationale
-- `docs/plans/2026-04-12-harness-cli.md` — implementation plan (task decomposition)
-- `docs/process/evals/2026-04-12-harness-cli-eval.md` — auto-verification report
+Session logging is opt-in via `--enable-logging`.
+When enabled, harness writes under:
+
+```text
+~/.harness/sessions/<repoKey>/<runId>/
+  meta.json
+  events.jsonl
+  summary.json
+```
+
+Important logged events include `phase_start`, `phase_end`, `gate_verdict`, `gate_error`, `gate_retry`, `verify_result`, and `session_end`.
+The control-pane footer aggregates elapsed time plus Claude/gate token totals from those logs.
+
+---
+
+## Preflight and platform assumptions
+
+Core preflight checks cover Node, tmux, TTY, platform, verify-script availability, `jq`, and the required runner CLIs for the next phase.
+Supported platforms are macOS and Linux.
+When launched outside tmux, harness tries iTerm2 first, then Terminal.app, and finally prints a manual `tmux attach` command.
+
+---
+
+## Source-of-truth files
+
+When behavior questions come up, read these first:
+- `src/config.ts`
+- `src/commands/start.ts`
+- `src/commands/resume.ts`
+- `src/commands/inner.ts`
+- `src/phases/runner.ts`
+- `src/phases/interactive.ts`
+- `src/phases/gate.ts`
+- `src/phases/verify.ts`
+- `src/runners/claude.ts`
+- `src/runners/codex.ts`
+- `src/runners/codex-isolation.ts`
+- `src/state.ts`

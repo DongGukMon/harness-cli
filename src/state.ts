@@ -1,7 +1,13 @@
 import fs from 'fs';
 import path from 'path';
 import type { HarnessState, PhaseStatus } from './types.js';
-import { PHASE_DEFAULTS, REQUIRED_PHASE_KEYS, MODEL_PRESETS, getPresetById } from './config.js';
+import {
+  PHASE_DEFAULTS,
+  REQUIRED_PHASE_KEYS,
+  MODEL_PRESETS,
+  getLegacyPhaseDefaults,
+  getPresetById,
+} from './config.js';
 
 const STATE_FILE = 'state.json';
 const STATE_TMP_FILE = 'state.json.tmp';
@@ -60,9 +66,14 @@ export function readState(runDir: string): HarnessState | null {
  * Migrate a raw state object (potentially from an older version) to the current HarnessState shape.
  */
 export function migrateState(raw: any): HarnessState {
+  if (raw.flow !== 'full' && raw.flow !== 'light') {
+    raw.flow = 'full';
+  }
+
   if (!raw.phasePresets || typeof raw.phasePresets !== 'object') {
     raw.phasePresets = {};
   }
+  const legacyDefaults = getLegacyPhaseDefaults(raw.flow);
   // Note: the legacy `opus-max` → `opus-xhigh` migration (PR #22) was dropped
   // when the catalog re-introduced a real `opus-max` preset pinned to Opus 4.7
   // effort=`max`. Any state.json from before PR #22 that stored `opus-max`
@@ -72,7 +83,7 @@ export function migrateState(raw: any): HarnessState {
   for (const phase of REQUIRED_PHASE_KEYS) {
     const presetId = raw.phasePresets[phase];
     if (!presetId || !MODEL_PRESETS.find(p => p.id === presetId)) {
-      raw.phasePresets[phase] = PHASE_DEFAULTS[Number(phase)] ?? 'sonnet-high';
+      raw.phasePresets[phase] = legacyDefaults[Number(phase)] ?? 'sonnet-high';
     }
   }
   if (raw.lastWorkspacePid === undefined) raw.lastWorkspacePid = null;
@@ -113,9 +124,6 @@ export function migrateState(raw: any): HarnessState {
     ) {
       raw.phaseCodexSessions[key] = null;
     }
-  }
-  if (raw.flow !== 'full' && raw.flow !== 'light') {
-    raw.flow = 'full';
   }
   if (!('carryoverFeedback' in raw) || raw.carryoverFeedback === undefined) {
     raw.carryoverFeedback = null;
