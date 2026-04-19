@@ -1,11 +1,17 @@
 # Wrapper-skill pre-sentinel self-audit + P1-only feedback triage — Design
 
-- Status: Draft (Phase 1 / harness-cli) — Round 2 Codex P1 피드백 반영 (3 P1 해소 + P2 in-situ 해소)
+- Status: Draft (Phase 1 / harness-cli) — Round 3 Codex P1 피드백 반영 (Round 3: 2 P1 해소 + 2 P2 Deferred; Round 2: 3 P1 해소 + 1 P2 in-situ 해소)
 - Date: 2026-04-19
 - Author: Claude Code (자율 모드)
 - Related followups: `~/.grove/github.com/DongGukMon/harness-cli/worktrees/gate-convergence/FOLLOWUPS.md` §P1.2, §P1.3
 - Target branch: `feat/wrapper-self-audit` (worktree: `wrapper-self-audit`)
 - Scope key: T3 (self-audit) + T4 (P1-only triage)
+
+### Round 3 fix 요약 (2026-04-19)
+
+- **P1.1 (baseCommit..HEAD vs Gate 7 three-dot)**: Phase 5 self-audit 범위를 `git diff baseCommit...HEAD` (three-dot)로 변경. Gate 7 non-external path `assembler.ts:287` 문자열과 동일. externalCommits 분기는 Phase 5 self-audit 시점에 발생 불가능하므로 제외 (Decision 2 rewrite).
+- **P1.2 (Phase 5 P2 inline-fix 범위)**: R5 + Phase 5 triage 프롬프트에서 P2 inline fix 범위를 `src/`, `tests/` 등 Phase 5 worktree 구현 파일로 한정. spec/plan 본문이나 eval checklist에 대한 P2 comment는 라인 수 무관하게 `## Deferred` 경로 사용.
+- **P2 items**: spec `## Deferred` §6 (Goal #4 wording unify), §7 (carryoverFeedback test case) 추가 — plan 단계에서 반영.
 
 ### Round 2 fix 요약 (2026-04-19)
 
@@ -35,7 +41,7 @@
 - Phase 1: 방금 작성한 spec 본문을 spec 자신의 success-criteria/invariants 섹션과 대조 (implementer == spec author라는 구조상 동일 artifact 내 self-consistency 체크).
 - Phase 3: 방금 작성한 plan 본문을 **spec**의 success-criteria/invariants 섹션과 대조 (plan이 spec을 모두 커버하는지). plan의 eval checklist도 spec의 grep-rule을 포함하는지 별도 체크.
 - Phase 5: **구현 커밋 diff + tracked files**를 `spec의 ## Success Criteria / ## Invariants 섹션에 명시된 grep/regex 규칙` + `plan의 eval checklist checks[].command (이미 shell-executable)`와 대조. Phase 5에서는 단일 artifact가 아니라 여러 커밋의 합집합이 검증 대상이므로 표현을 달리 한다.
-- **Phase 5 commit 범위 pin**: `baseCommit..HEAD`. Gate 7 metadata의 `baseCommit..implCommit (Phase 1–5 commits)` 범위와 동일하게 맞추어 self-audit이 gate와 같은 대상을 본다 (`src/context/assembler.ts:298-300` 참조). `implRetryBase..HEAD`는 선택하지 않음 — Gate 7과 범위 불일치시 audit은 통과하나 gate가 reject하는 결함 패턴 재발 우려.
+- **Phase 5 commit 범위 pin**: `git diff baseCommit...HEAD` (three-dot). Gate 7 non-external path (`buildPhase7DiffAndMetadata` line 287)의 `git diff ${baseCommit}...HEAD`와 **문자열까지 동일하게** 맞춘다. Phase 5 self-audit은 Phase 5 실행 중에만 돌고, 그 시점에는 정의상 external commit이 존재할 수 없다 (external commit은 Phase 5 done 이후 HEAD가 추가 전진한 경우를 Gate 7 진입 시 감지하는 개념). 따라서 externalCommitsDetected 분기는 self-audit 관점에서 발생 불가능 경로이며, 본 PR의 self-audit 대상은 Gate 7 non-external path와 1:1 대응한다. Phase 5가 `skip` 된 시나리오는 self-audit 자체가 실행되지 않으므로 범위 논의 밖이다. `baseCommit..HEAD` (two-dot) 나 `implRetryBase..HEAD`는 선택하지 않음.
 
 **결정 3 — P1-only triage 블록은 조건부 렌더에만 존재**
 - `{{#if feedback_path}}` (phase 1/3) 또는 `{{#if feedback_paths}}` (phase 5) 조건문 내부에 배치. 첫 pass(retry가 아닌)에서는 rendering되지 않아야 함 — P1-only triage는 gate feedback에 대한 정책이지 최초 작성 지침이 아니기 때문.
@@ -86,10 +92,10 @@
 
 - **R1** — Phase 1 wrapper skill Process에 self-audit step 추가. 위치: 기존 sentinel step 바로 앞. 문구는 "방금 작성한 spec을 자기 자신의 success-criteria/invariants 섹션과 대조 (grep 또는 정규식 스캔)" 취지.
 - **R2** — Phase 3 wrapper skill Process에 self-audit step 추가. 위치: 기존 sentinel step 바로 앞. 문구는 "방금 작성한 plan을 spec의 success-criteria/invariants와 대조. plan 내 eval checklist도 spec grep-rule 포함 여부 체크" 취지.
-- **R3** — Phase 5 wrapper skill Process에 self-audit step 추가. 대상: `baseCommit..HEAD`의 diff + 해당 범위에서 변경된 tracked files. 검증 규칙 원천: `spec의 ## Success Criteria/## Invariants 섹션 grep/regex` + `plan eval checklist checks[].command`. 문구에 "단일 artifact가 아닌 commits 합집합" + "baseCommit..HEAD 범위 (Gate 7과 동일)" 명시.
+- **R3** — Phase 5 wrapper skill Process에 self-audit step 추가. 대상: `git diff baseCommit...HEAD` (three-dot) + 해당 범위에서 변경된 tracked files. 검증 규칙 원천: `spec의 ## Success Criteria/## Invariants 섹션 grep/regex` + `plan eval checklist checks[].command`. 문구에 "단일 artifact가 아닌 commits 합집합" + "baseCommit...HEAD 범위 (Gate 7 non-external path `assembler.ts:287`와 문자열 동일)" 명시.
 - **R4** — Phase 1/3 wrapper skill의 `{{#if feedback_path}}` feedback 블록에 P1-only triage 3-tier 지침 추가 (P1 반드시, P2 ≤2-line inline or `## Deferred`, severity 누락은 blocker 가정).
 - **R4a** — **`## Deferred` 섹션 부재 시 fallback**: R4/R5의 모든 "Deferred append" 지시는 대상 artifact(spec 또는 plan doc)에 `## Deferred` 헤딩이 **없으면 파일 끝에 새로 생성한 뒤 append**한다. 이 fallback 문장은 세 phase 모두의 P1-only triage 프롬프트 본문에 명시적으로 포함되어야 하며 rendering 테스트로 가드한다(SC15).
-- **R5** — Phase 5 wrapper skill의 `{{#if feedback_paths}}` 블록에 P1-only triage 추가. 추가 조항: "**구현 전용 변경**으로 해결 가능한 P1만 Phase 5에서 반영한다. 다음은 모두 **plan doc 하단 `## Deferred` 섹션에 1-2 라인 append** + 별도 `plan: append deferred item` 커밋으로 escalation: (a) P2 defer, (b) spec/plan 재구조화가 필요한 P1 (`spec-bug: <detail>`), (c) plan 또는 eval checklist 자체 결함으로 인한 P1 (예: `checks[].command` 오류, 잘못된 regex) (`plan-bug: <detail>`). plan 본문 재구조화 금지 유지 — `## Deferred` append-only는 허용."
+- **R5** — Phase 5 wrapper skill의 `{{#if feedback_paths}}` 블록에 P1-only triage 추가. 추가 조항: "**구현 전용 변경**으로 해결 가능한 P1만 Phase 5에서 반영한다. 다음은 모두 **plan doc 하단 `## Deferred` 섹션에 1-2 라인 append** + 별도 `plan: append deferred item` 커밋으로 escalation: (a) P2 defer, (b) spec/plan 재구조화가 필요한 P1 (`spec-bug: <detail>`), (c) plan 또는 eval checklist 자체 결함으로 인한 P1 (예: `checks[].command` 오류, 잘못된 regex) (`plan-bug: <detail>`). plan 본문 재구조화 금지 유지 — `## Deferred` append-only는 허용. **P2 inline fix 범위는 src/ · tests/ 등 Phase 5 worktree 구현 파일로 제한** — spec/plan 본문이나 eval checklist에 대한 P2 comment는 라인 수 무관하게 `## Deferred` append 경로를 사용한다."
 - **R5a** — 다중 feedback 경로(`pendingAction.feedbackPaths` + `carryoverFeedback.paths`) 충돌 처리: "동일 쟁점이 서로 다른 severity로 중복될 때 highest severity wins, 동일 severity면 한 번만 반영." (`src/context/assembler.ts:368-391` 참조)
 - **R6** — 모든 self-audit 문구에 "sentinel에 쓰기 직전" + "각 gate round ≈ 40× local grep 비용" 취지 포함 (이유 제시가 문구 유지에 효과적). **테스트 가드**: SC11-SC13에서 세 phase 모두 `sentinel` 단어와 `40× local grep` 문구 존재를 regex 검증.
 
@@ -146,8 +152,9 @@
 
 ```
    (기존 step 2) 다음
-3. **Pre-sentinel self-audit** — sentinel 쓰기 직전, `baseCommit..HEAD` 범위
-   (Gate 7과 동일 범위)의 diff와 tracked files에 대해 검증한다. 검증 원천:
+3. **Pre-sentinel self-audit** — sentinel 쓰기 직전, `git diff baseCommit...HEAD`
+   (three-dot; Gate 7 non-external path `assembler.ts:287`와 문자열 동일)
+   범위의 diff와 tracked files에 대해 검증한다. 검증 원천:
    (a) spec의 `## Success Criteria` / `## Invariants` 섹션에 명시된 grep/
    regex 규칙, (b) plan의 eval checklist `checks[].command` (이미 shell-
    executable). 대상은 단일 artifact가 아니라 이번 phase의 **commits 합집합**.
@@ -167,10 +174,12 @@
   **Feedback triage (P1-only 정책 · Phase 5 전용)** — 각 comment에 대해:
   1. **P1 (blocker · impl-only fix)**: **구현 파일 변경만으로** 해결되면
      반드시 반영.
-  2. **P2**: ≤2 라인 inline fix는 지금 수정. 그 외엔 **plan doc 하단
-     `## Deferred` 섹션에 1-2 라인 append** + 별도 `plan: append deferred
-     item` 커밋. P2로 spec/plan 본문 재구조화 금지. `## Deferred` append는
-     "구조 변경"이 아니라 허용.
+  2. **P2 (impl/worktree origin)**: 대상이 **구현 파일(src/, tests/ 등 Phase
+     5 worktree 변경 범위)** 이고 ≤2 라인 inline fix로 해소되면 지금 수정.
+     그 외(spec/plan 본문·eval checklist 등 artifact 원천 comment는 라인
+     수 무관하게 포함)는 **plan doc 하단 `## Deferred` 섹션에 1-2 라인
+     append** + 별도 `plan: append deferred item` 커밋. P2로 spec/plan 본문
+     재구조화 금지. `## Deferred` append는 "구조 변경"이 아니라 허용.
   3. **severity 누락**: blocker 가정.
   4. **spec/plan 재구조화가 필요한 P1**: Phase 5 범위 밖. 구현 쪽은 그대로
      두고 plan doc의 `## Deferred` 섹션에 `spec-bug: <detail>` 1-2 라인을
@@ -250,7 +259,7 @@ state stub에 `pendingAction: { feedbackPaths: ['path/to/feedback.md'] }`를 주
 - **SC10** — grep test: `src/context/skills/harness-phase-5-implement.md`에 `spec/plan 재구조화` 문구 존재 (P5 전용 조항).
 - **SC11** — grep test: 세 phase wrapper(`harness-phase-{1,3,5}-*.md`) 모두에 `40× local grep` 문구 존재 (R6 rationale 가드).
 - **SC12** — grep test: 세 phase wrapper 모두에 `sentinel` 단어 존재 + self-audit 블록 직전 라인에 "sentinel" 어휘 포함 (R6 timing 가드).
-- **SC13** — grep test: `harness-phase-5-implement.md`에 `baseCommit..HEAD` 문자열 존재 (Phase 5 commit range pin 가드).
+- **SC13** — grep test: `harness-phase-5-implement.md`에 `baseCommit...HEAD` (three-dot) 문자열 존재 (Phase 5 commit range pin 가드 — Gate 7 non-external path `assembler.ts:287`과 문자열 일치).
 - **SC14** — grep test: `harness-phase-5-implement.md`에 `spec-bug:` + `## Deferred` 문자열 존재 (Phase 5 escalation 채널 가드 — plan doc Deferred 섹션 append 경로).
 - **SC15** — grep test: 세 phase wrapper(`harness-phase-{1,3,5}-*.md`) 모두에 `없으면` + `파일 끝` + `## Deferred` 문자열 조합 존재 (R4a `## Deferred` 부재 fallback 가드 — P1.1 Round 2 fix).
 - **SC16** — grep test: `harness-phase-5-implement.md`에 `plan-bug:` 문자열 존재 (R5 Round 2 fix — plan/checklist 결함 escalation 카테고리 가드).
@@ -270,6 +279,8 @@ state stub에 `pendingAction: { feedbackPaths: ['path/to/feedback.md'] }`를 주
 3. **`events.jsonl`에 `feedback_triage` 이벤트** — P1-only 정책 적용 빈도 관측 지표. prompt의 Out of scope에 명시됨.
 4. **Phase 5 self-audit "auto-fix" 허용 여부** — 현재 명시적 수정 + 커밋. 자동화 검토는 별도.
 5. **Gate 7 prompt에 `git log baseCommit..HEAD --format` 섹션 추가** — 커밋 메시지를 reviewer에게 직접 전달해 P5 escalation을 plan doc 변경 없이 할 수 있게 함. 현재는 plan doc `## Deferred` append로 우회. trigger: plan doc touch-every-phase가 spec coherence에 해가 된다는 관측.
+6. **Goal #4 wording vs NF4 정합성** (Round 3 P2) — Goal #4는 "snapshot/grep 테스트" 표현이고 NF4는 "Snapshot 대신 regex 기반 다중 assertion"이다. Plan 작성 시 NF4 문구로 통일 (Goal #4를 "regex-based rendering/grep tests"로 rewrite). spec 자체는 지금 수정하지 않고 plan 작성 단계에서 해소.
+7. **Phase 5 rendering test에 carryoverFeedback 경로 포함** (Round 3 P2) — 현 테스트 설계 stub은 `pendingAction.feedbackPaths`만 시뮬레이션하지만 실 prompt는 `pendingAction.feedbackPaths + carryoverFeedback.paths` 머지 경로와 missing file drop 로직(`assembler.ts:368-391`)을 거친다. 추가 테스트 케이스: `pendingAction + carryoverFeedback(일부 missing)` 두 경로 동시 세팅 시 triage 블록이 정상 렌더되는지 검증. Plan slice 3 또는 5에 추가.
 
 ## References
 
