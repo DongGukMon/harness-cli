@@ -124,6 +124,25 @@ export function migrateState(raw: any): HarnessState {
       raw.phaseCodexSessions[key] = null;
     }
   }
+  const INTERACTIVE_PHASES = ['1', '3', '5'] as const;
+  if (!raw.phaseClaudeSessions || typeof raw.phaseClaudeSessions !== 'object') {
+    raw.phaseClaudeSessions = { '1': null, '3': null, '5': null };
+  }
+  for (const key of INTERACTIVE_PHASES) {
+    const v = raw.phaseClaudeSessions[key];
+    if (v === undefined || v === null) {
+      raw.phaseClaudeSessions[key] = null;
+      continue;
+    }
+    if (
+      typeof v !== 'object' ||
+      v.runner !== 'claude' ||
+      typeof v.model !== 'string' ||
+      typeof v.effort !== 'string'
+    ) {
+      raw.phaseClaudeSessions[key] = null;
+    }
+  }
   if (!('carryoverFeedback' in raw) || raw.carryoverFeedback === undefined) {
     raw.carryoverFeedback = null;
   }
@@ -269,6 +288,7 @@ export function createInitialState(
     phasePresets,
     phaseReopenFlags: { '1': false, '3': false, '5': false },
     phaseCodexSessions: { '2': null, '4': null, '7': null },
+    phaseClaudeSessions: { '1': null, '3': null, '5': null },
     lastWorkspacePid: null,
     lastWorkspacePidStartTime: null,
     tmuxSession: '',
