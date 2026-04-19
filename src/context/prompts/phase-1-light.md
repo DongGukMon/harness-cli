@@ -8,6 +8,7 @@
 
 ```
 # <title> — Design Spec (Light)
+## Complexity                   (필수 헤더, 정확히 이 텍스트 — 본문 첫 줄: Small / Medium / Large 중 하나, case-insensitive, 선택적 `— <한 줄 근거>`)
 ## Context & Decisions
 ## Requirements / Scope
 ## Design
@@ -17,6 +18,8 @@
   - Task 2: ...
 ## Eval Checklist Summary    (checklist.json 요약; 실제 검증 JSON은 별도 파일)
 ```
+
+`## Complexity` 섹션은 정확히 `Small`, `Medium`, `Large` 중 하나를 첫 non-blank 라인에 기록하라 (case-insensitive, 선택적 `— <한 줄 근거>` 허용). 섹션이 누락되거나 값이 enum을 벗어나면 harness는 Phase 1을 실패로 간주한다. Small이면 Implementation Plan은 최대 3 tasks + per-function 의사코드 금지로 자기 제약하라.
 
 `## Open Questions` 섹션은 설계 과정에서 미확인 사항·후속 조사 항목을 기록하라. 없으면 "없음"으로 명시해야 한다. 본 섹션이 누락되면 harness는 Phase 1을 실패로 간주한다.
 

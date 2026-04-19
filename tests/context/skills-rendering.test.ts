@@ -74,6 +74,26 @@ describe('assembleInteractivePrompt wrapper skill inline', () => {
     expect(prompt).not.toContain('{{plan_path}}');
   });
 
+  it('phase 1 — wrapper instructs brainstormer to emit `## Complexity` section', () => {
+    const state = stubState(tmp);
+    const prompt = assembleInteractivePrompt(1, state, '/tmp/harness');
+    // Process step that tells the brainstormer to add the section.
+    expect(prompt).toContain("'## Complexity' section");
+    // Invariant line that enumerates the accepted enum values.
+    expect(prompt).toMatch(/Small\s*\/\s*Medium\s*\/\s*Large/);
+  });
+
+  it('phase 3 — wrapper references "Complexity Directive block" without leaking the literal tag (regression guard)', () => {
+    const state = stubState(tmp);
+    // Use a state whose spec file does not exist on disk, so the assembler
+    // emits an empty directive — the only `<complexity_directive>` tokens that
+    // should ever appear in the prompt come from the rendered stanza itself,
+    // never from the wrapper skill's prose.
+    const prompt = assembleInteractivePrompt(3, state, '/tmp/harness');
+    expect(prompt).toContain('Complexity Directive');
+    expect(prompt).not.toContain('<complexity_directive>');
+  });
+
   it('phase 5 — inlines harness-phase-5-implement wrapper with playbook refs', () => {
     const state = stubState(tmp);
     const prompt = assembleInteractivePrompt(5, state, '/tmp/harness');

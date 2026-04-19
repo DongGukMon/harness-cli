@@ -39,6 +39,9 @@ function getClockTicksPerSec(): number {
  */
 export function getProcessStartTime(pid: number): number | null {
   try {
+    if (pid === process.pid) {
+      return Math.floor(Date.now() / 1000 - process.uptime());
+    }
     if (process.platform === 'darwin') {
       // macOS: use `ps -o etime=` (elapsed time in [[dd-]hh:]mm:ss format — etimes unsupported)
       const output = execSync(`ps -o etime= -p ${pid}`, { encoding: 'utf8' });

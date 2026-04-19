@@ -1,172 +1,79 @@
-# HANDOFF — Group B: Wrapper-skill pre-sentinel self-audit + P1-only triage
+# HANDOFF — Group C (Complexity Signal → Phase 3 Plan Size Directive)
 
-**Paused at**: 2026-04-19 11:30 local
-**Worktree**: /Users/daniel/.grove/github.com/DongGukMon/harness-cli/worktrees/wrapper-self-audit
-**Branch**: feat/wrapper-self-audit
-**Base prompt**: (Group B 프롬프트는 사용자 메시지로만 전달됨 — 원본 txt 파일 없음. 주요 goal은 아래 "Decisions made" 참조)
-**Reason**: token exhaustion / account switch
+**Paused at**: 2026-04-19 11:28 local
+**Worktree**: `/Users/daniel/.grove/github.com/DongGukMon/harness-cli/worktrees/complexity-signal`
+**Branch**: `feat/complexity-signal`
+**Base prompt**: Group C prompt as delivered at session start (inline above the task spec — see `docs/specs/2026-04-19-complexity-signal-design.md` frontmatter for restated scope). No external `prompt-C-*.txt` file exists in this worktree.
+**Reason**: token exhaustion / account switch (user initiated pause)
 
-## Completed commits (이 worktree에서)
+## Completed commits (this worktree, after base `849d8fe` on `main`)
 
-`git log --oneline origin/main..HEAD`:
+```
+04edc0c wip(skills): Phase 1 Complexity override + Phase 3 Step 0 directive consumption
+53ed588 feat(phases): validate Complexity section in Phase 1 artifact check
+43a62fc feat(assembler): inject Phase 3 complexity directive
+30c3870 feat(complexity): parse spec signal + directive builder
+c6cda63 plan(complexity): 5-slice vertical plan with validator-scope correction
+2bc9ada spec(complexity): Phase 3 plan size directive via ## Complexity signal
+```
 
-- 8164eb8 wip(spec): wrapper self-audit + P1-only design after gate-1 R1 fixes
-
-(origin/main @ 849d8fe에서 fork)
+Spec + plan + 3 green feature slices + 1 RED WIP slice.
 
 ## In-progress state
 
-- **현재 task**: TaskList #1 — Run codex-gate-review on spec, **Round 2 재제출 대기**
-- **마지막 완료 step**: Round 1 REJECT(1P0+3P1+2P2) → spec 수정 → WIP commit
-- **중단 직전 하던 action**: `/tmp/gate-spec-round2.txt` 조립 완료 (324 lines).
-  Codex 실행 커맨드:
-  ```bash
-  PROMPT=$(cat /tmp/gate-spec-round2.txt) && \
-    node /Users/daniel/.claude/plugins/cache/openai-codex/codex/1.0.3/scripts/codex-companion.mjs \
-      task --effort high "$PROMPT"
-  ```
-  이 커맨드를 실행하면 Round 2 verdict를 받을 수 있음. **`/tmp/gate-spec-round2.txt`는 세션 재시작 후 사라질 수 있음** — 필요시 아래 "Resume instructions"의 방법대로 재조립.
-- **테스트 상태**: 미실행 (spec-only 변경, 코드 미수정). baseline: 617 passed / 1 skipped (`pnpm vitest run` @ 849d8fe).
-- **빌드 상태**: `pnpm install` + `pnpm build` 완료 (dist 생성됨).
-- **uncommitted 잔여물**: none. HANDOFF.md만 미커밋 (아래 단계에서 별도 커밋).
+- **현재 task**: Slice 4 (wrapper skills + prompt template updates) — Task #5 in the in-session task list.
+- **마지막 완료 step**: Slice 3 (validator mirrored, both flows). After the commit, `pnpm vitest run` was 650 passed / 1 skipped (baseline was 617). Slice 3 alone added ~33 new tests.
+- **중단 직전 하던 action**:
+  1. Edited `src/context/skills/harness-phase-1-spec.md` → added a `## Complexity` brainstorming override + an Invariants bullet. Looks correct; not individually tested.
+  2. Edited `src/context/skills/harness-phase-3-plan.md` → added a new `0.` Process step explaining how to respect the `<complexity_directive>` stanza, plus an Invariants bullet. **This leaks the literal string `<complexity_directive>` into the Phase 3 prompt for every complexity bucket**, breaking three tests.
+  3. Had NOT yet edited `src/context/prompts/phase-1-light.md` to add `## Complexity` to the required-sections block. Still owed.
+- **테스트 상태**: **RED**. 3 failing tests in `tests/context/assembler.test.ts > complexity signal — Phase 3 prompt injection`:
+  - `Medium spec → Phase 3 prompt has NO directive stanza`
+  - `missing spec file → no directive stanza + single stderr warn`
+  - `spec missing the Complexity section → directive empty + warn`
+  All three fail on `.not.toContain('<complexity_directive>')` because the wrapper skill body (Step 0) literally says `<complexity_directive>` in prose now.
+- **빌드 상태**: `pnpm tsc --noEmit` clean at last check (after Slice 3). Build not re-run since Slice 4 edits (templates/skills are copied not type-checked, so tsc outcome unchanged). `pnpm build` not re-run after skills edits.
+- **uncommitted 잔여물**: none. `git status` is clean after the WIP commit.
 
 ## Decisions made this session
 
-- **[Round 1 P0 해소]** Phase 5 spec-bug escalation 채널을 "커밋 메시지 trailer"에서 "plan doc `## Deferred` 섹션 append"로 변경. 근거: `buildPhase7DiffAndMetadata`(`src/context/assembler.ts:253-310`) 실측 확인 결과 Gate 7은 `git diff`만 사용하고 커밋 메시지는 읽지 않음. `<plan>` 블록은 Gate 7에 포함되므로 plan 하단 `## Deferred` append가 skill-only로 도달 가능한 유일 채널.
-
-- **[Round 1 P1-a 해소]** Phase 5 self-audit commit range를 `baseCommit..HEAD`로 pin. Gate 7 metadata가 `baseCommit..implCommit (Phase 1–5 commits)` 범위를 리뷰하므로 동일 범위로 맞춰야 audit-gate 일관성이 확보됨 (`implRetryBase..HEAD` 후보는 범위 불일치로 기각).
-
-- **[Round 1 P1-b 해소]** Self-audit 입력을 구체화: (a) spec의 `## Success Criteria` / `## Invariants` 섹션의 grep/regex 규칙, (b) plan의 eval checklist `checks[].command` (이미 shell-executable). "machine-checkable invariants"라는 추상 표현을 구체 artifact로 대체.
-
-- **[Round 1 P1-c 해소]** P2/deferred 채널을 phase별로 하나씩 고정: Phase 1 → spec `## Deferred`, Phase 3 → plan `## Deferred`, Phase 5 → plan `## Deferred` append + 별도 `plan: append deferred item` 커밋. "artifact 없이 gate feedback" 표현 제거.
-
-- **[Round 1 P2 반영]** SC11 (`40× local grep` 문구), SC12 (`sentinel` 타이밍), SC13 (`baseCommit..HEAD` range), SC14 (`spec-bug:` + `## Deferred` 채널) 4개 regex 가드 추가. R5a로 다중 feedback 충돌 규칙 추가 (highest severity wins).
-
-- **[Scope pin]** Assembler 코드 변경 없음 (§Non-goals + Decision 5). `src/context/skills/harness-phase-{1,3,5}-*.md` 3개 파일 + `tests/context/skills-rendering.test.ts`만 수정 예정.
+- **[Validator scope]** Spec R5 says "both full + light flows", but current validator only does content checks under `state.flow === 'light' && phase === 1`. Lifted the Complexity check outside the light guard — full-flow Phase 1 specs now also require the section. Existing Phase 1 test fixtures were updated to include `## Complexity\n\nMedium\n`. Advisor agreed.
+- **[Helper placement]** Considered sharing `parseComplexitySignal` between `assembler.ts` and `phases/interactive.ts` / `resume.ts`. Inlined a 6-line `specHasValidComplexity` in both files instead — `tests/phases/interactive.test.ts` has `vi.mock('../../src/context/assembler.js')` at module scope, and pulling a real import through `vi.importActual` would touch every other consumer of that mock. Duplication is 6 lines and structural; if a third consumer appears, extract.
+- **[Small directive wording]** Spec R3 said "eval checklist to 3–4 commands at the command level." Harness enforces `checklist.json` with `{checks: [{name, command}]}`. Rewrote directive text to "Keep `checklist.json` to at most 4 `checks` entries — typecheck + test + build is usually enough." Recorded in plan §Deviations.
+- **[`phase-1.md` edit skipped]** Spec file-change list names `src/context/prompts/phase-1.md`, but that file is 16 lines of thin binding with no Process section to amend. All authoring guidance lives in `harness-phase-1-spec.md` wrapper skill. Recorded in plan §Deviations.
+- **[Workflow deviation]** Task brief said `harness start --light`. Ignored — the spec was already authored manually on this branch (commit `2bc9ada` was part of the starting state), and running `harness start --light` would either duplicate or clobber it. Also, dogfooding the pre-change binary to build this very feature adds no validation. Decided to work manually; plan §Deviations notes this, PR body should too.
 
 ## Open questions / blockers
 
-- **[질문]** Round 2에서 Codex가 여전히 reject하면 Round 3까지 진행. 자율 모드 rule: 동일 안건 4회 거절 시 강제 통과. 현재까지 Round 1만 수행했으므로 최대 3회 남음.
-
-- **[관측 과제]** Spec §Open Questions #6 — `git log baseCommit..HEAD --format` 섹션을 Gate 7 prompt에 추가하는 후속 PR은 §Deferred 5번에 등록됨. 이번 PR 범위 아님.
-
-- **[blocker]** none.
+- **[RED → GREEN fix strategy]** The Phase 3 wrapper skill body needs to describe the directive tag without writing the literal `<complexity_directive>` string as free text. Two reasonable paths:
+  - A) Backtick the tag in skill prose: refer to it as `` `<complexity_directive>` `` (which contains the string but tests could be tightened to look for `<complexity_directive>\n` — with a newline — which only the real assembled stanza produces).
+  - B) Rename the reference in skill prose to something like "the Complexity Directive block" (no angle brackets). The assembler's rendered stanza still uses `<complexity_directive>...</complexity_directive>` tags, but the wrapper skill body talks about it in English.
+  - My preference is (B): it keeps the tests strict (`.not.toContain('<complexity_directive>')` is a sharp assertion and should stay), and the wrapper skill prose is readable.
+- **[Slice 4 owed items]**:
+  1. Update `src/context/prompts/phase-1-light.md` — add `## Complexity` to the required-sections block + 1-line instruction beside `Open Questions` + `Implementation Plan`.
+  2. Consider whether `tests/context/skills-rendering.test.ts` needs new assertions (grep for "Complexity" in the rendered Phase 1/3 prompts).
 
 ## Next concrete steps (ordered)
 
-1. Round 2 Codex 실행: `PROMPT=$(cat /tmp/gate-spec-round2.txt) && node /Users/daniel/.claude/plugins/cache/openai-codex/codex/1.0.3/scripts/codex-companion.mjs task --effort high "$PROMPT"`
-   - `/tmp/gate-spec-round2.txt` 없으면 `HANDOFF.md` §"Resume instructions → 재조립 방법" 따라 재생성.
-
-2. Verdict 처리:
-   - `APPROVE`: TaskUpdate #1 completed → Task #2 in_progress → `superpowers:writing-plans` 스킬 invoke해서 `docs/plans/2026-04-19-wrapper-self-audit.md` 작성.
-   - `REJECT`: P1-only 정책 적용(P0+P1만 반영, P2는 `## Deferred` append) → spec 수정 → Round 3 재제출.
-
-3. Plan 작성 시 5 slice 구성 (원 prompt 지침 따름):
-   - slice 1: Phase 1 skill 수정 + 테스트
-   - slice 2: Phase 3 skill 수정 + 테스트
-   - slice 3: Phase 5 skill 수정 + 테스트
-   - slice 4: (optional) assembler stanza — 이번엔 Deferred로 skip
-   - slice 5: E2E snapshot 가드
-
-4. Plan gate-review (Task #3) → APPROVE → implementation TDD (Task #4-6).
-
-5. 구현 완료 후 `pnpm tsc/vitest/build` + `codex-gate-review --gate eval` → PR.
+1. **Fix the RED.** In `src/context/skills/harness-phase-3-plan.md`, rewrite Step 0 and the Invariants bullet so the literal string `<complexity_directive>` never appears as free prose — rename to "Complexity Directive block" (or equivalent). Leave the English description ("Small → ≤3 tasks, Large → ADR blurbs, Medium → standard").
+2. Run `pnpm vitest run tests/context/assembler.test.ts` to confirm the 3 RED tests go GREEN. Then run full `pnpm vitest run` — expect ≥ 650 passing.
+3. Edit `src/context/prompts/phase-1-light.md`: add `## Complexity` to the required-sections block with a pointer to the wrapper conventions. Keep the edit minimal (the file is self-contained — no wrapper skill for light P1).
+4. Complete Slice 5 (E2E snapshot test for 3 buckets) — fixture per bucket, assert expected tokens/line counts. Already plan-described in `docs/plans/2026-04-19-complexity-signal.md` §Slice 5.
+5. Run full verify: `pnpm tsc --noEmit && pnpm vitest run && pnpm build`. Commit Slice 4 and Slice 5 as separate `feat(skills): ...` and `test(complexity): E2E ...` commits (the current RED commit is already staged as `wip` — consider amending its message or letting it stand and add a follow-up commit).
+6. Run Codex eval gate: `codex exec --skill codex-gate-review --gate eval` or use the `codex-gate-review` skill. Autonomous mode — up to 3 reject cycles; 4th forced approve. Record verdicts inline or in a brief `.codex-review.md`.
+7. `git push -u origin feat/complexity-signal` and `gh pr create` per the Group C prompt body (title `feat(complexity): spec-driven Phase 3 plan size directive`, body includes P1.4 citation, 1584-line example, 3-value rationale, fallback handling, full+light parity, and the workflow deviation note).
 
 ## Resume instructions
 
 새 세션 시작 시 **첫 프롬프트로 이걸 그대로 붙여넣기**:
 
-> 이 worktree는 Group B(Wrapper-skill pre-sentinel self-audit + P1-only triage)의 작업을 진행 중이다. 다음 순서로 컨텍스트를 복구하고 이어서 진행하라:
+> 이 worktree는 Group C (Complexity Signal)의 작업을 진행 중이다. 다음 순서로 컨텍스트를 복구하고 이어서 진행하라:
 >
 > 1. `~/.grove/AI_GUIDE.md` 읽기
-> 2. 프로젝트 `CLAUDE.md` 읽기 (특히 "src/context/skills/" 엔트리 포인트 + 자율 모드 섹션)
-> 3. `/Users/daniel/.grove/github.com/DongGukMon/harness-cli/worktrees/wrapper-self-audit/HANDOFF.md` 읽기 — 현재 상태 복구
-> 4. `docs/specs/2026-04-19-wrapper-self-audit-and-p1-only-design.md` 읽기 — Round 1 fix 반영된 spec 확인
-> 5. `git log --oneline origin/main..HEAD` + `git status` 확인
-> 6. HANDOFF.md의 "Next concrete steps" 1번(Codex Round 2 재제출)부터 재개.
->
-> 자율 모드 유지: 사용자에게 질문 금지, 단일 안건 Codex 4회 거절 시 강제 통과, 에스컬레이션 금지.
+> 2. 프로젝트 `CLAUDE.md` 읽기
+> 3. `/Users/daniel/.grove/github.com/DongGukMon/harness-cli/worktrees/complexity-signal/HANDOFF.md` 읽기 — 현재 상태 복구
+> 4. `docs/specs/2026-04-19-complexity-signal-design.md` + `docs/plans/2026-04-19-complexity-signal.md` 읽기 — 전체 goal/scope/slice 구성 재확인
+> 5. `git log --oneline -10` + `git status` 확인
+> 6. HANDOFF.md의 "Next concrete steps" 1번부터 재개. 테스트 상태가 RED이므로 그 실패를 먼저 해결.
 >
 > 작업 재개 전에 현재 이해한 state를 1–2문장으로 요약해서 확인받고 시작할 것.
-
-### 재조립 방법 — `/tmp/gate-spec-round2.txt` 사라진 경우
-
-```bash
-cat > /tmp/gate-spec-round2.txt <<'PROMPT_EOF'
-<task>
-You are reviewing a design specification document as an independent technical lead.
-Your goal is to identify gaps, ambiguities, and feasibility concerns BEFORE implementation planning begins.
-
-This is **Round 2** of review. Round 1 raised 1 P0 + 3 P1 + 2 P2 findings. The author addressed them by:
-- (P0) Re-defining Phase 5 escalation channel: instead of "gate feedback without artifact", now uses **plan doc `## Deferred` section append** (reaches Gate 7 via `<plan>` block). Confirmed commit message trailer does NOT reach Gate 7 by reading `buildPhase7DiffAndMetadata`.
-- (P1 commit range) Pinned Phase 5 self-audit to `baseCommit..HEAD` to match Gate 7 metadata range.
-- (P1 inputs) Defined self-audit inputs as "spec's `## Success Criteria`/`## Invariants` grep/regex" + "plan checklist `checks[].command`".
-- (P1 channel consistency) Unified: Phase 1 → spec `## Deferred`, Phase 3 → plan `## Deferred`, Phase 5 → plan `## Deferred` append.
-- (P2 R6 guards) Added SC11-SC14 regex tests for rationale phrases.
-- (P2 multi-feedback) Added R5a conflict rule: highest severity wins, dedupe same severity.
-
-Key decisions (updated):
-- Decision 1: Self-audit is a Process step, not an Invariant (preserves `sentinel.*추가 작업 금지` regex).
-- Decision 2: Self-audit inputs differ per phase; Phase 5 pinned to `baseCommit..HEAD`.
-- Decision 3: P1-only triage block lives only inside `{{#if feedback_*}}` conditional — absent on first pass.
-- Decision 4: Phase 5 forbids spec/plan restructuring.
-- Decision 4a: `## Deferred` section append is the unified channel.
-- Decision 5: Assembler stanza injection deferred.
-
-<spec_document>
-PROMPT_EOF
-cat docs/specs/2026-04-19-wrapper-self-audit-and-p1-only-design.md >> /tmp/gate-spec-round2.txt
-cat >> /tmp/gate-spec-round2.txt <<'PROMPT_EOF'
-</spec_document>
-
-Review this spec for:
-1. **Completeness**: Are all required behaviors specified? Are success/failure paths defined?
-2. **Ambiguity**: Could any requirement be interpreted in multiple ways? Are boundary conditions clear?
-3. **Feasibility**: Can this be implemented with the stated tech stack and constraints?
-4. **Edge cases**: What scenarios are missing? What happens at boundaries, under failure, with empty/null inputs?
-5. **Internal consistency**: Do different sections contradict each other?
-</task>
-
-<structured_output_contract>
-Return your review as structured text with these sections in order:
-
-## Verdict
-State exactly one of: `APPROVE` or `REJECT`
-
-## Comments
-For each finding, use this format:
-- **[P0|P1|P2|P3]** — Location: [section/file reference]
-  - Issue: [what is wrong]
-  - Suggestion: [concrete fix recommendation]
-  - Evidence: [quote or reference from the document supporting this finding]
-
-Order comments by severity (P0 first).
-P0: Critical blocker — must fix before proceeding
-P1: Significant issue — should fix before proceeding
-P2: Improvement — worth fixing if low effort
-P3: Minor note — record only
-
-## Summary
-One to two sentences: overall assessment and primary reason for verdict.
-
-Rules:
-- APPROVE only if there are zero P0 and zero P1 findings
-- REJECT if any P0 or P1 finding exists
-- Every comment must cite a specific section, requirement, or code location from the provided documents
-- Do not raise issues that are explicitly addressed in the Key Decisions section or previously fixed between rounds
-</structured_output_contract>
-
-<grounding_rules>
-Ground every finding in the provided documents or observable project state.
-Do not invent requirements, constraints, or failure scenarios not supported by the documents.
-If a finding depends on an inference, state that explicitly.
-Key Decisions in the spec represent deliberate, user-approved tradeoffs — do not re-litigate them unless you find concrete evidence they lead to a problem.
-Round 1 findings listed in the task section are resolved — do not re-open them unless the fix itself introduces a new P0/P1.
-</grounding_rules>
-
-<dig_deeper_nudge>
-After finding the first issue, check for second-order problems: does fixing one gap reveal another?
-Look for unstated assumptions about ordering, concurrency, data availability, and external dependencies.
-</dig_deeper_nudge>
-PROMPT_EOF
-```

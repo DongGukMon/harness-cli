@@ -1,4 +1,4 @@
-import type { GatePhaseResult } from '../types.js';
+import type { GatePhaseResult, Scope } from '../types.js';
 
 /**
  * Parse verdict from raw gate output.
@@ -7,7 +7,7 @@ import type { GatePhaseResult } from '../types.js';
  */
 export function parseVerdict(
   rawOutput: string
-): { verdict: 'APPROVE' | 'REJECT'; comments: string } | null {
+): { verdict: 'APPROVE' | 'REJECT'; comments: string; scope?: Scope } | null {
   const lines = rawOutput.split('\n');
   const verdictHeaderIdx = lines.findIndex(
     (l) => l.trim().toLowerCase() === '## verdict'
@@ -35,7 +35,16 @@ export function parseVerdict(
     comments = lines.slice(commentsHeaderIdx + 1, endIdx).join('\n').trim();
   }
 
-  return { verdict, comments };
+  let scope: Scope | undefined;
+  if (verdict === 'REJECT') {
+    const verdictWindow = lines.slice(verdictHeaderIdx + 1).join('\n');
+    const match = verdictWindow.match(/^\s*Scope:\s*(design|impl|mixed)\b.*$/im);
+    if (match) {
+      scope = match[1].toLowerCase() as Scope;
+    }
+  }
+
+  return scope ? { verdict, comments, scope } : { verdict, comments };
 }
 
 /**
@@ -92,6 +101,7 @@ export function buildGateResult(
     type: 'verdict',
     verdict: parsed.verdict,
     comments: parsed.comments,
+    scope: parsed.scope,
     rawOutput: stdout,
   };
 }

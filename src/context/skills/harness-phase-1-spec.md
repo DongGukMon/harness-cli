@@ -30,6 +30,7 @@ description: Use during harness-cli Phase 1 to brainstorm and write a spec that 
 1. `superpowers:brainstorming` 스킬을 invoke한다. 다음 오버라이드를 전달한다:
    - `"Save spec to exact path: {{spec_path}} (do not use the skill's default location)"`
    - `"Include '## Context & Decisions' section at the top of the spec"`
+   - `"ALSO include '## Complexity' section — body is exactly one of 'Small', 'Medium', or 'Large' (case-insensitive) on the next non-blank line, optionally followed by '— <one-line rationale>'. Phase 1 validator fails if the section is missing or the token is outside the 3-value enum. Use Small for a single-file / few-hundred-LoC change, Large for multi-module refactors or new subsystems, Medium for everything in between. Phase 3 assembler reads this token and injects a corresponding plan-depth directive."`
    - `"ALSO include '## Open Questions' section listing 3–5 ambiguities the reviewer should flag. Empty list acceptable only with explicit rationale."`
    - `"Skip the 'User reviews written spec' step — Codex gate (Phase 2) replaces it"`
    - `"After spec is written, proceed immediately to step 2 (decisions log) below"`
@@ -43,6 +44,7 @@ description: Use during harness-cli Phase 1 to brainstorm and write a spec that 
 - spec 파일 경로는 `{{spec_path}}` 고정 (superpowers가 기본 경로를 제안해도 무시).
 - "Context & Decisions" 섹션은 spec **상단**에 있어야 gate rubric의 Scope 축이 평가 가능.
 - "Open Questions" 섹션 필수 (qa-observations #7 대응).
+- "Complexity" 섹션 필수. 값은 Small / Medium / Large 중 하나. 값이 없거나 enum 밖이면 validator가 Phase 1을 실패로 간주한다.
 
 **HARNESS FLOW CONSTRAINT**: 이 세션은 orchestrated harness 라이프사이클 내부에서 실행된다. 다음 phase에서 Codex 기반 독립 reviewer가 산출물을 검토한다(gate). 따라서:
 - `advisor()` 툴을 호출하지 말 것. 외부 리뷰가 이미 예약되어 있다.

@@ -87,14 +87,14 @@ Session meta: `~/.harness/sessions/<hash>/<runId>/{events.jsonl, meta.json, summ
 
 | # | 요지 | 상태 |
 |---|---|---|
-| 1 | Gate reject 루프 비수렴 | **PR #11/#14/#15 이후 재실험 필수**. shipped 변경 전부 적용된 dist(특히 wrapper-skill runtime 반영 후)로 측정 권장. content-fix 후보는 "exhaustive-first hint" + "retry limit 상향". "already-addressed dedup"은 dog-fooding 결과 invalid. |
+| 1 | Gate reject 루프 비수렴 | **부분 완화 shipped**: light flow는 Phase 7 REJECT 시 `Scope: impl` 이면 Phase 5 reopen, `design|mixed|missing` 이면 Phase 1 reopen, retry limit 5를 사용한다(full은 3 유지). post-ship 측정은 events.jsonl 확장 대신 `.harness/<runId>/gate-7-raw.txt` verdict-raw artifact 샘플링으로 false fast-path를 확인한다. rollback threshold는 아직 문서화되지 않았고 후속 dogfood에서 결정한다. |
 | 5 | Phase 3 interactive 폭주 (37분 runaway 이력) | 원인 미파악. 재현 실험 선행 후 soft-timeout 설계. |
 
 ### 2026-04-18 dog-fooding에서 확인된 신규 이슈 (`~/Desktop/projects/harness/experimental-todo/observations.md` 참조)
 
 | # | 요지 | 심각도 | 상태 |
 |---|---|---|---|
-| 8 | Phase 1 default preset 과중 — 간단한 CLI 한 번에 5.4M 토큰 (2026-04-18 dogfood-full 재측정) | P1 | **부분 해결**: (1) `opus-max` preset id를 `opus-xhigh`로 rename (effort 명시적). (2) PHASE_DEFAULTS[1]·LIGHT_PHASE_DEFAULTS[1]을 `opus-high`로 완화 — xHigh가 기본으로 돌지 않음. `opus-xhigh` preset은 MODEL_PRESETS에 유지되어 수동 선택 가능. `--heavy` CLI flag / 자동 난이도 힌트는 별도 follow-up (FOLLOWUPS.md P1.4). |
+| 8 | Phase 1 default preset 과중 — 간단한 CLI 한 번에 5.4M 토큰 (2026-04-18 dogfood-full 재측정) | P1 | **부분 해결**: (1) PR #22로 legacy `opus-max`(effort=xHigh) id를 `opus-xhigh`로 rename하고, 2026-04-19 PR로 `opus-max`(effort=max)·`sonnet-max`(effort=max) 두 preset을 카탈로그에 **신규 등록** — Opus 4.7의 3-tier(high/xHigh/max) + Sonnet 4.6의 2-tier(high/max) 축을 모두 노출. (2) PHASE_DEFAULTS[1]·LIGHT_PHASE_DEFAULTS[1]은 `opus-high`로 완화된 상태 유지 — max/xHigh는 `promptModelConfig`에서 수동 선택. `--heavy` CLI flag / 자동 난이도 힌트는 별도 follow-up (FOLLOWUPS.md P1.4). |
 | 9 | `printAdvisorReminder` orphan text (control-pane tip이 Claude로 전달 안 됨) | P2 UX | PR #11 `HARNESS FLOW CONSTRAINT`가 `advisor()` 금지로 실질 무효화. **제거 PR 진행 중** (`fix/remove-advisor-reminder`, Group C). |
 | 13 | Codex `HOME` 격리 미도입 — BUG-C alternative fix | P3 | PR #11 `REVIEWER_CONTRACT` scope-rules로 일단 해결. **영구 격리 PR 진행 중** (`feat/codex-home-isolation`, Group D). |
 
@@ -108,7 +108,17 @@ Session meta: `~/.harness/sessions/<hash>/<runId>/{events.jsonl, meta.json, summ
 
 ## 풀 프로세스 호출
 
-개발 전체 사이클은 `/harness` 스킬로 실행. 내부 phase 순서·gate 규약은 전역 규칙 `harness-lifecycle` 섹션 참조.
+> ⚠️ **`/harness` 슬래시 커맨드는 절대 호출 금지.** 전역 `~/.claude/skills/harness/`는 2026-04-19 삭제됨. 호출 시도 시 skill not found. **`harness-cli` CLI 자체는 dogfood로 계속 사용한다** — `/harness` 스킬만 제거되고 CLI는 정규 워크플로의 일부다.
 
-경량 4-phase 플로우는 `harness start --light "<task>"` 로 활성화한다. 상세한 동작은
-`docs/HOW-IT-WORKS.md`의 "Light Flow" 섹션과 `docs/specs/2026-04-18-light-flow-design.md`를 참조.
+개발 라이프사이클은 `harness-cli` 자체를 dogfood로 실행한다:
+
+```bash
+pnpm build                                    # 현 브랜치 변경분을 dist에 반영 (필수)
+harness run --enable-logging "<task>"         # 7-phase 풀 플로우
+# 또는 경량:
+harness start --light "<task>"                # 4-phase 경량 (P1 → P5 → P6 → P7)
+```
+
+빌드 없이는 dist가 갱신되지 않으므로 소스 수정 직후엔 **항상 `pnpm build`** — 그 뒤 CLI 실행 결과가 실제 변경분을 반영한다. 내부 phase 순서·gate 규약·자율 모드 정책(Codex 3 reject → 4회째 강제 통과)은 전역 규칙 `harness-lifecycle` 섹션 참조.
+
+경량 플로우 설계 상세는 `docs/HOW-IT-WORKS.md`의 "Light Flow" 섹션 + `docs/specs/2026-04-18-light-flow-design.md` 참조.

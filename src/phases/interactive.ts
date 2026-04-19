@@ -11,6 +11,30 @@ import { isPidAlive } from '../process.js';
 import { assembleInteractivePrompt } from '../context/assembler.js';
 import { runClaudeInteractive } from '../runners/claude.js';
 import { isValidChecklistSchema } from './checklist.js';
+import { tryAutoRecoverDirtyTree, writeDirtyTreeDiagnostic } from './dirty-tree.js';
+
+/**
+ * Inline Complexity-section check (spec R5). Kept here instead of importing
+ * from assembler.ts so interactive.test.ts's `vi.mock('../context/assembler.js')`
+ * can't wipe it out. Logic mirrors `parseComplexitySignal` in assembler.ts —
+ * if either drifts, the E2E tests in assembler.test.ts should catch it.
+ */
+function specHasValidComplexity(specBody: string): boolean {
+  // Spec Goal 1: "exactly one `## Complexity` section." Count matches before
+  // reading the body token.
+  const allHeaders = specBody.match(/^##\s+Complexity\s*$/gm);
+  if (!allHeaders || allHeaders.length !== 1) return false;
+  const headerMatch = specBody.match(/^##\s+Complexity\s*$/m);
+  if (!headerMatch) return false;
+  const offset = (headerMatch.index ?? 0) + headerMatch[0].length;
+  const remainder = specBody.slice(offset);
+  for (const rawLine of remainder.split('\n')) {
+    const line = rawLine.trim();
+    if (line === '') continue;
+    return /^(small|medium|large)\b/i.test(line);
+  }
+  return false;
+}
 
 export interface InteractiveResult {
   status: 'completed' | 'failed';
@@ -87,17 +111,20 @@ export function checkSentinelFreshness(
 
 /**
  * Validate artifacts for the completed phase.
- * Phase 1/3: check existence, non-empty, and mtime >= phaseOpenedAt.
- * Phase 5: check commits exist (HEAD advanced beyond implRetryBase) and working tree is clean.
- * Returns true if valid.
+ * Phase 1/3: check existence + non-empty (reopen-aware per ADR-13; freshness
+ * is carried by sentinel attemptId alone — no mtime staleness heuristic).
+ * Phase 5: enforce clean working tree + HEAD advancement, with optional
+ * auto-recovery of allowlisted residuals unless `state.strictTree` is set.
+ * `runDir` is used only to render a Phase 5 dirty-tree diagnostic when
+ * strict-tree or auto-recovery blocks validation.
  */
 export function validatePhaseArtifacts(
   phase: InteractivePhase,
   state: HarnessState,
-  cwd: string
+  cwd: string,
+  runDir: string,
 ): boolean {
   if (phase === 1 || phase === 3) {
-    const openedAt = state.phaseOpenedAt[String(phase)];
     const artifactKeys = getPhaseArtifactFiles(state.flow, phase);
     if (artifactKeys.length === 0) return false;
 
@@ -106,10 +133,9 @@ export function validatePhaseArtifacts(
       const absPath = path.isAbsolute(relPath) ? relPath : path.join(cwd, relPath);
       try {
         const stat = fs.statSync(absPath);
-        // Must be non-empty
+        // Must be non-empty. Freshness is proven by sentinel attemptId, not mtime:
+        // reopens may legitimately leave artifacts untouched (rev-invariant case).
         if (stat.size === 0) return false;
-        // mtime must be >= phaseOpenedAt (both in ms)
-        if (openedAt !== null && stat.mtimeMs < openedAt) return false;
       } catch {
         // File doesn't exist
         return false;
@@ -124,7 +150,21 @@ export function validatePhaseArtifacts(
       if (!isValidChecklistSchema(checklistPath)) return false;
     }
 
-    // Light + phase 1: checklist schema + '## Implementation Plan' header
+    // Phase 1 (both full + light flows): spec must contain a valid
+    // `## Complexity` section with one of Small/Medium/Large (spec R5).
+    if (phase === 1) {
+      const specPath = path.isAbsolute(state.artifacts.spec)
+        ? state.artifacts.spec
+        : path.join(cwd, state.artifacts.spec);
+      try {
+        const body = fs.readFileSync(specPath, 'utf-8');
+        if (!specHasValidComplexity(body)) return false;
+      } catch {
+        return false;
+      }
+    }
+
+    // Light + phase 1: checklist schema + '## Open Questions' + '## Implementation Plan' headers
     if (state.flow === 'light' && phase === 1) {
       const checklistPath = path.isAbsolute(state.artifacts.checklist)
         ? state.artifacts.checklist
@@ -148,11 +188,31 @@ export function validatePhaseArtifacts(
 
   if (phase === 5) {
     try {
+      let status = execSync('git status --porcelain', { cwd, encoding: 'utf-8' }).trim();
+      if (status !== '') {
+        if (state.strictTree) {
+          writeDirtyTreeDiagnostic(runDir, 'strict-tree', status);
+          return false;
+        }
+        try {
+          const recovery = tryAutoRecoverDirtyTree(cwd, state.runId);
+          if (recovery.outcome === 'blocked') {
+            writeDirtyTreeDiagnostic(runDir, 'blocked', recovery.blockers.join('\n'));
+            return false;
+          }
+          // outcome: 'recovered' — HEAD advanced via gitignore commit.
+          status = '';
+        } catch (err) {
+          writeDirtyTreeDiagnostic(
+            runDir,
+            'blocked',
+            `${status}\n\n(auto-recovery threw: ${(err as Error).message})`,
+          );
+          return false;
+        }
+      }
       const head = execSync('git rev-parse HEAD', { cwd, encoding: 'utf-8' }).trim();
       const base = state.implRetryBase;
-      const status = execSync('git status --porcelain', { cwd, encoding: 'utf-8' }).trim();
-      // Working tree must always be clean
-      if (status !== '') return false;
       // HEAD advanced — always valid
       if (head !== base) return true;
       // HEAD did not advance. Accept only on reopen (implCommit already set):
@@ -244,7 +304,7 @@ export async function runInteractivePhase(
       return { status: 'failed', attemptId };
     }
     // Validate artifacts after Codex completes
-    const valid = validatePhaseArtifacts(phase, updatedState, cwd);
+    const valid = validatePhaseArtifacts(phase, updatedState, cwd, runDir);
     return { status: valid ? 'completed' : 'failed', attemptId };
   }
 }
@@ -298,7 +358,7 @@ async function waitForPhaseCompletion(
       if (settled) return;
       const freshness = checkSentinelFreshness(sentinelPath, attemptId);
       if (freshness === 'fresh') {
-        const valid = validatePhaseArtifacts(phase, state, cwd);
+        const valid = validatePhaseArtifacts(phase, state, cwd, runDir);
         settle(valid ? 'completed' : 'failed');
       }
     }
@@ -307,7 +367,8 @@ async function waitForPhaseCompletion(
     watcher = chokidar.watch(sentinelPath, {
       persistent: true,
       ignoreInitial: false,
-      usePolling: false,
+      usePolling: true,
+      interval: 200,
     });
 
     watcher.on('add', onSentinelDetected);
@@ -327,7 +388,7 @@ async function waitForPhaseCompletion(
           // PID died — check sentinel one last time
           const freshness = checkSentinelFreshness(sentinelPath, attemptId);
           if (freshness === 'fresh') {
-            const valid = validatePhaseArtifacts(phase, state, cwd);
+            const valid = validatePhaseArtifacts(phase, state, cwd, runDir);
             settle(valid ? 'completed' : 'failed');
           } else {
             settle('failed');
