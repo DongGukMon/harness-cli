@@ -47,7 +47,7 @@
 
 ## Plan-Time Clarification Needed
 
-- **Task 6 issue number reservation:** the repo’s currently referenced open-issue numbers in `CLAUDE.md:90-99` top out at `#13`. This plan therefore assumes Task 6 will use the next free issue number at implementation time for the `gate_error.tokensTotal` reconciliation follow-up. Resolve that number by running `gh issue list --state open`, then back-fill the concrete number into both `FOLLOWUPS.md` and the PR body.
+- **Task 6 issue number reservation:** the repo’s currently referenced open-issue numbers in `CLAUDE.md:90-99` top out at `#13`. This plan therefore assumes Task 6 will use the next free issue number at implementation time for the `gate_error.tokensTotal` reconciliation follow-up. **Best-effort resolution**: run `gh issue list --state open` if GitHub access is available and back-fill the concrete number into both `FOLLOWUPS.md` and the PR body. If `gh` is unavailable or unauthenticated, record the FOLLOWUPS.md entry without an issue number and add a PR-body TODO asking the user to open and link the issue post-merge. The docs-only deliverable must NOT be blocked on GitHub connectivity.
 
 ---
 
@@ -703,11 +703,11 @@ Before touching `FOLLOWUPS.md`, confirm this task is docs-only:
 
 - [ ] **Step 2: Append the follow-up entry with the next free issue number at implementation time and the approved wording direction.**
 
-Run `gh issue list --state open`, determine the next free issue number at implementation time, and append a new entry to `FOLLOWUPS.md` under the appropriate priority section with wording aligned to spec §3.6.1:
+Try `gh issue list --state open` to determine the next free issue number. If `gh` is unavailable or unauthenticated, skip the lookup and append the entry without a concrete issue number — add a PR-body TODO asking the user to open and link the issue post-merge. This step must NOT block on GitHub connectivity; the docs-only deliverable is the FOLLOWUPS.md entry itself. Append a new entry to `FOLLOWUPS.md` under the appropriate priority section with wording aligned to spec §3.6.1:
 
 Required content direction:
 - filename: `FOLLOWUPS.md`
-- issue number: the concrete next free issue number returned by the tracker at implementation time
+- issue number: the concrete next free issue number returned by the tracker at implementation time, or `TBD (open post-merge)` if unavailable
 - title direction: `summary.json gate token total does not include gate_error.tokensTotal`
 - body direction: the footer intentionally counts `gate_error.tokensTotal`, `FileSessionLogger.finalizeSummary` does not, and reconciling `src/logger.ts:218-220` plus the related logger tests is out of scope for the footer PR
 - explicit note that sidecar dedup semantics from spec §3.6.1 must remain intact when the follow-up lands
@@ -815,7 +815,7 @@ Do not call the plan complete until all of the following are true:
 Copied from spec §5, then extended with the carry-forward TODO checks required by this plan.
 
 - [ ] `pnpm tsc --noEmit` passes
-- [ ] `pnpm vitest run` passes, baseline 617 → ≥ 617 + new tests
+- [ ] `pnpm vitest run` passes — take a fresh green baseline at Task 0 Step 2 and require `passed ≥ baseline + (new tests added)`. Do NOT hard-code a numeric baseline; `CLAUDE.md` documents `514 passed / 1 skipped` as of PR #15/#16 but the tree may have advanced. Record the observed baseline in the PR body.
 - [ ] `pnpm build` produces dist with no warnings
 - [ ] Aggregator unit tests cover: §3.6 token rules, §3.6.1 sidecar dedup (verdict + error), §3.7 hybrid current-phase / attempt / phase-running-elapsed for gate-live + interactive-live + interactive-idle + phase-6-positional, §3.3 resume semantics, empty events, malformed line skip
 - [ ] Aggregator test proves malformed JSON line is silently skipped (Task 2)
@@ -825,7 +825,8 @@ Copied from spec §5, then extended with the carry-forward TODO checks required 
 - [ ] Formatter test asserts exact phase-6 compact output matches `P<n> · <XmYs> / <ZmWs>` with NO token segment (Task 3)
 - [ ] Formatter test asserts phase-6 case where `FooterSummary.totalTokens > 0` — the rendered string still omits the token segment (Task 3)
 - [ ] Logger test asserts `getEventsPath` for both implementations
-- [ ] Ticker integration test asserts: exact ANSI sequence bytes on tick, state-slice-driven rendering, SIGWINCH forceTick, `stop()` clears footer + removes `exit` listener, inert NoopLogger path
+- [ ] `tests/commands/footer-ticker.test.ts` asserts: exact ANSI sequence bytes on tick, state-slice-driven rendering, `stop()` clears footer + removes `exit` listener, inert NoopLogger path (Task 4)
+- [ ] `tests/commands/inner-footer.test.ts` asserts: `process.on('SIGWINCH', footerTimer.forceTick)` is registered while the phase loop runs and `process.removeListener(...)` is invoked before logger shutdown (Task 5)
 - [ ] Ticker test asserts `footerTimer.forceTick()` emits the footer synchronously, before the next `setInterval` tick (Task 4)
 - [ ] Ticker test proves skip on missing `events.jsonl` (Task 4)
 - [ ] Ticker test proves skip on null state slice (Task 4)
