@@ -5,7 +5,7 @@ import path from 'path';
 import type { HarnessState, GatePhaseResult, VerifyOutcome } from '../../src/types.js';
 import type { InteractiveResult } from '../../src/phases/interactive.js';
 import { createInitialState } from '../../src/state.js';
-import { GATE_RETRY_LIMIT, VERIFY_RETRY_LIMIT, TERMINAL_PHASE } from '../../src/config.js';
+import { getGateRetryLimit, VERIFY_RETRY_LIMIT, TERMINAL_PHASE } from '../../src/config.js';
 import { FileSessionLogger, computeRepoKey } from '../../src/logger.js';
 
 // ─── Mocks ────────────────────────────────────────────────────────────────────
@@ -133,6 +133,8 @@ function makeLightState(overrides: Partial<HarnessState> = {}): HarnessState {
 
 const HDIR = '/tmp/harness-dir';
 const CWD = '/tmp/cwd';
+const FULL_GATE_RETRY_LIMIT = getGateRetryLimit('full');
+const LIGHT_GATE_RETRY_LIMIT = getGateRetryLimit('light');
 
 function createNoOpInputManager(): InputManager {
   return new InputManager();
@@ -249,7 +251,7 @@ describe('Test 5: Gate REJECT retries >= limit → escalation', () => {
     // Already at limit
     const state = makeState({
       currentPhase: 2,
-      gateRetries: { '2': GATE_RETRY_LIMIT, '4': 0, '7': 0 },
+      gateRetries: { '2': FULL_GATE_RETRY_LIMIT, '4': 0, '7': 0 },
     });
 
     mockGate({ type: 'verdict', verdict: 'REJECT', comments: 'Still wrong', rawOutput: '' });
@@ -322,7 +324,7 @@ describe('Test 8: Escalation Skip → force-pass', () => {
     const runDir = makeTmpDir();
     const state = makeState({
       currentPhase: 2,
-      gateRetries: { '2': GATE_RETRY_LIMIT, '4': 0, '7': 0 },
+      gateRetries: { '2': FULL_GATE_RETRY_LIMIT, '4': 0, '7': 0 },
     });
 
     mockGate({ type: 'verdict', verdict: 'REJECT', comments: 'issues', rawOutput: '' });
@@ -347,7 +349,7 @@ describe('Test 9: Auto mode gate limit exceeded → force pass', () => {
     const state = makeState({
       currentPhase: 2,
       autoMode: true,
-      gateRetries: { '2': GATE_RETRY_LIMIT, '4': 0, '7': 0 },
+      gateRetries: { '2': FULL_GATE_RETRY_LIMIT, '4': 0, '7': 0 },
     });
 
     mockGate({ type: 'verdict', verdict: 'REJECT', comments: 'auto-fail', rawOutput: '' });
@@ -389,6 +391,89 @@ describe('Test 10: Phase 7 REJECT → Phase 5 reopen, verifyRetries reset', () =
     expect(afterReject!.currentPhase).toBe(5);
     expect(afterReject!.pendingAction?.type).toBe('reopen_phase');
     expect(afterReject!.pendingAction?.targetPhase).toBe(5);
+  });
+});
+
+describe('handleGateReject scope-aware reopen routing', () => {
+  it('light phase 7 + scope=impl reopens phase 5 and preserves phase 1', async () => {
+    const runDir = makeTmpDir();
+    const state = makeLightState({
+      currentPhase: 7,
+      phases: { '1': 'completed', '2': 'skipped', '3': 'skipped', '4': 'skipped', '5': 'completed', '6': 'completed', '7': 'pending' },
+      gateRetries: { '2': 0, '4': 0, '7': 0 },
+      verifyRetries: 2,
+      phaseCodexSessions: {
+        '2': null,
+        '4': null,
+        '7': { sessionId: 'sess-7', runner: 'codex', model: 'gpt-5.4', effort: 'high', lastOutcome: 'reject' },
+      },
+    });
+
+    await handleGateReject(7, 'impl fix', 'impl', 0, state, HDIR, runDir, CWD, createNoOpInputManager(), new NoopLogger());
+
+    expect(state.verifyRetries).toBe(0);
+    expect(state.currentPhase).toBe(5);
+    expect(state.pendingAction?.targetPhase).toBe(5);
+    expect(state.phases['1']).toBe('completed');
+    expect(state.phases['5']).toBe('pending');
+    expect(state.carryoverFeedback?.deliverToPhase).toBe(5);
+    expect(state.phaseCodexSessions['7']).toBeNull();
+  });
+
+  it('light phase 7 + scope=design falls back to phase 1 reopen', async () => {
+    const runDir = makeTmpDir();
+    const state = makeLightState({
+      currentPhase: 7,
+      phases: { '1': 'completed', '2': 'skipped', '3': 'skipped', '4': 'skipped', '5': 'completed', '6': 'completed', '7': 'pending' },
+      gateRetries: { '2': 0, '4': 0, '7': 0 },
+    });
+
+    await handleGateReject(7, 'design fix', 'design', 0, state, HDIR, runDir, CWD, createNoOpInputManager(), new NoopLogger());
+
+    expect(state.currentPhase).toBe(1);
+    expect(state.pendingAction?.targetPhase).toBe(1);
+    expect(state.phases['1']).toBe('pending');
+    expect(state.carryoverFeedback?.deliverToPhase).toBe(5);
+  });
+
+  it('light phase 7 + missing scope falls back to phase 1 reopen', async () => {
+    const runDir = makeTmpDir();
+    const state = makeLightState({
+      currentPhase: 7,
+      phases: { '1': 'completed', '2': 'skipped', '3': 'skipped', '4': 'skipped', '5': 'completed', '6': 'completed', '7': 'pending' },
+      gateRetries: { '2': 0, '4': 0, '7': 0 },
+    });
+
+    await handleGateReject(7, 'unknown scope', undefined, 0, state, HDIR, runDir, CWD, createNoOpInputManager(), new NoopLogger());
+
+    expect(state.currentPhase).toBe(1);
+    expect(state.pendingAction?.targetPhase).toBe(1);
+  });
+
+  it('full phase 7 + scope=impl keeps existing phase 5 reopen', async () => {
+    const runDir = makeTmpDir();
+    const state = makeState({
+      currentPhase: 7,
+      gateRetries: { '2': 0, '4': 0, '7': 0 },
+    });
+
+    await handleGateReject(7, 'impl fix', 'impl', 0, state, HDIR, runDir, CWD, createNoOpInputManager(), new NoopLogger());
+
+    expect(state.currentPhase).toBe(5);
+    expect(state.pendingAction?.targetPhase).toBe(5);
+  });
+
+  it('full phase 2 ignores scope and reopens phase 1', async () => {
+    const runDir = makeTmpDir();
+    const state = makeState({
+      currentPhase: 2,
+      gateRetries: { '2': 0, '4': 0, '7': 0 },
+    });
+
+    await handleGateReject(2, 'spec fix', 'impl', 0, state, HDIR, runDir, CWD, createNoOpInputManager(), new NoopLogger());
+
+    expect(state.currentPhase).toBe(1);
+    expect(state.pendingAction?.targetPhase).toBe(1);
   });
 });
 
@@ -1127,7 +1212,7 @@ describe('handleGatePhase — gate_verdict(REJECT) + gate_retry emission', () =>
       expect(retry.phase).toBe(2);
       expect(retry.retryIndex).toBe(0);
       expect(retry.retryCount).toBe(1);
-      expect(retry.retryLimit).toBe(GATE_RETRY_LIMIT);
+      expect(retry.retryLimit).toBe(FULL_GATE_RETRY_LIMIT);
       expect(typeof retry.feedbackPath).toBe('string');
       expect(typeof retry.feedbackBytes).toBe('number');
     } finally {
@@ -1181,6 +1266,39 @@ describe('handleGatePhase — gate_verdict(REJECT) + gate_retry emission', () =>
       // But gate_retry should still be emitted (saveGateFeedback still runs)
       const retry = events.find((e: any) => e.event === 'gate_retry');
       expect(retry).toBeDefined();
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('emits light-flow gate_retry with retryLimit=5 and reopens phase 5 for scope=impl', async () => {
+    const runDir = makeTmpDir();
+    const state = makeLightState({
+      currentPhase: 7,
+      phases: { '1': 'completed', '2': 'skipped', '3': 'skipped', '4': 'skipped', '5': 'completed', '6': 'completed', '7': 'pending' },
+      gateRetries: { '2': 0, '4': 0, '7': 0 },
+    });
+    const { logger, eventsPath, cleanup } = makeTestLogger(state.runId);
+
+    vi.mocked(runGatePhase).mockResolvedValueOnce({
+      type: 'verdict',
+      verdict: 'REJECT',
+      comments: 'Impl-only issue',
+      scope: 'impl',
+      rawOutput: '',
+      runner: 'codex',
+      durationMs: 3000,
+      tokensTotal: 20000,
+      promptBytes: 500,
+    } as any);
+    vi.mocked(runInteractivePhase).mockResolvedValueOnce({ status: 'failed', attemptId: 'light-reopen' } as any);
+
+    try {
+      await handleGatePhase(7, state, HDIR, runDir, CWD, createNoOpInputManager(), logger, { value: false });
+      const retry = readEvents(eventsPath).find((e: any) => e.event === 'gate_retry');
+      expect(retry.retryLimit).toBe(LIGHT_GATE_RETRY_LIMIT);
+      expect(state.currentPhase).toBe(5);
+      expect(state.pendingAction?.targetPhase).toBe(5);
     } finally {
       cleanup();
     }
@@ -1276,14 +1394,14 @@ describe('escalation — handleGateEscalation emission', () => {
     const runDir = makeTmpDir();
     const state = makeState({
       currentPhase: 2,
-      gateRetries: { '2': GATE_RETRY_LIMIT, '4': 0, '7': 0 },
+      gateRetries: { '2': FULL_GATE_RETRY_LIMIT, '4': 0, '7': 0 },
     });
     const { logger, eventsPath, cleanup } = makeTestLogger(state.runId);
 
     vi.mocked(promptChoice).mockResolvedValueOnce('Q');
 
     try {
-      await handleGateEscalation(2, 'Feedback text', state, runDir, CWD, createNoOpInputManager(), logger);
+      await handleGateEscalation(2, 'Feedback text', undefined, state, runDir, CWD, createNoOpInputManager(), logger);
       const events = readEvents(eventsPath);
       const escalations = events.filter((e: any) => e.event === 'escalation');
       expect(escalations).toHaveLength(1);
@@ -1299,14 +1417,14 @@ describe('escalation — handleGateEscalation emission', () => {
     const runDir = makeTmpDir();
     const state = makeState({
       currentPhase: 2,
-      gateRetries: { '2': GATE_RETRY_LIMIT, '4': 0, '7': 0 },
+      gateRetries: { '2': FULL_GATE_RETRY_LIMIT, '4': 0, '7': 0 },
     });
     const { logger, eventsPath, cleanup } = makeTestLogger(state.runId);
 
     vi.mocked(promptChoice).mockResolvedValueOnce('S');
 
     try {
-      await handleGateEscalation(2, 'Feedback', state, runDir, CWD, createNoOpInputManager(), logger);
+      await handleGateEscalation(2, 'Feedback', undefined, state, runDir, CWD, createNoOpInputManager(), logger);
       const events = readEvents(eventsPath);
       const escalation = events.find((e: any) => e.event === 'escalation');
       const forcePass = events.find((e: any) => e.event === 'force_pass');
@@ -1324,14 +1442,14 @@ describe('escalation — handleGateEscalation emission', () => {
     const runDir = makeTmpDir();
     const state = makeState({
       currentPhase: 2,
-      gateRetries: { '2': GATE_RETRY_LIMIT, '4': 0, '7': 0 },
+      gateRetries: { '2': FULL_GATE_RETRY_LIMIT, '4': 0, '7': 0 },
     });
     const { logger, eventsPath: _eventsPath, cleanup } = makeTestLogger(state.runId);
 
     vi.mocked(promptChoice).mockResolvedValueOnce('C');
 
     try {
-      await handleGateEscalation(2, 'More feedback', state, runDir, CWD, createNoOpInputManager(), logger);
+      await handleGateEscalation(2, 'More feedback', undefined, state, runDir, CWD, createNoOpInputManager(), logger);
       // Phase 2 → prevInteractivePhase = 1
       expect(state.phaseReopenSource['1']).toBe(2);
     } finally {

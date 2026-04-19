@@ -3,6 +3,7 @@ export type InteractivePhase = 1 | 3 | 5;
 export type GatePhase = 2 | 4 | 7;
 export type PhaseStatus = 'pending' | 'in_progress' | 'completed' | 'failed' | 'error' | 'skipped';
 export type FlowMode = 'full' | 'light';
+export type Scope = 'design' | 'impl' | 'mixed';
 
 export interface CarryoverFeedback {
   sourceGate: 7;
@@ -18,6 +19,7 @@ export interface PendingAction {
   targetPhase: PhaseNumber;
   sourcePhase: PhaseNumber | null;
   feedbackPaths: string[];
+  scope?: Scope;
 }
 
 export interface Artifacts {
@@ -128,6 +130,7 @@ export interface GateOutcome {
   type: 'verdict';
   verdict: GateVerdict;
   comments: string;
+  scope?: Scope;
   rawOutput: string;
   // Session logging metadata
   runner?: 'claude' | 'codex';

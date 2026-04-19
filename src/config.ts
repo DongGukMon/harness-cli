@@ -52,7 +52,8 @@ export const SIGTERM_WAIT_MS = 5_000;
 export const GROUP_DRAIN_WAIT_MS = 5_000;
 export const HANDOFF_TIMEOUT_MS = 5_000;
 
-export const GATE_RETRY_LIMIT = 3;
+export const GATE_RETRY_LIMIT_FULL = 3;
+export const GATE_RETRY_LIMIT_LIGHT = 5;
 export const VERIFY_RETRY_LIMIT = 3;
 
 export const MAX_FILE_SIZE_KB = 200;
@@ -126,4 +127,8 @@ export function getReopenTarget(flow: FlowMode, gate: GatePhase): InteractivePha
   if (gate === 2) return 1;
   if (gate === 4) return 3;
   return 5; // gate 7 + full
+}
+
+export function getGateRetryLimit(flow: FlowMode): number {
+  return flow === 'light' ? GATE_RETRY_LIMIT_LIGHT : GATE_RETRY_LIMIT_FULL;
 }

@@ -222,6 +222,8 @@ describe('Gate 2 prompt', () => {
     expect(typeof result).toBe('string');
     const prompt = result as string;
     expect(prompt).toContain('Every comment must cite a specific location');
+    expect(prompt).toContain('Scope tagging (REJECT only)');
+    expect(prompt).toContain('Scope: design | impl | mixed');
   });
 
   it('includes scope rules that forbid external conventions and not-yet-produced artifacts', () => {

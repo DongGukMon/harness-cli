@@ -87,7 +87,7 @@ Session meta: `~/.harness/sessions/<hash>/<runId>/{events.jsonl, meta.json, summ
 
 | # | 요지 | 상태 |
 |---|---|---|
-| 1 | Gate reject 루프 비수렴 | **PR #11/#14/#15 이후 재실험 필수**. shipped 변경 전부 적용된 dist(특히 wrapper-skill runtime 반영 후)로 측정 권장. content-fix 후보는 "exhaustive-first hint" + "retry limit 상향". "already-addressed dedup"은 dog-fooding 결과 invalid. |
+| 1 | Gate reject 루프 비수렴 | **부분 완화 shipped**: light flow는 Phase 7 REJECT 시 `Scope: impl` 이면 Phase 5 reopen, `design|mixed|missing` 이면 Phase 1 reopen, retry limit 5를 사용한다(full은 3 유지). post-ship 측정은 events.jsonl 확장 대신 `.harness/<runId>/gate-7-raw.txt` verdict-raw artifact 샘플링으로 false fast-path를 확인한다. rollback threshold는 아직 문서화되지 않았고 후속 dogfood에서 결정한다. |
 | 5 | Phase 3 interactive 폭주 (37분 runaway 이력) | 원인 미파악. 재현 실험 선행 후 soft-timeout 설계. |
 
 ### 2026-04-18 dog-fooding에서 확인된 신규 이슈 (`~/Desktop/projects/harness/experimental-todo/observations.md` 참조)
