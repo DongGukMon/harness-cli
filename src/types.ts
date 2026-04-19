@@ -267,4 +267,5 @@ export interface SessionLogger {
   hasBootstrapped(): boolean;
   hasEmittedSessionOpen(): boolean;
   getStartedAt(): number;
+  getEventsPath(): string | null;
 }
