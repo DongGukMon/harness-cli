@@ -1310,6 +1310,45 @@ describe('handleGatePhase — gate_verdict(REJECT) + gate_retry emission', () =>
   });
 });
 
+describe('handleGateReject — per-gate retry limits (Task 4)', () => {
+  it('light flow Gate 2: escalates after 3 rejects (not 5)', async () => {
+    const dir = makeTmpDir();
+    const state = createInitialState('test-run', '/tasks/test.md', 'base', false, false, 'light');
+    state.gateRetries['2'] = 3;
+    state.phases['2'] = 'pending';
+    state.currentPhase = 2;
+
+    vi.mocked(promptChoice).mockResolvedValueOnce('Q');
+
+    await handleGateReject(
+      2, 'bad design', undefined, 3,
+      state, HDIR, dir, CWD, createNoOpInputManager(), new NoopLogger(),
+    );
+
+    // promptChoice called → escalation was triggered (retryCount >= retryLimit for gate 2)
+    expect(promptChoice).toHaveBeenCalled();
+  });
+
+  it('light flow Gate 7: does NOT escalate after 3 rejects (limit is 5)', async () => {
+    const dir = makeTmpDir();
+    const state = createInitialState('test-run', '/tasks/test.md', 'base', false, false, 'light');
+    state.gateRetries['7'] = 3;
+    state.phases['7'] = 'pending';
+    state.currentPhase = 7;
+
+    vi.mocked(promptChoice).mockReset();
+
+    await handleGateReject(
+      7, 'bad eval', undefined, 3,
+      state, HDIR, dir, CWD, createNoOpInputManager(), new NoopLogger(),
+    );
+
+    // promptChoice NOT called → no escalation (retry 4/5 still under limit)
+    expect(promptChoice).not.toHaveBeenCalled();
+    expect(state.currentPhase).toBe(1);  // P7 REJECT → P1 reopen (light ADR-4)
+  });
+});
+
 describe('handleGatePhase — gate_error emission', () => {
   it('emits gate_error when runner is defined', async () => {
     const runDir = makeTmpDir();
