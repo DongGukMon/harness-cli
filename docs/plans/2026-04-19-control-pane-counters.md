@@ -380,10 +380,14 @@ The commit body should reference spec §4.1 and explicitly mention TODO-G2-P2a /
 Add to `tests/ui-footer.test.ts`:
 - wide format when `columns >= 80`
 - compact format when `columns < 80`
-- phase-6 variant with no Claude/gate segment in the rendered phase text, while preserving cumulative tokens so far
+- phase-6 variant pinned to the exact spec §3.9 quote: `Footer shows P6 · Xm Ys phase · Zm Ws session (no token segment, token aggregates still include prior phases' totals).`
 - unknown/invalid columns -> empty string
 
-Use a pinned `FooterSummary` fixture that matches the spec examples in §3.10.
+Use pinned `FooterSummary` fixtures that match the spec examples in §3.10. For the phase-6 case, use concrete numbers so the assertions are deterministic:
+- wide output must equal `P6 · 1m 23s phase · 12m 04s session`
+- compact output must equal `P6 · 1m23s / 12m04s`
+- no token segment appears in either rendered string
+- the `FooterSummary` passed to `formatFooter` still has `totalTokens > 0` so the test proves the formatter drops the token segment because of the phase-6 rule, not because token totals are zero
 
 - [ ] **Step 2: Write failing stderr ANSI-sequence tests for `writeFooterToPane` and `clearFooterRow`.**
 
@@ -562,6 +566,18 @@ pnpm vitest run tests/commands/footer-ticker.test.ts
 ```
 
 Expected: red. Then implement catch-and-continue recovery around the scheduled read path, rerun the same vitest command, and see green.
+
+- [ ] **Step 6e: Write a failing `forceTick()` sync-render test, then implement the §4.4 contract.**
+
+Add a test that directly calls `footerTimer.forceTick()` without advancing fake timers and asserts `process.stderr.write` has already been invoked with the exact save/move/clear/restore ANSI sequence for the current summary before any `setInterval` callback would fire.
+
+Run:
+
+```bash
+pnpm vitest run tests/commands/footer-ticker.test.ts
+```
+
+Expected: red. Then implement the spec §4.4 requirement that `forceTick()` simply invokes `onTick` synchronously, rerun the same vitest command, and see green.
 
 - [ ] **Step 7: Run the scoped ticker suite to green.**
 
@@ -804,9 +820,13 @@ Copied from spec §5, then extended with the carry-forward TODO checks required 
 - [ ] Aggregator unit tests cover: §3.6 token rules, §3.6.1 sidecar dedup (verdict + error), §3.7 hybrid current-phase / attempt / phase-running-elapsed for gate-live + interactive-live + interactive-idle + phase-6-positional, §3.3 resume semantics, empty events, malformed line skip
 - [ ] Aggregator test proves malformed JSON line is silently skipped (Task 2)
 - [ ] `readStateSlice` unit tests cover: valid / missing / malformed / atomic-rename mid-write race (all non-throwing; failures return `null`)
-- [ ] Formatter tests cover: wide, compact, phase-6 variant, unknown-columns
+- [ ] Formatter tests cover: wide, compact, unknown-columns
+- [ ] Formatter test asserts exact phase-6 wide output matches `P<n> · <Xm Ys> phase · <Zm Ws> session` with NO token segment (Task 3)
+- [ ] Formatter test asserts exact phase-6 compact output matches `P<n> · <XmYs> / <ZmWs>` with NO token segment (Task 3)
+- [ ] Formatter test asserts phase-6 case where `FooterSummary.totalTokens > 0` — the rendered string still omits the token segment (Task 3)
 - [ ] Logger test asserts `getEventsPath` for both implementations
 - [ ] Ticker integration test asserts: exact ANSI sequence bytes on tick, state-slice-driven rendering, SIGWINCH forceTick, `stop()` clears footer + removes `exit` listener, inert NoopLogger path
+- [ ] Ticker test asserts `footerTimer.forceTick()` emits the footer synchronously, before the next `setInterval` tick (Task 4)
 - [ ] Ticker test proves skip on missing `events.jsonl` (Task 4)
 - [ ] Ticker test proves skip on null state slice (Task 4)
 - [ ] Ticker test proves skip on non-TTY / unknown stderr dims (Task 4)
@@ -832,12 +852,14 @@ This section is only a planning aid; execute the tasks above, not this matrix.
 | §3.6.1 sidecar dedup + intentional summary divergence | Task 2, Steps 5 + 11; Task 6 |
 | §3.7 hybrid state/events phase derivation | Task 2, Steps 1-4 + 11; Task 5 |
 | §3.9 phase-6 positional pairing | Task 2, Step 3 |
+| §3.9 phase-6 render output (no token segment) | Task 3, Step 1 |
 | §3.10 wide/compact formatting | Task 3, Step 1 |
 | §3.11 SIGWINCH | Task 4, Step 1; Task 5, Steps 1-4; Final Task Step 4 |
 | §3.12 silent error handling | Task 2, Steps 7a + 9; Task 4, Steps 6a-6d |
 | §3.12 malformed line skip | Task 2, Steps 7a + 9 |
 | §3.12 ticker skip paths (missing events / null slice / non-TTY / read-throw) | Task 4, Steps 6a-6d |
 | §3.14 abnormal-exit cleanup | Task 4, Steps 3 + 6; Task 5, Step 4; Final Task Step 4 |
+| §4.4 `forceTick()` synchronous render | Task 4, Step 6e |
 | §4.5(1) aggregator pure fixtures | Task 2, Steps 1-6 |
 | §4.5(2) `readStateSlice` tests | Task 2, Step 7 |
 | §4.5(3) formatter tests | Task 3, Steps 1-2 |
