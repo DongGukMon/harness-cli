@@ -111,6 +111,13 @@ describe('performResume (inner-side)', () => {
     expect(state.phases['5']).toBe('pending');
     expect(runPhaseLoop).toHaveBeenCalledOnce();
   });
+
+  it('throws when called with no failed phase', async () => {
+    const state = makeState({ phases: { '1': 'completed', '2': 'completed', '3': 'completed', '4': 'completed', '5': 'pending', '6': 'pending', '7': 'pending' } });
+    await expect(
+      performResume(state, '/h', makeTmpDir(), '/cwd', new MockInput() as unknown as InputManager, makeLogger(), { value: false })
+    ).rejects.toThrow(/no failed phase/);
+  });
 });
 
 describe('performJump (inner-side)', () => {
@@ -156,6 +163,24 @@ describe('enterFailedTerminalState', () => {
     input.enqueue('r');
     await enterFailedTerminalState(state, '/harness', makeTmpDir(), '/cwd', input as unknown as InputManager, makeLogger());
     expect(runPhaseLoop).toHaveBeenCalledOnce();
+  });
+
+  it('R triggers performResume; if a fresh failure surfaces, loop continues until Q', async () => {
+    const { runPhaseLoop } = await import('../../src/phases/runner.js');
+    vi.mocked(runPhaseLoop).mockClear();
+    // First R: runPhaseLoop runs, leaves state with phase 6 newly failed.
+    vi.mocked(runPhaseLoop).mockImplementationOnce(async (s: any) => {
+      s.phases['5'] = 'completed';
+      s.phases['6'] = 'failed';
+      // status stays 'in_progress' — loop should re-prompt
+    });
+    const state = makeState();
+    const input = new MockInput();
+    // R → loop returns with new failure → render again → Q to exit
+    input.enqueue('r', 'q');
+    await enterFailedTerminalState(state, '/harness', makeTmpDir(), '/cwd', input as unknown as InputManager, makeLogger());
+    expect(runPhaseLoop).toHaveBeenCalledOnce();
+    expect(state.phases['6']).toBe('failed');
   });
 
   it('Q exits cleanly without re-entering the loop', async () => {

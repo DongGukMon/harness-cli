@@ -9,7 +9,7 @@ import type {
 } from '../types.js';
 import type { InputManager } from '../input.js';
 import { writeState, invalidatePhaseSessionsOnJump } from '../state.js';
-import { renderControlPanel, printError, printInfo, printWarning } from '../ui.js';
+import { renderControlPanel, printError, printInfo } from '../ui.js';
 
 export function anyPhaseFailed(state: HarnessState): boolean {
   return Object.values(state.phases).some(s => s === 'failed' || s === 'error');
@@ -70,9 +70,10 @@ export async function performResume(
   sidecarReplayAllowed: { value: boolean },
 ): Promise<void> {
   const failed = findFailedPhase(state);
-  if (failed !== null) {
-    state.phases[String(failed)] = 'pending';
+  if (failed === null) {
+    throw new Error('performResume called with no failed phase — caller should gate via anyPhaseFailed');
   }
+  state.phases[String(failed)] = 'pending';
   // Clear the run-level paused fields if anything left them set.
   state.status = 'in_progress';
   state.pauseReason = null;
@@ -137,9 +138,8 @@ export async function enterFailedTerminalState(
     const failedPhase = findFailedPhase(state);
     if (failedPhase !== null) {
       printError(`Phase ${failedPhase} failed.`);
-    } else {
-      printWarning('No failed phase detected (defensive).');
     }
+    // else: unreachable — anyPhaseFailed gates entry; asserted via tests.
 
     process.stderr.write('\nRecent events:\n');
     process.stderr.write(summarizeRecentEvents(runDir) + '\n');
@@ -193,12 +193,11 @@ export async function enterFailedTerminalState(
  */
 export async function enterCompleteTerminalState(
   state: HarnessState,
-  runDir: string,
-  cwd: string,
+  _runDir: string,
+  _cwd: string,
   logger: SessionLogger,
   abortSignal?: AbortSignal,
 ): Promise<void> {
-  void cwd;
   renderControlPanel(state, logger, 'terminal-complete');
 
   process.stderr.write('\n');
@@ -220,8 +219,14 @@ export async function enterCompleteTerminalState(
     return;
   }
 
+  // Fallback path: no AbortSignal supplied. Production callers (inner.ts)
+  // always pass a signal, but this branch keeps the helper usable from
+  // ad-hoc scripts / future callers without forcing them to wire one up.
+  // NOTE: the SIGINT handler is registered via `once`, so it auto-removes
+  // on fire — but if the caller resolves through some other path before
+  // SIGINT, the listener leaks until the process exits. This is acceptable
+  // because the helper is only invoked at terminal state.
   await new Promise<void>((resolve) => {
     process.once('SIGINT', () => resolve());
   });
-  void runDir;
 }
