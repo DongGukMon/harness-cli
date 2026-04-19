@@ -103,8 +103,8 @@ describe('jumpCommand', () => {
     writeState(runDir, state);
     setCurrentRun(harnessDir, runId);
 
-    await expect(jumpCommand('2', { root: repo.path })).rejects.toThrow(/__exit__:1/);
+    await expect(jumpCommand('3', { root: repo.path })).rejects.toThrow(/__exit__:1/);
     const msgs = stderrSpy.mock.calls.map((c: any) => c[0]).join('');
-    expect(msgs).toMatch(/phase 2 is 'skipped'|cannot jump to a skipped phase/i);
+    expect(msgs).toMatch(/phase 3 is 'skipped'|cannot jump to a skipped phase/i);
   });
 });

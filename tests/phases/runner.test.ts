@@ -1864,7 +1864,7 @@ describe('light flow — runPhaseLoop (spec §4 + ADR-1/ADR-4/ADR-14)', () => {
     vi.mocked(runVerifyPhase).mockReset();
   });
 
-  it('skips phases 2/3/4 and advances from phase 1 directly to phase 5', async () => {
+  it('P2 gate APPROVES, skips phases 3/4, advances from phase 1 through P2 to phase 5', async () => {
     const runDir = makeTmpDir();
     const state = makeLightState({ currentPhase: 1 });
     const logger = new NoopLogger();
@@ -1879,20 +1879,28 @@ describe('light flow — runPhaseLoop (spec §4 + ADR-1/ADR-4/ADR-14)', () => {
       return { status: 'completed', attemptId: aid } as any;
     });
     vi.mocked(runVerifyPhase).mockResolvedValueOnce({ type: 'pass' } as any);
+    // Gate 2 APPROVE (P2 is now active in light flow)
     vi.mocked(runGatePhase).mockResolvedValueOnce({
       type: 'verdict', verdict: 'APPROVE', comments: '', rawOutput: '',
       runner: 'codex', durationMs: 1, tokensTotal: 0, promptBytes: 0,
-      codexSessionId: 'x', recoveredFromSidecar: false,
+      codexSessionId: 'x2', recoveredFromSidecar: false,
+      resumedFrom: null, resumeFallback: false,
+    } as any);
+    // Gate 7 APPROVE
+    vi.mocked(runGatePhase).mockResolvedValueOnce({
+      type: 'verdict', verdict: 'APPROVE', comments: '', rawOutput: '',
+      runner: 'codex', durationMs: 1, tokensTotal: 0, promptBytes: 0,
+      codexSessionId: 'x7', recoveredFromSidecar: false,
       resumedFrom: null, resumeFallback: false,
     } as any);
 
     await runPhaseLoop(state, HDIR, runDir, CWD, createNoOpInputManager(), logger, { value: false });
 
-    expect(state.phases['2']).toBe('skipped');
+    expect(state.phases['2']).toBe('completed');  // P2 now active and approved
     expect(state.phases['3']).toBe('skipped');
     expect(state.phases['4']).toBe('skipped');
     expect(state.status).toBe('completed');
-    // handleInteractivePhase must have been invoked for 1 and 5 only
+    // runInteractivePhase invoked for phases 1 and 5 only (P2 uses runGatePhase)
     const invokedPhases = vi.mocked(runInteractivePhase).mock.calls.map((c: any) => c[0]);
     expect(invokedPhases).toEqual([1, 5]);
   });
