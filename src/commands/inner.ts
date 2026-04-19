@@ -201,12 +201,46 @@ export async function innerCommand(runId: string, options: InnerOptions = {}): P
   });
   process.on('SIGWINCH', footerTimer.forceTick);
 
-  // 6. Run phase loop
+  // 6. Run phase loop, then route to terminal-state UI based on outcome
   try {
     await runPhaseLoop(state, harnessDir, runDir, cwd, inputManager, logger, sidecarReplayAllowed);
-    if (state.status === 'completed') sessionEndStatus = 'completed';
-    else if (state.status === 'paused') sessionEndStatus = 'paused';
-    else sessionEndStatus = 'interrupted';
+
+    const { enterCompleteTerminalState, enterFailedTerminalState, anyPhaseFailed } =
+      await import('../phases/terminal-ui.js');
+
+    const enterIdle = async (): Promise<void> => {
+      const ac = new AbortController();
+      const onSigint = (): void => ac.abort();
+      process.once('SIGINT', onSigint);
+      try {
+        await enterCompleteTerminalState(state, runDir, cwd, logger, ac.signal);
+      } finally {
+        process.removeListener('SIGINT', onSigint);
+      }
+    };
+
+    if (state.status === 'completed') {
+      sessionEndStatus = 'completed';
+      await enterIdle();
+    } else if (state.status === 'paused') {
+      sessionEndStatus = 'paused';
+    } else if (anyPhaseFailed(state)) {
+      await enterFailedTerminalState(state, harnessDir, runDir, cwd, inputManager, logger);
+      // After R/J flow returns: classify, and surface idle panel if it ended in completion.
+      // Re-read state.status via a cast — the call above can mutate it, but TS still
+      // narrows from the surrounding if/else-if chain that excluded 'completed'/'paused'.
+      const postStatus = state.status as HarnessState['status'];
+      if (postStatus === 'completed') {
+        sessionEndStatus = 'completed';
+        await enterIdle();
+      } else if (postStatus === 'paused') {
+        sessionEndStatus = 'paused';
+      } else {
+        sessionEndStatus = 'interrupted';
+      }
+    } else {
+      sessionEndStatus = 'interrupted';
+    }
   } finally {
     footerTimer.stop();
     process.removeListener('SIGWINCH', footerTimer.forceTick);
