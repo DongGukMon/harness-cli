@@ -1,11 +1,17 @@
 # Wrapper-skill pre-sentinel self-audit + P1-only feedback triage — Design
 
-- Status: Draft (Phase 1 / harness-cli) — Round 5 Codex P1 피드백 반영 (R5: 2 P1 해소 + 2 P2; R4: 3 P1 + 1 P2; R3: 2 P1 + 2 P2; R2: 3 P1 + 1 P2; R1: 1 P0 + 3 P1 + 2 P2)
+- Status: Approved for plan phase (Phase 1 / harness-cli) — R6: 1 P1 해소 + 3 P2 Deferred. 누적 수렴 이력: R6 1 P1 (lifecycle) + R5 2 P1 + R4 3 P1 + R3 2 P1 + R2 3 P1 + R1 1 P0/3 P1. 본 PR은 wrapper skill text-only scope이며 P2는 Deferred §11-13으로 plan phase 이관.
 - Date: 2026-04-19
 - Author: Claude Code (자율 모드)
 - Related followups: `~/.grove/github.com/DongGukMon/harness-cli/worktrees/gate-convergence/FOLLOWUPS.md` §P1.2, §P1.3
 - Target branch: `feat/wrapper-self-audit` (worktree: `wrapper-self-audit`)
 - Scope key: T3 (self-audit) + T4 (P1-only triage)
+
+### Round 6 fix 요약 (2026-04-19) — spec gate APPROVE 상당 처리
+
+- **P1 (plan-bug lifecycle loop)**: R5 + Decision 4a 수정 — plan-bug P1에 대해 **narrow targeted fix**(결함 있는 단일 요소만 최소 수정)를 Phase 5가 허용. plan 전체 재구조화는 계속 금지. 근거: 하네스 runtime은 verify/gate 실패 시 Phase 5로만 재진입하므로 plan-bug를 Deferred-only로 두면 loop 비수렴 (`src/phases/runner.ts:891`, `src/resume.ts:273`).
+- **P2 items (3개 모두)**: Deferred §11 (self-audit iterate rule), §12 (R5a 동일 쟁점 정의), §13 (resume 경로 jq preflight) — plan phase에서 처리.
+- **수렴 판정**: R6 P1 1건만 (trivially fixable), 나머지 3건 모두 P2. advisor 수렴 기준(≤1 new P1 trivially fixable) 충족. 본 round 이후 별도 Codex 재제출 없이 plan phase로 이동.
 
 ### Round 5 fix 요약 (2026-04-19)
 
@@ -72,7 +78,7 @@
   - **Phase 3**: plan doc 하단 `## Deferred` 섹션 (자기 자신 수정).
   - **Phase 5 P2 defer**: plan doc 하단 `## Deferred` 섹션에 **1-2 라인 append-only 추가** + 별도 `plan: append deferred item` 커밋. Phase 5는 plan 본문 재구조화 금지이지만 `## Deferred` 섹션 append는 "구조 변경"이 아닌 "기록" 이므로 허용.
   - **Phase 5 P1 spec-bug (spec/plan 재구조화 유발)**: plan doc 하단 `## Deferred` 섹션에 `spec-bug: <detail>` 1-2 라인 append + `plan: append deferred item` 커밋. Gate 7이 `<plan>` 블록에서 해당 줄을 읽어 reviewer 판단에 반영. 후속 round 또는 별도 plan 업데이트 phase에서 본격 재구조화.
-  - **Phase 5 P1 plan-bug (plan 본문/eval checklist 자체 결함)**: plan doc 하단 `## Deferred` 섹션에 `plan-bug: <detail>` 1-2 라인 append + `plan: append deferred item` 커밋. 구현 변경 금지.
+  - **Phase 5 P1 plan-bug (plan 본문/eval checklist 자체 결함)**: plan doc 하단 `## Deferred` 섹션에 `plan-bug: <detail>` 라인 + **narrow targeted fix 요약 라인**을 함께 append. 결함이 있는 단일 요소만 최소 수정(예: 한 줄 `checks[].command` 교체). plan 전체 재구조화 금지. 단일 `plan: append deferred item` 커밋에 append와 narrow fix를 함께 포함. (Round 6 P1: lifecycle 수렴 보장 — 하네스는 verify/gate 실패 시 Phase 5로만 재진입하므로 plan-bug를 Deferred-only로 두면 loop 비수렴.)
 - 모든 세 카테고리(`spec-bug:`, `plan-bug:`, 일반 defer)가 동일한 커밋 메시지 `plan: append deferred item`을 공유한다. 분류는 append한 본문의 태그 prefix로 수행. 이는 커밋 메시지 policy의 단일성을 유지하면서 Gate 7 `<plan>` 블록 내 태그로 reviewer가 구분 가능하게 함.
 - **Reviewer-side 태그 해석 계약**: `spec-bug:`/`plan-bug:` prefix는 **informational signal**이다. 본 PR은 `reviewerContractForGate7` / Gate 7 rubric을 변경하지 않으므로, reviewer가 태그 때문에 gate를 자동 완화하지 않는다. 태그는 (a) 문제 인지를 reviewer에게 넘기는 channel, (b) 후속 plan-update phase 또는 reviewer contract 업데이트 PR에서 의미를 부여할 수 있는 marker 로만 동작한다. 따라서 태그 append 후에도 Gate 7이 REJECT할 수 있고, 그 경우 정규 gate-retry 경로(또는 후속 spec-bug 해소 PR)로 처리된다. 이 명시는 Round 4 P1 피드백 반영.
 - `## Deferred` 섹션이 artifact에 없을 경우 파일 끝에 새 헤딩으로 생성한 뒤 append (R4a 참조).
@@ -111,7 +117,7 @@
 - **R3a** — **Self-audit hit이 구현 수정으로 해결 불가능한 경우** (spec/plan 재구조화 필요 등): feedback 블록과 독립적으로, Phase 5 wrapper skill Process의 self-audit step이 다음 경로를 포함해야 한다 — "hit이 있는데 구현 수정만으로 해결 불가시 plan doc `## Deferred`에 `spec-bug: <detail>` 또는 `plan-bug: <detail>` 1-2 라인 append + `plan: append deferred item` 커밋을 수행한 뒤 정상적으로 sentinel 생성." (Phase 1/3는 self-audit 대상이 자기 자신 artifact이므로 별도 escalation 불필요 — 자기 artifact 수정 후 진행.) SC 가드: SC18 — `harness-phase-5-implement.md`에 self-audit 블록 내에 `해결 불가` 또는 유사 표현 + `## Deferred` 조합 존재.
 - **R4** — Phase 1/3 wrapper skill의 `{{#if feedback_path}}` feedback 블록에 P1-only triage 3-tier 지침 추가 (P1 반드시, P2 ≤2-line inline or `## Deferred`, severity 누락은 blocker 가정).
 - **R4a** — **`## Deferred` 섹션 부재 시 fallback**: R4/R5의 모든 "Deferred append" 지시는 대상 artifact(spec 또는 plan doc)에 `## Deferred` 헤딩이 **없으면 파일 끝에 새로 생성한 뒤 append**한다. 이 fallback 문장은 세 phase 모두의 P1-only triage 프롬프트 본문에 명시적으로 포함되어야 하며 rendering 테스트로 가드한다(SC15).
-- **R5** — Phase 5 wrapper skill의 `{{#if feedback_paths}}` 블록에 P1-only triage 추가. 추가 조항: "**구현 전용 변경**으로 해결 가능한 P1만 Phase 5에서 반영한다. 다음은 모두 **plan doc 하단 `## Deferred` 섹션에 1-2 라인 append** + 별도 `plan: append deferred item` 커밋으로 escalation: (a) P2 defer, (b) spec/plan 재구조화가 필요한 P1 (`spec-bug: <detail>`), (c) plan 또는 eval checklist 자체 결함으로 인한 P1 (예: `checks[].command` 오류, 잘못된 regex) (`plan-bug: <detail>`). plan 본문 재구조화 금지 유지 — `## Deferred` append-only는 허용. **P2 inline fix 범위는 src/ · tests/ 등 Phase 5 worktree 구현 파일로 제한** — spec/plan 본문이나 eval checklist에 대한 P2 comment는 라인 수 무관하게 `## Deferred` append 경로를 사용한다."
+- **R5** — Phase 5 wrapper skill의 `{{#if feedback_paths}}` 블록에 P1-only triage 추가. 추가 조항: "**구현 전용 변경**으로 해결 가능한 P1은 Phase 5에서 반영. 다음 카테고리는 **plan doc 하단 `## Deferred` 섹션에 1-2 라인 append** + `plan: append deferred item` 커밋으로 escalation: (a) P2 defer, (b) spec/plan **전체 재구조화**가 필요한 P1 (`spec-bug: <detail>`). 다음은 **narrow/targeted fix** 허용 (lifecycle 수렴 보장): (c) plan 또는 eval checklist 자체 결함 P1 (`plan-bug: <detail>`) — 결함이 있는 단일 요소(한 줄 `checks[].command`, 한 regex 등)만 최소 수정 + Deferred 본문에 요약 append + 단일 `plan: append deferred item` 커밋. plan **전체** 재구조화는 여전히 금지. 근거: 하네스 runtime은 Phase 6 verify/Phase 7 gate 실패 시 Phase 5로만 재진입시키므로(`src/phases/runner.ts:891`, `src/resume.ts:273`) plan-bug defect을 Deferred-only로 두면 Phase 6/7이 동일 실패 반복. **P2 inline fix 범위는 src/ · tests/ 등 Phase 5 worktree 구현 파일로 제한** — spec/plan 본문이나 eval checklist에 대한 P2 comment는 라인 수 무관하게 `## Deferred` append 경로를 사용한다."
 - **R5a** — 다중 feedback 경로(`pendingAction.feedbackPaths` + `carryoverFeedback.paths`) 충돌 처리: "동일 쟁점이 서로 다른 severity로 중복될 때 highest severity wins, 동일 severity면 한 번만 반영." (`src/context/assembler.ts:368-391` 참조)
 - **R6** — 모든 self-audit 문구에 "sentinel에 쓰기 직전" + "각 gate round ≈ 40× local grep 비용" 취지 포함 (이유 제시가 문구 유지에 효과적). **테스트 가드**: SC11-SC13에서 세 phase 모두 `sentinel` 단어와 `40× local grep` 문구 존재를 regex 검증.
 
@@ -228,9 +234,17 @@
      reviewer에게 informational signal로만 제공되며 gate 자동 완화는 없다**
      — Gate 7이 REJECT하면 정규 gate-retry 경로로 처리한다.
   4a. **plan 또는 eval checklist 자체 결함으로 인한 P1**: (예: 잘못된
-     `checks[].command`, 맞지 않는 regex, 범위 오지정) 역시 Phase 5 범위 밖.
-     plan doc의 `## Deferred` 섹션에 `plan-bug: <detail>` 1-2 라인을 append
-     → `plan: append deferred item` 커밋. 구현 변경은 하지 않는다.
+     `checks[].command`, 맞지 않는 regex, 범위 오지정) Phase 5가 **narrow,
+     targeted 수정**을 **허용**한다 — 결함이 있는 특정 라인/필드만 최소
+     수정 (예: 잘못된 `checks[].command` 한 줄 교체, 틀린 regex 한 개 수정).
+     plan 전체 재구조화는 여전히 금지. 이유: 하네스 runtime은 verify 실패와
+     Gate 7 reject 모두 Phase 5로만 재진입시키므로(`src/phases/runner.ts:891-897`,
+     `src/resume.ts:273-275`, `src/phases/runner.ts:529-580`) plan-bug를
+     Deferred-only로 두면 loop가 수렴하지 않는다. 커밋 메시지는
+     `plan: append deferred item` (본문에 `plan-bug: <detail>` + narrow fix
+     요약 라인을 같이 append하여 단일 커밋으로 처리). **Scope rule**: 이
+     narrow fix는 "해당 P1이 지적한 단일 요소만" 수정 — §Deferred §10의
+     spec/plan 전체 재작성과 구분된다.
   5. **다중 피드백 충돌**: `pendingAction.feedbackPaths`와 `carryoverFeedback.
      paths`가 중복 제시될 수 있다. 동일 쟁점이 서로 다른 severity로 올라오면
      highest severity wins, 동일 severity면 한 번만 반영.
@@ -329,6 +343,9 @@ state stub에 `pendingAction: { feedbackPaths: ['path/to/feedback.md'] }`를 주
 8. **Phase 1/3 feedback 단일 파일 invariant 명시** (Round 4 P2) — assembler는 `pendingPaths + carryoverPaths`를 합친 뒤 Phase 1/3에는 첫 번째만 `feedback_path`로 전달한다 (`assembleInteractivePrompt` feedbackPath selection). spec은 현재 이 사실을 명시하지 않는다. Plan phase에서 R4에 "Phase 1/3는 feedback file 최대 1개 보장, 추가 파일은 Phase 5 머지 규칙(R5a) 대상이다" 한 줄 invariant 추가.
 9. **Unlabeled comment + structural 충돌 명시** (Round 5 P2) — "severity 누락 → blocker 가정" 과 "reviewer가 P1으로 명시한 항목만 구조 변경 정당화" 가 충돌할 때의 처리가 미정의. Plan phase에서 "severity 누락 & structural fix 필요 → `## Deferred` append (P1 구조변경 패스와 동일), 재구조화 금지" 한 줄 명시.
 10. **startCommand/preflight의 baseCommit 빈값 근본 fix** (Round 5 P1.1 반영) — `startCommand`가 `getHead()` 실패 시 `baseCommit = ''`을 저장하는 경로와 preflight가 `git`/`head`를 보장하지 않는 문제. 본 PR은 self-audit 쪽 graceful degrade만 제공. 근본 fix는 별도 PR로 preflight에 `git` + `HEAD 존재` 체크 추가 + startCommand 검증 강화.
+11. **Self-audit iterate-until-clean 규칙 명시** (Round 6 P2) — 세 phase 모두 "hit 있으면 수정"은 명시하나 "수정 후 재실행" 은 암묵적. Plan phase에서 세 phase self-audit 텍스트에 "수정 커밋 후 동일 검증을 한 번 더 실행, hit이 없을 때 sentinel 진행" 한 줄 추가.
+12. **R5a 동일 쟁점 정의 강화** (Round 6 P2) — `동일 쟁점`이 현재 미정의. Plan phase에서 "동일 파일/영역 + 동일 요구 변경(문구 차이 무관)"을 정의로 명시.
+13. **Resume 경로에서 jq preflight 누락** (Round 6 P2) — `runRunnerAwarePreflight`는 `jq`를 보장하지 않음(`src/commands/inner.ts:184-188`). 본 PR은 fresh-start 전제이며, resume 경로 지원은 별도 PR (`preflight.ts`에 resume-time common preflight rerun 추가).
 
 ## References
 
