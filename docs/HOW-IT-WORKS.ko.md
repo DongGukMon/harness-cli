@@ -51,7 +51,7 @@ P1 design(=brainstorm+plan) → P2 pre-impl review → [P3/P4 skipped] → P5 im
 - **state.flow**: `'full' | 'light'`, run 생성 시점에 고정. `harness resume --light`는 거부됩니다.
 - **skipped phases**: `phases['3'|'4']`가 `'skipped'` status로 초기화되어 `runPhaseLoop`가 건너뜁니다. `renderControlPanel`은 em-dash 아이콘과 `(skipped)` 라벨로 표시합니다. Phase 2는 활성(`'pending'`) 상태로 결합 design spec Codex 리뷰를 실행합니다.
 - **Phase 1 산출물**: `docs/specs/<runId>-design.md` 하나의 결합 문서에 필수 `## Implementation Plan` 섹션을 포함합니다. `checklist.json`은 `scripts/harness-verify.sh`가 파싱해야 하므로 별도 파일로 유지.
-- **Phase 2 (pre-impl gate)**: Codex가 4축 루브릭으로 결합 design doc(spec+plan)을 리뷰합니다. REJECT 시 P1 재진입 + carryover feedback 전달. 게이트 retry limit 3 (풀 플로우 P2와 동일).
+- **Phase 2 (pre-impl gate)**: Codex가 4축 루브릭으로 결합 design doc(spec+plan)을 리뷰합니다. REJECT 시 즉시 P1 재진입 — feedback은 `pendingAction.feedbackPaths` 로만 전달되고 `state.carryoverFeedback`는 설정되지 않습니다 (ADR-18). 게이트 retry limit 3 (풀 플로우 P2와 동일). 이 변경 이전에 생성된 legacy light run은 `phases['2']='skipped'` 상태를 유지합니다 — activation은 `createInitialState`를 통한 forward-only이고 retroactive migration이 아닙니다 (ADR-19).
 - **Phase 7 REJECT**: `Scope: impl`이면 Phase 5 재진입, `Scope: design|mixed` 또는 scope 누락이면 Phase 1 재진입. `state.carryoverFeedback`이 Phase 1 완료 이후에도 살아남아 Phase 5 재진입 시 소비됩니다.
 - **기본 preset**: P1 = `opus-high`, P2 = `codex-high`, P5 = `sonnet-high`, P7 = `codex-high`.
 - **Gate retry limit**: light P2 gate = 3, light P7 gate = 5, 풀 플로우 = 3.
