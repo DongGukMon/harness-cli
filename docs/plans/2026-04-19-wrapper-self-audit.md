@@ -40,7 +40,7 @@ The spec explicitly asks the plan phase to absorb Deferred `§6`, `§7`, `§8`, 
   Files touched: none.
   Steps:
   1. Run `git status --short` and require an empty result before editing.
-  2. Run `pnpm tsc --noEmit` and `pnpm vitest run` to establish the branch-local green baseline for `SC1` and `SC2`; record the current passed-test count only as a comparison point, not as a fixed expected number, per spec line 305.
+  2. Run `pnpm tsc --noEmit` and `pnpm vitest run` to establish the branch-local green baseline for `SC1` and `SC2`. Record the current passed-test count as an **informational human note only** (not part of harness-verify); this plan's SC2 check is exit-code 0, and the human note ensures Task 5 only adds new tests without regressing existing ones.
   3. Run `pnpm build`; immediately rerun `git status --short` and require no `dist/` drift before source edits.
   Expected verification output: clean worktree before and after preflight build; no pre-existing typecheck, test, or build failures.
   Commit message: none.
@@ -90,10 +90,11 @@ The spec explicitly asks the plan phase to absorb Deferred `§6`, `§7`, `§8`, 
      `it('phase 5 — triage block renders P1-only policy, P2 impl-only boundaries, and the spec/plan restructuring ban', ...)`
      `it('phase 5 — plan-bug handling is narrow and targeted rather than full plan restructuring', ...)`
      `it('phase 5 — duplicate issue identity is same file/area plus same requested change', ...)`
+     `it('phase 5 — R5a severity resolution renders highest-wins with same-severity dedup', ...)`
      `it('phase 5 — spec-bug and plan-bug tags are informational signals only', ...)`
   2. Run `pnpm vitest run tests/context/skills-rendering.test.ts -t "phase 5"` and confirm the new assertions fail first.
-  3. Edit `src/context/skills/harness-phase-5-implement.md` to satisfy `R3`, `R3a`, `R5`, and `R6` (`spec` lines 116-122), including the exact `baseCommit...HEAD` pin, the `state.json` lookup, the empty-`baseCommit` graceful-degrade path, the inspect-only checklist rule, the `spec-bug:`/`plan-bug:` escalation channel, and the absorbed Deferred `§11` rerun sentence.
-  4. In the same skill, refine the `{{#if feedback_paths}}` block to absorb Deferred `§9` and `§12`: unlabeled structural comments take the same deferred/escalation path, and duplicate issue identity is explicitly defined as `동일 파일/영역 + 동일 요구 변경(문구 차이 무관)`.
+  3. Edit `src/context/skills/harness-phase-5-implement.md` to satisfy `R3`, `R3a`, `R5`, `R5a`, and `R6` (`spec` lines 116-122), including the exact `baseCommit...HEAD` pin, the `state.json` lookup, the empty-`baseCommit` graceful-degrade path, the inspect-only checklist rule, the `spec-bug:`/`plan-bug:` escalation channel, and the absorbed Deferred `§11` rerun sentence.
+  4. In the same skill, refine the `{{#if feedback_paths}}` block to satisfy `R5a` in full (both halves: (i) "same issue" identity = `동일 파일/영역 + 동일 요구 변경(문구 차이 무관)` per Deferred `§12`; (ii) resolution rule = **highest severity wins; same-severity duplicates collapse to single action**) and to absorb Deferred `§9` (unlabeled structural comments take the same deferred/escalation path).
   5. Re-run the targeted filter until green, then rerun the full rendering test file.
   Expected verification output: 9 new Phase 5 rendering tests pass; `SC6`, `SC9`, `SC10`, and `SC13-SC21` are all covered without breaking existing invariants.
   Commit message: `feat(skills): Phase 5 pre-sentinel self-audit + P1-only triage + plan-bug narrow fix`
@@ -135,7 +136,7 @@ The spec's test-design starter at lines 260-279 is expanded here into literal te
 | SC | Exact test name | File / render target | Regex or assertion |
 | --- | --- | --- | --- |
 | `SC1` | `N/A — command-only check in Task 0 and Task 5` | `pnpm tsc --noEmit` | Exit code `0` |
-| `SC2` | `N/A — command-only check in Task 0 and Task 5` | `pnpm vitest run` | `grep -E "Tests +[0-9]+ passed"` plus manual comparison to the Task 0 baseline to confirm no regressions and only new tests added |
+| `SC2` | `N/A — command-only check in Task 0 and Task 5` | `pnpm vitest run` | Exit code `0` (vitest fails non-zero on any test failure). Baseline comparison (new tests added but no regressions) is a Task 0 human note — not part of `harness-verify.sh`. |
 | `SC3` | `N/A — command-only check in Task 0 and Task 5` | `pnpm build` | Exit code `0` |
 | `SC4` | `it('phase 1 — self-audit step present in Process', ...)` | Assembled Phase 1 prompt | `/## Process[\\s\\S]*Pre-sentinel self-audit/` |
 | `SC5` | `it('phase 3 — self-audit step present in Process', ...)` | Assembled Phase 3 prompt | `/## Process[\\s\\S]*Pre-sentinel self-audit/` |
@@ -156,7 +157,7 @@ The spec's test-design starter at lines 260-279 is expanded here into literal te
 | `SC20` | `it('phase 5 — self-audit pins baseCommit...HEAD from state.json and treats checklist commands as inspect-only', ...)` | Assembled Phase 5 prompt | `/inspect-only|실행 금지|실행하지 않음/` |
 | `SC21` | `it('phase 5 — self-audit reruns until clean before sentinel and degrades with WARN when baseCommit is empty', ...)` | Assembled Phase 5 prompt | `/empty baseCommit|빈 .*baseCommit|WARN: skip self-audit/` |
 
-Invariant and deferred-pickup regression tests that are not 1:1 with `SC` rows:
+Invariant and deferred-pickup regression tests that are not 1:1 with `SC` rows. **Note on coverage**: `INV1-INV4` are preserved via retained existing coverage (the pre-existing rendering tests already guard those regex matches, and this PR does not remove any of them); `INV5` is the only invariant gaining newly authored coverage in this PR.
 
 | Target | Exact test name | Why it exists |
 | --- | --- | --- |
@@ -168,6 +169,7 @@ Invariant and deferred-pickup regression tests that are not 1:1 with `SC` rows:
 | Deferred `§7` | `it('phase 5 — carryoverFeedback missing files are dropped and valid feedback still renders triage', ...)` | Covers the missing-file merge path in the real assembled prompt. |
 | Deferred `§8` | `it.each([1, 3] as const)('phase %i — only one feedback file is rendered in single-feedback phases', ...)` | Locks the Phase 1/3 single-feedback invariant without runtime changes. |
 | Deferred `§12` | `it('phase 5 — duplicate issue identity is same file/area plus same requested change', ...)` | Makes the `R5a` sameness rule explicit and testable. |
+| `R5a` (severity resolution) | `it('phase 5 — R5a severity resolution renders highest-wins with same-severity dedup', ...)` | Locks the second half of `R5a`: conflicting-severity duplicates resolve to highest; same-severity duplicates collapse to single action. Regex: `/highest severity[\s\S]{0,80}(wins|선택)/` and `/한 번만 반영|collapse/`. |
 
 ## Eval Checklist
 The Phase 6 `harness-verify.sh` checklist below mirrors `SC1-SC21` exactly. `SC4-SC21` use `rg`/`grep`-style checks against the wrapper skill files, per the spec at lines 304-325.
@@ -182,9 +184,9 @@ The Phase 6 `harness-verify.sh` checklist below mirrors `SC1-SC21` exactly. `SC4
   },
   {
     "id": "SC2",
-    "description": "pnpm vitest run has no regressions and only adds the planned new tests",
-    "command": "sh -c 'pnpm vitest run | tee /tmp/wrapper-self-audit-vitest.log >/dev/null && grep -E \"Tests +[0-9]+ passed\" /tmp/wrapper-self-audit-vitest.log && ! grep -Eq \"(FAIL|failed|Error:)\" /tmp/wrapper-self-audit-vitest.log'",
-    "expect": "exit code 0; compare the passed-test count to the Task 0 baseline and confirm it only increased"
+    "description": "pnpm vitest run passes (no failures)",
+    "command": "pnpm vitest run",
+    "expect": "exit code 0 (baseline comparison is a Task 0 human note, not part of the harness-verify check)"
   },
   {
     "id": "SC3",
@@ -302,6 +304,12 @@ The Phase 6 `harness-verify.sh` checklist below mirrors `SC1-SC21` exactly. `SC4
   }
 ]
 ```
+
+**Note**: `R5a` (severity resolution: highest wins + same-severity dedup) is additionally guarded by the rendering test
+`it('phase 5 — R5a severity resolution renders highest-wins with same-severity dedup', ...)` (listed in Test Design →
+invariant table). `R5a` does not introduce a new `SC` entry; the skill-level guard is implicitly covered when SC9 + the
+rendering test both pass. Implementation of Task 3 must include the explicit severity-resolution phrase so this test
+is green.
 
 ## Deferred (still deferred after this PR)
 These items remain out of scope exactly as written in the spec (`docs/specs/2026-04-19-wrapper-self-audit-and-p1-only-design.md:334-347`).
