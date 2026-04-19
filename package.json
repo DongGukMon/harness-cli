@@ -17,7 +17,8 @@
     "build": "tsc && node scripts/copy-assets.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "sessions:summary": "node scripts/sessions-summary.mjs"
   },
   "keywords": [
     "ai",
