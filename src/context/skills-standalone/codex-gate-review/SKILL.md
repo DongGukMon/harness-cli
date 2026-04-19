@@ -14,7 +14,7 @@ Run a structured Codex review at a harness gate checkpoint. Codex acts as an ind
 |------|------|-------|-------------|
 | `spec` | After brainstorming → spec doc written | spec doc | Completeness, ambiguity, feasibility, missing edge cases |
 | `plan` | After writing-plans → impl plan written | plan + checklist + spec | Task decomposition, eval criteria sufficiency, risks |
-| `eval` | After implementation + auto-verify | verification report + diff + spec + checklist | Spec compliance, checklist pass/fail, code quality |
+| `eval` | After implementation + auto-verify | verification report + diff + spec [+ plan if full flow] | Spec compliance, verify-report pass/fail, code quality |
 
 ## Invocation
 

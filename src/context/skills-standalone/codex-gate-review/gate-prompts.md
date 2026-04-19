@@ -130,7 +130,7 @@ Flag any spec requirement that has no eval coverage.
 
 ## Gate: Eval Review
 
-Use after Phase 4 (implementation complete + auto-verification report generated).
+Use after Phase 6 (auto-verification report generated) for the Gate 7 eval checkpoint.
 
 ```xml
 <task>
@@ -162,7 +162,7 @@ To detect light flow: check whether the spec document contains a `## Implementat
 </code_diff>
 
 Review steps:
-1. **Checklist verification**: Go through each eval checklist item. Is it marked pass? If the auto-verification report shows a failure, flag it as P0.
+1. **Verification report review**: Go through each check result in the auto-verification report. If a check failed, flag it as P0. (The auto-verification report is the sole source for checklist pass/fail — no separate checklist artifact is provided.)
 2. **Spec compliance**: For each spec requirement, verify the implementation addresses it. Flag unimplemented requirements as P0.
 3. **Code quality**: Review the code diff for:
    - Correctness: does the logic match the spec?
