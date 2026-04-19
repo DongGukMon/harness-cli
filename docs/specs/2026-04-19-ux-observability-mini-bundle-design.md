@@ -12,8 +12,12 @@
 - `../gate-convergence/observations.md` L259–278 — T8-d eval-reset commit squash origin
 - `src/phases/gate.ts` L27–29 `sidecarFeedback` — legacy feedback path
 - `src/phases/runner.ts` L100–107 `saveGateFeedback` — feedback write site
-- `src/phases/runner.ts` L798–810 — eval report commit site
+- `src/phases/runner.ts` L592–672 `handleGateEscalation` — continue/skip/quit branches (cycle counter increment point)
+- `src/phases/runner.ts` L798–810 — eval report commit site (live path)
+- `src/resume.ts` L170–200 + L211–240 — eval report commit sites on resume recovery
 - `src/artifact.ts` L61–130 `runPhase6Preconditions` — reset + clean check
+- `src/artifact.ts` — `normalizeArtifactCommit` (add-always behavior) + new `commitEvalReport` helper
+- `src/state.ts` / `src/types.ts` — new `gateEscalationCycles` field on `HarnessState`
 - `src/preflight.ts` L135–175 `claudeAtFile` case — 5s timeout
 - `src/commands/inner.ts` — control-pane entry (watchdog host)
 
@@ -54,11 +58,19 @@ Summary:
 
 Additionally on APPROVE verdict, write `gate-N-verdict.json` (best-effort) with `{ verdict, retryIndex, codexSessionId?, tokensTotal?, durationMs?, timestamp }`.
 
-**Naming scheme**: `gate-N-retry-K-feedback.md` where N = phase (2/4/7), K = retryIndex at the moment of the write. `K` is sourced by **threading the pre-mutation `retryIndex` through every call site** — `saveGateFeedback` gains a fourth `retryIndex: number` parameter, and `handleGateEscalation` gains a new `retryIndex: number` parameter (propagated from `handleGateReject`, which already captures it at gate.ts L385–386). Rationale: the existing `gate_retry` event carries the same `retryIndex`, so archive filenames align with the telemetry contract.
+**Naming scheme**: `gate-N-cycle-C-retry-K-feedback.md` where N = phase (2/4/7), **C = escalation cycle index** (0-based, increments on each user-chosen "Continue" after a gate retry-limit escalation), K = `retryIndex` at the moment of the write. Both `C` and `K` are threaded explicitly through every call site — `saveGateFeedback` gains `retryIndex: number` (4th param) AND `cycleIndex: number` (5th param). `handleGateEscalation` also gains `retryIndex: number` (propagated from `handleGateReject`, which captures the pre-mutation index at the retry-loop entry — currently runner.ts L467). The existing `gate_retry` event already carries the same `retryIndex`, so archive filenames align with the telemetry contract; `cycleIndex` is a new discriminator carried by this spec only.
 
-**Escalation K semantics**: at escalation entry (`retryCount >= GATE_RETRY_LIMIT`) the captured `retryIndex` equals `GATE_RETRY_LIMIT - 1` (the index of the attempt whose REJECT triggered the limit). `handleGateEscalation` continue/quit branches use that same `retryIndex` when calling `saveGateFeedback`. Continue-then-retry starts from `retryIndex = 0` again on the next reject, so no collision with the stored archive of the prior escalation round.
+**Cycle counter semantics**: `state.gateEscalationCycles[phase]` (new optional field on `HarnessState`, keys `'2'|'4'|'7'`, absent = 0) tracks the number of completed "Continue" escalations for that phase in the current run. The counter is **read** at every `saveGateFeedback` call site, and **mutated only inside the `handleGateEscalation` continue branch (runner.ts L621)**, AFTER the final-REJECT feedback has been archived for the ending cycle — this guarantees:
 
-**Scope**: feedback archival covers `handleGateReject` (gate.ts L531), `handleGateEscalation` continue branch (L627), and `handleGateEscalation` quit branch (L660). Verdict JSON covers APPROVE only — not force-pass (force-pass already emits a dedicated `force_pass` event and has no codex session/tokens to record).
+1. During an active retry cycle (including the final REJECT that triggers escalation): archives are keyed under the current `C`.
+2. After user chooses Continue + state is reset (`gateRetries[phase] = 0`, `verifyRetries = 0` for phase 7): `state.gateEscalationCycles[phase] += 1`, so the next retry cycle's archives start under `cycle-{C+1}-retry-0`.
+3. Quit / Skip branches do not mutate the counter (session terminates or force-passes; no further retries).
+
+With C + K both in the filename, re-escalation cycles never overwrite prior archives within the same run. The counter persists across crash + `harness resume` because it lives in `state.json`. Migration: absent → treated as 0 by all readers (`state.gateEscalationCycles?.[phase] ?? 0`); no active migration write needed on load.
+
+**Escalation K semantics**: at escalation entry (`retryCount >= GATE_RETRY_LIMIT`) the captured `retryIndex` equals `GATE_RETRY_LIMIT - 1` (the index of the attempt whose REJECT triggered the limit). `handleGateEscalation` continue/quit branches use that same `retryIndex` when calling `saveGateFeedback`. `cycleIndex` for that save is the pre-increment value read from `state.gateEscalationCycles[phase] ?? 0`.
+
+**Scope**: feedback archival covers `handleGateReject` (runner.ts L531), `handleGateEscalation` continue branch (runner.ts L627), and `handleGateEscalation` quit branch (runner.ts L660). The continue branch additionally increments `state.gateEscalationCycles[phase]` AFTER the save + before `writeState`. Verdict JSON covers APPROVE only — not force-pass (force-pass already emits a dedicated `force_pass` event and has no codex session/tokens to record).
 
 **Why not rename / abolish `gate-N-feedback.md`**: retained as the "last reject pointer" for codex resume Variant A (`gate.ts` L237 reads this exact path when `lastOutcome=reject`). Archival is purely additive.
 
@@ -71,6 +83,8 @@ Additionally on APPROVE verdict, write `gate-N-verdict.json` (best-effort) with 
 **Trigger condition**: `preset.runner === 'claude'` AND phase ∈ {1, 3, 5}. Codex interactive phases are not affected (no folder-trust analog).
 
 **Timer placement**: in `handleInteractivePhase` (runner.ts), armed after the `logEvent phase_start` call, cleared in (a) completed branch, (b) normal failed branch, (c) catch block, (d) redirect branch. Using `setTimeout` + `ref/unref`: kept referenced so the Node process doesn't exit before it fires during a stuck phase. Cleared on all exits.
+
+**TODO (round-2 P2 follow-up)**: the timer callback should additionally re-check `state.currentPhase === phase` and `state.phaseAttemptId[phase] === attemptId` before printing the hint, to cover the SIGUSR1-driven mid-phase skip/jump race (state can mutate while `runInteractivePhase` is still in flight). This guard is a minor addition — not tracked as a P1 for this bundle but will be folded into implementation of ADR-2 if cheaply doable; otherwise captured in `docs/gate-convergence/FOLLOWUPS.md` after the bundle lands.
 
 **Hint text** (Korean, matching existing `printWarning` style):
 ```
@@ -97,17 +111,19 @@ After: `⚠️  preflight: claude @file check delayed (>10s); continuing — run
 
 ### ADR-4 — Phase 6 eval-report commit squash (T8-d)
 
-**Decision**: Replace the dedicated "reset eval report for re-verification" commit with a **staged deletion that is squashed into the subsequent eval report commit**.
+**Decision**: Replace the dedicated "reset eval report for re-verification" commit with a **staged deletion that is squashed into the subsequent eval report commit**. All Phase 6 eval-report commits (live path AND resume recovery paths) are routed through a single shared helper `commitEvalReport(state, cwd)` that computes the `rev K` title from `state.verifyRetries` at commit time.
 
 **Flow (retry case, eval report was previously committed)**:
 1. `runPhase6Preconditions` detects tracked eval report → runs `git rm -f <evalReportPath>` (stages deletion, removes working tree copy). **No commit.**
 2. Final clean check relaxed: porcelain may contain staged/unstaged entries IF they are the eval report path. Other paths still fail.
 3. `runVerifyPhase` writes new eval report to working tree.
-4. `normalizeArtifactCommit` runs `git add <path>` (replaces staged deletion with staged modification / new content), then `git commit -m "harness[<runId>]: Phase 6 — rev K eval report"` (K = `state.verifyRetries` AT COMMIT TIME — see §Resume safety).
+4. `commitEvalReport(state, cwd)` runs `normalizeArtifactCommit(path, "harness[<runId>]: Phase 6 — rev K eval report", cwd)` with `K = state.verifyRetries + 1` AT COMMIT TIME — see §Resume safety). `normalizeArtifactCommit` internally `git add`s the path (always), then commits.
 
 **Result**: ONE commit per retry instead of two. Commit title encodes revision: `rev 1 eval report`, `rev 2 eval report`, …
 
-**Revision index semantics**: `K = state.verifyRetries + 1` at commit time. The first (pre-retry) verify commits `rev 1`, the first retry commits `rev 2`, etc. This matches user intuition: `rev 1` is the first report committed for the run.
+**Shared helper scope**: `src/resume.ts` L173 (error-path retry) and L218 (applyStoredVerifyResult PASS path) are both in scope — both currently use the legacy message `Phase 6 — eval report`. The round-3 spec adds them to the modification list and routes them through `commitEvalReport(state, cwd)` so all three sites share one title-computation source. Rationale: without this, resume-after-crash commits would keep the old title and the checklist claim "all message titles contain `rev K eval report`" would be false.
+
+**Revision index semantics**: `K = state.verifyRetries + 1` **within a verify cycle**. `rev 1` is the first report committed in the current verify cycle — which is the first report of the run OR the first report after a Gate-7 reject/Continue-escalation that reset `state.verifyRetries` to 0 (runner.ts L509, L624). `rev K` values can therefore repeat across different verify cycles within the same run (e.g. `rev 1` commits before Gate 7 escalation AND `rev 1` commits after user chose Continue). This matches the existing `verifyRetries` reset semantics; adding a run-monotonic `evalReportRevisionCounter` would require additional state + migration and is **out of scope** for this bundle — captured as P2 follow-up in `docs/gate-convergence/FOLLOWUPS.md` after merge.
 
 **Resume safety — crash in the gap**: crash after `git rm -f` but before the new eval report commits results in:
 - Working tree: eval report path absent.
@@ -136,20 +152,22 @@ This subtly changes existing Phase 1/3 artifact commit behavior: when the artifa
 
 ## 4. Interfaces
 
-### 4.1 `saveGateFeedback` (runner.ts) + escalation propagation
+### 4.1 `saveGateFeedback` (runner.ts) + escalation propagation + cycle counter
 
 ```ts
 // BEFORE
 function saveGateFeedback(runDir: string, phase: number, comments: string): string
 
-// AFTER — accepts retryIndex to generate archive path
+// AFTER — accepts retryIndex AND cycleIndex to generate archive path
 function saveGateFeedback(
   runDir: string,
   phase: number,
   comments: string,
   retryIndex: number,
+  cycleIndex: number,
 ): string  // returns legacy feedback path (unchanged return contract).
-          // Legacy write throws on failure. Archive write is best-effort (try/catch + printWarning).
+          // Legacy write throws on failure. Archive write + verdict JSON are best-effort (try/catch + printWarning).
+          // Archive filename: `gate-${phase}-cycle-${cycleIndex}-retry-${retryIndex}-feedback.md`.
 ```
 
 Sibling helper (best-effort, no throw on failure):
@@ -158,8 +176,9 @@ function saveGateApproveVerdict(
   runDir: string,
   phase: number,
   retryIndex: number,
+  cycleIndex: number,
   metadata: { codexSessionId?: string; tokensTotal?: number; durationMs?: number },
-): void
+): void  // writes `gate-${phase}-cycle-${cycleIndex}-verdict.json`.
 ```
 
 Call-site propagation:
@@ -169,13 +188,30 @@ export async function handleGateEscalation(
   phase, comments, state, runDir, cwd, inputManager, logger,
 ): Promise<void>
 
-// AFTER — accepts retryIndex (propagated from handleGateReject pre-mutation capture)
+// AFTER — accepts retryIndex (propagated from handleGateReject pre-mutation capture).
+// cycleIndex is derived inside this function from state.gateEscalationCycles[phase] ?? 0.
 export async function handleGateEscalation(
   phase, comments, retryIndex, state, runDir, cwd, inputManager, logger,
 ): Promise<void>
 ```
 
-`handleGateReject` passes its captured `retryIndex` (gate.ts L496) into the escalation branch (L588). All three `saveGateFeedback` call sites (L531 / L627 / L660) receive a concrete retry index.
+`handleGateReject` passes its captured `retryIndex` (runner.ts L467, pre-mutation) into the escalation branch (runner.ts L588). All three `saveGateFeedback` call sites (runner.ts L531 / L627 / L660) receive both a concrete `retryIndex` AND a concrete `cycleIndex` (latter read from `state.gateEscalationCycles[phase] ?? 0` at the call site).
+
+State type addition (`src/types.ts`):
+```ts
+export interface HarnessState {
+  // ...existing fields...
+  gateEscalationCycles?: Record<'2' | '4' | '7', number>;
+  // Optional for backward compat with existing state.json files; readers use `?? 0`.
+}
+```
+
+Increment site: inside `handleGateEscalation` continue branch (runner.ts L621), AFTER `saveGateFeedback` returns and BEFORE `writeState`:
+```ts
+state.gateEscalationCycles = state.gateEscalationCycles ?? {};
+state.gateEscalationCycles[String(phase)] =
+  (state.gateEscalationCycles[String(phase)] ?? 0) + 1;
+```
 
 ### 4.2 `WATCHDOG_DELAY_MS` (runner.ts)
 
@@ -200,16 +236,37 @@ export function isStagedDeletion(filePath: string, cwd?: string): boolean;
 
 Signature unchanged. Internal behavior: always run `git add "<filePath>"` before commit, eliminating the "only target staged → skip add" branch. Non-target staged files still throw.
 
+### 4.5 `commitEvalReport` (artifact.ts) — shared helper for all Phase 6 eval-report commits
+
+New helper that centralizes the `rev K` title computation so normal-path (runner.ts L801) and resume recovery paths (resume.ts L173, L218) produce identical commit messages for the same `(runId, verifyRetries)` pair:
+
+```ts
+// src/artifact.ts
+export function commitEvalReport(state: HarnessState, cwd: string): void {
+  const filePath = state.artifacts.evalReport;
+  const k = state.verifyRetries + 1;
+  const message = `harness[${state.runId}]: Phase 6 — rev ${k} eval report`;
+  normalizeArtifactCommit(filePath, message, cwd);
+}
+```
+
+Call-site migration:
+- `src/phases/runner.ts` L800–805 — replace inline `normalizeArtifactCommit(...)` call with `commitEvalReport(state, cwd)`.
+- `src/resume.ts` L173 — same replacement (inside `handleResume` phase-6 error retry branch).
+- `src/resume.ts` L218 — same replacement (inside `applyStoredVerifyResult` PASS branch).
+
+Throw semantics preserved — `normalizeArtifactCommit` still throws on git failure; callers retain their existing try/catch boundaries. The force-pass synthetic-report path remains on direct `normalizeArtifactCommit` with its own message (`Phase 6 — eval report (force-pass)`) since it does not participate in the retry-rev scheme.
+
 ## 5. Testing
 
 One vitest file per slice, colocated with existing tests:
 
 | Slice | Test file | Key assertions |
 |---|---|---|
-| T8-a | `tests/phases/gate-feedback-archival.test.ts` | Retry creates `gate-N-retry-K-feedback.md`. APPROVE creates `gate-N-verdict.json` with `verdict:"APPROVE"`. Legacy `gate-N-feedback.md` still written. |
-| T8-b | `tests/phases/interactive-watchdog.test.ts` | Under `vi.useFakeTimers()`: timer arms on claude preset, fires exactly once after `vi.advanceTimersByTimeAsync(WATCHDOG_DELAY_MS)`, is cleared (no late fire) on completed/failed/throw. Not armed for codex preset. |
+| T8-a | `tests/phases/gate-feedback-archival.test.ts` | Retry creates `gate-N-cycle-0-retry-K-feedback.md` (K=0..2). After a Continue escalation + next retry REJECT, archive lives at `gate-N-cycle-1-retry-0-feedback.md` (distinct from cycle-0 archive; no overwrite). APPROVE creates `gate-N-cycle-C-verdict.json` with `verdict:"APPROVE"`. Legacy `gate-N-feedback.md` still written + returned. |
+| T8-b | `tests/phases/interactive-watchdog.test.ts` | Under `vi.useFakeTimers()`: timer arms on claude preset, fires exactly once after `vi.advanceTimersByTimeAsync(WATCHDOG_DELAY_MS)`, is cleared (no late fire) on completed/failed/throw/redirect. Not armed for codex preset. |
 | T8-c | `tests/preflight-claude-at-file.test.ts` | Timeout constant = 10000. Message text contains "delayed" (not "timed out") and "continuing". Exit status ≠ 0 still warns and returns. |
-| T8-d | `tests/phases/eval-report-commit-squash.test.ts` | Retry cycle: commit-count delta per round = 1 (measure via `git rev-list` before/after). Messages contain `rev 1 eval report`, `rev 2 eval report`. Resume after simulated crash (staged-D only, no worktree entry) resumes cleanly without throw and produces exactly one new commit. Force-pass path still writes one synthetic commit. |
+| T8-d | `tests/phases/eval-report-commit-squash.test.ts` | Retry cycle: commit-count delta per round = 1 (measure via `git rev-list` before/after). Messages contain `rev 1 eval report`, `rev 2 eval report`. `commitEvalReport(state, cwd)` used for all three sites (live runner path + resume.ts L173 + L218) — assert via message title check after simulating each path (live retry; phase-6 error → `handleResume` retry; `applyStoredVerifyResult` PASS). Resume after simulated crash (staged-D only, no worktree entry) resumes cleanly without throw and produces exactly one new `rev K eval report` commit. Force-pass path still writes one synthetic commit with the legacy force-pass message (unchanged). |
 
 Test strategy:
 - **T8-b timer tests**: use `vi.useFakeTimers()` + run `vi.advanceTimersByTimeAsync(WATCHDOG_DELAY_MS)`. Mock `runInteractivePhase` to return a controlled Promise so we can time the timer fire against the phase resolution.
@@ -239,10 +296,17 @@ Verification is deterministic; the plan includes `.harness-eval.json` with:
 
 1. **typecheck** — `pnpm tsc --noEmit` → exit 0.
 2. **tests** — `pnpm vitest run` → exit 0, 617 → 621+ passed, 1 skipped.
-3. **build** — `pnpm build` → exit 0, `dist/src/phases/runner.js` + `dist/src/preflight.js` exist.
-4. **T8-a file** — `src/phases/runner.ts` `saveGateFeedback` takes 4 params (`retryIndex: number`). `handleGateEscalation` takes `retryIndex` param. `grep -q "retry-.*-feedback.md" src/phases/runner.ts`.
+3. **build** — `pnpm build` → exit 0, `dist/src/phases/runner.js` + `dist/src/preflight.js` + `dist/src/artifact.js` exist.
+4. **T8-a signatures + archive path** — `src/phases/runner.ts` `saveGateFeedback` takes 5 params (`retryIndex: number, cycleIndex: number`). `handleGateEscalation` takes `retryIndex` param. `grep -q "cycle-.*-retry-.*-feedback.md" src/phases/runner.ts`. `src/types.ts` exports `gateEscalationCycles?: Record<'2' | '4' | '7', number>` on `HarnessState`.
 5. **T8-b constant** — `grep -q "WATCHDOG_DELAY_MS" src/phases/runner.ts`.
 6. **T8-c string** — `grep -q "timeout: 10_\\?000" src/preflight.ts`.
-7. **T8-d commit-count** — dedicated test verifies for N verify rounds (1 initial + verifyRetries), Phase 6 commit count == `verifyRetries + 1` (one per round), all message titles contain `rev K eval report` for K ∈ {1..verifyRetries+1}. Resume-from-staged-D scenario commits exactly one additional `rev K eval report`.
+7. **T8-d commit-count + shared helper** — dedicated test verifies for N verify rounds within a verify cycle (1 initial + `verifyRetries`), Phase 6 commit count == `verifyRetries + 1` (one per round), all message titles contain `rev K eval report` for K ∈ {1..verifyRetries+1}. Resume-from-staged-D scenario commits exactly one additional `rev K eval report`. `src/artifact.ts` exports `commitEvalReport(state, cwd)`; `grep -q "commitEvalReport" src/phases/runner.ts` AND `grep -q "commitEvalReport" src/resume.ts` (both live path and both resume recovery sites route through the shared helper).
 
 Each checklist item maps to an automated command in `.harness-eval.json`.
+
+### 8.1 Deferred to follow-up (acknowledged P2 from round-2 gate review)
+
+These are captured here as documentation so they survive into `docs/gate-convergence/FOLLOWUPS.md` when the bundle lands; they are **not** blockers for this PR:
+
+- **FUP-1 (watchdog attempt-id guard)**: re-check `state.currentPhase === phase` + `phaseAttemptId[phase] === attemptId` inside the timer callback before printing, to cover the SIGUSR1 mid-phase skip/jump race. Add if implementation proves cheap; otherwise file as its own issue post-merge.
+- **FUP-2 (rev K run-monotonic counter)**: the current spec narrows "first report committed for the run" → "first report committed in the current verify cycle" because `verifyRetries` resets on Gate-7 reject/escalation-Continue. A run-monotonic `evalReportRevisionCounter` on `HarnessState` would close this, but adds a state migration + ordering guarantees outside the scope of this UX/observability bundle.
