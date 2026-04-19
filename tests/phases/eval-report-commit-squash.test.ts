@@ -96,6 +96,45 @@ describe('eval report commit squash', () => {
     expect(stagedDeletionStatus(repo.path, evalReportPath)).toBe(`D\t${evalReportPath}`);
   });
 
+  it('resumes cleanly from the staged-D crash window and produces exactly one new rev-K commit', () => {
+    // Spec §5 T8-d + §8 item 7: simulated crash after `git rm -f` but before
+    // the new eval-report commit — repo has `D <evalReportPath>` staged, no
+    // worktree entry. On resume-entry to Phase 6, runPhase6Preconditions must
+    // be idempotent (no-op), then verify writes the new report, then
+    // commitEvalReport produces exactly +1 commit titled `rev K eval report`.
+    const repo = makeRepo();
+    const state = createInitialState('staged-d-resume-run', 'task', 'base-sha', false);
+    const evalReportPath = state.artifacts.evalReport;
+
+    // Seed: prior eval report committed to HEAD.
+    writeRepoFile(repo.path, evalReportPath, '# Eval Report\n\n## Summary\n\nprior rev\n');
+    execSync(`git add "${evalReportPath}" && git commit -m "seed prior rev"`, { cwd: repo.path });
+
+    // Simulate the crash window: runPhase6Preconditions staged the deletion
+    // and removed the worktree entry, but the new eval-report commit never
+    // landed. Repo is now at `D <evalReportPath>` with no worktree file.
+    runPhase6Preconditions(evalReportPath, state.runId, repo.path);
+    expect(fs.existsSync(path.join(repo.path, evalReportPath))).toBe(false);
+    expect(stagedDeletionStatus(repo.path, evalReportPath)).toBe(`D\t${evalReportPath}`);
+    state.verifyRetries = 1; // retry cycle — next commit should be rev 2
+
+    const commitsBeforeResume = commitCount(repo.path);
+
+    // Resume path: re-entry to Phase 6 calls runPhase6Preconditions again
+    // (must be idempotent), then verify produces the new eval report, then
+    // commitEvalReport finalizes the single `rev K` commit.
+    expect(() => runPhase6Preconditions(evalReportPath, state.runId, repo.path)).not.toThrow();
+    writeRepoFile(repo.path, evalReportPath, '# Eval Report\n\n## Summary\n\nresumed pass\n');
+    commitEvalReport(state, repo.path);
+
+    expect(commitCount(repo.path)).toBe(commitsBeforeResume + 1);
+    expect(lastCommitMessage(repo.path)).toBe(
+      `harness[${state.runId}]: Phase 6 — rev 2 eval report`,
+    );
+    // No residual staged deletion after commit — worktree matches index.
+    expect(stagedDeletionStatus(repo.path, evalReportPath)).toBe('');
+  });
+
   it('uses the rev 1 eval report message on the live verify pass path', async () => {
     const repo = makeRepo();
     const harnessDir = path.join(repo.path, '.harness');
