@@ -176,8 +176,8 @@ describe('readClaudeSessionUsage', () => {
     expect(skippedWrites).toHaveLength(1);
   });
 
-  // Case 5 — no assistant entries → zero-sum, not null
-  it('returns a zero-sum object when the session has no assistant entries', () => {
+  // Case 5 — no assistant entries → null (3-state contract: object | null | absent)
+  it('returns null when the pinned session has no assistant entries', () => {
     const dir = projectDirFor(tmpHome, CWD);
     writeSession(path.join(dir, `${ATTEMPT_ID}.jsonl`), [
       nonAssistantLine('queue-operation', PHASE_START),
@@ -189,7 +189,20 @@ describe('readClaudeSessionUsage', () => {
       phaseStartTs: PHASE_START,
       homeDir: tmpHome,
     });
-    expect(result).toEqual({ input: 0, output: 0, cacheRead: 0, cacheCreate: 0, total: 0 });
+    expect(result).toBeNull();
+  });
+
+  // Case 5b — pinned file is completely empty → null
+  it('returns null when the pinned JSONL is completely empty', () => {
+    const dir = projectDirFor(tmpHome, CWD);
+    writeSession(path.join(dir, `${ATTEMPT_ID}.jsonl`), []);
+    const result = readClaudeSessionUsage({
+      sessionId: ATTEMPT_ID,
+      cwd: CWD,
+      phaseStartTs: PHASE_START,
+      homeDir: tmpHome,
+    });
+    expect(result).toBeNull();
   });
 
   // Case 6 — cache-only entries sum correctly
