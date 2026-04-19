@@ -21,6 +21,7 @@ export async function runClaudeInteractive(
   harnessDir: string,
   runDir: string,
   promptFile: string,
+  resume: boolean = false,
 ): Promise<ClaudeInteractiveResult> {
   const sessionName = state.tmuxSession;
   const workspacePane = state.tmuxWorkspacePane;
@@ -57,12 +58,15 @@ export async function runClaudeInteractive(
   if (fs.existsSync(pidFile)) fs.unlinkSync(pidFile);
 
   // Launch Claude via exec wrapper.
-  // Pin Claude's session UUID to our attemptId so the session JSONL lands at
+  // For fresh launches, pin Claude's session UUID via --session-id so the JSONL lands at
   // ~/.claude/projects/<encodedCwd>/<attemptId>.jsonl (§D5 of the token-capture design).
+  // For reopen launches, use --resume to continue the same Claude session.
   // Guard against empty attemptId (shouldn't happen given upstream contract) by
   // omitting the flag rather than passing an invalid argument.
-  const sessionIdArg = attemptId ? `--session-id ${attemptId} ` : '';
-  const claudeArgs = `--dangerously-skip-permissions ${sessionIdArg}--model ${preset.model} --effort ${preset.effort} @${path.resolve(promptFile)}`;
+  const sessionFlag = resume
+    ? (attemptId ? `--resume ${attemptId} ` : '')
+    : (attemptId ? `--session-id ${attemptId} ` : '');
+  const claudeArgs = `--dangerously-skip-permissions ${sessionFlag}--model ${preset.model} --effort ${preset.effort} @${path.resolve(promptFile)}`;
   const wrappedCmd = `sh -c 'echo $$ > ${pidFile}; exec claude ${claudeArgs}'`;
   sendKeysToPane(sessionName, workspacePane, wrappedCmd);
 
