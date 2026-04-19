@@ -6,6 +6,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createTestRepo } from '../helpers/test-repo.js';
 import { createInitialState, writeState } from '../../src/state.js';
 import { commitEvalReport, runPhase6Preconditions } from '../../src/artifact.js';
+import { forcePassVerify } from '../../src/phases/runner.js';
+import { NoopLogger } from '../../src/logger.js';
 
 const repos: Array<{ cleanup: () => void }> = [];
 
@@ -200,5 +202,35 @@ describe('eval report commit squash', () => {
 
     await resumeRun(storedState, storedHarnessDir, storedRunDir, repo.path);
     expect(lastCommitMessage(repo.path)).toBe(`harness[${storedRunId}]: Phase 6 — rev 1 eval report`);
+  });
+
+  it('force-pass writes exactly one synthetic eval report commit with the unchanged message', async () => {
+    const repo = makeRepo();
+    const runId = 'fp-run';
+    const harnessDir = path.join(repo.path, '.harness');
+    const runDir = path.join(harnessDir, runId);
+    fs.mkdirSync(runDir, { recursive: true });
+    execSync('git add .harness/.gitkeep 2>/dev/null; true', { cwd: repo.path });
+    fs.writeFileSync(path.join(repo.path, '.harness/.gitkeep'), '');
+
+    const baseCommit = execSync('git rev-parse HEAD', { cwd: repo.path, encoding: 'utf-8' }).trim();
+    const state = createInitialState(runId, 'task', baseCommit, false);
+    state.currentPhase = 6;
+    state.phases['6'] = 'in_progress';
+    state.verifyRetries = 2;
+    writeState(runDir, state);
+
+    const before = commitCount(repo.path);
+    await forcePassVerify(state, runDir, repo.path, 'auto', new NoopLogger());
+    const after = commitCount(repo.path);
+
+    expect(after - before).toBe(1);
+    expect(lastCommitMessage(repo.path)).toBe(
+      `harness[${runId}]: Phase 6 — synthetic eval report (skip)`,
+    );
+    // Title must NOT contain "rev K" (force-pass path is unchanged by T8-d shared helper scheme).
+    expect(lastCommitMessage(repo.path)).not.toMatch(/rev \d+ eval report/);
+    expect(state.phases['6']).toBe('completed');
+    expect(state.currentPhase).toBe(7);
   });
 });
