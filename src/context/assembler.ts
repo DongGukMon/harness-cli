@@ -33,6 +33,13 @@ One to two sentences.
 
 Rules: APPROVE only if zero P0/P1 findings. Every comment must cite a specific location.
 
+Scope tagging (REJECT only) — REJECT verdict 에는 \`Scope: design | impl | mixed\` 한 줄을 반드시 포함한다.
+  - design: spec/plan 재구조화 가 필요한 이슈 (요구사항 오해, 아키텍처 결함, 누락된 비요구사항).
+  - impl: 구현 단계 에서 해결 가능한 이슈 (tests, naming, edge cases, dead code, 컴파일/테스트 실패).
+  - mixed: 양쪽 모두 손대야 하는 이슈.
+APPROVE 일 때는 Scope 라인을 생략한다.
+이 규약은 Phase 7 eval gate 에서만 dispatch 에 영향을 준다 (다른 gate 는 무시).
+
 Scope rules:
 - Review ONLY the artifacts provided in this prompt (e.g. <spec>, <plan>, <eval_report>, <diff>).
 - Do NOT apply personal or workspace-level conventions (commit-message formats, naming rules, protocols) unless they are explicitly cited in the provided artifacts.

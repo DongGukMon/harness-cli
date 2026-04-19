@@ -52,9 +52,11 @@ P1 design(=brainstorm+plan) → [P2/P3/P4 skipped] → P5 impl → P6 verify →
 - **state.flow**: `'full' | 'light'`, frozen at run creation. `harness resume --light` is rejected.
 - **skipped phases**: `phases['2'|'3'|'4']` initialize to the new `'skipped'` `PhaseStatus`. `runPhaseLoop` short-circuits past them; `renderControlPanel` shows them with an em-dash glyph and `(skipped)` label.
 - **Phase 1 output**: single combined doc at `docs/specs/<runId>-design.md` containing a mandatory `## Implementation Plan` section. `checklist.json` stays a separate file so `scripts/harness-verify.sh` still parses it.
-- **Phase 7 REJECT**: routed back to Phase 1 (not Phase 5 — the combined doc is re-authored). `state.carryoverFeedback` survives the Phase 1 completion that clears `pendingAction` and is consumed by Phase 5 on re-entry.
+- **Phase 7 REJECT**: `Scope: impl`이면 Phase 5 reopen, `Scope: design|mixed` 또는 scope 누락이면 Phase 1 reopen. Phase 1 reopen일 때는 combined doc를 다시 작성하고, `state.carryoverFeedback` 는 그 completion 이후에도 살아남아 Phase 5 on re-entry에서 소비된다.
+- **Gate retry limit**: light flow는 retry limit 5, full flow는 retry limit 3을 사용한다.
 - **Defaults**: P1 = `opus-high`, P5 = `sonnet-high`, P7 = `codex-high` (same presets as full flow, minus P2/P3/P4).
 - **Activation**: `harness start --light "task"` (or `harness run --light …`). `--light` composes with `--auto`.
+- **Measurement source**: rollout 후 scope 분류 점검은 events.jsonl schema를 늘리지 않고 `.harness/<runId>/gate-7-raw.txt` verdict-raw artifact를 샘플링해 수행한다. rollback threshold는 아직 codify되지 않았다.
 - **When full flow is still right**: migration/security/contract work, or any task where an independent pre-impl review adds real value.
 
 ---
@@ -231,8 +233,8 @@ Focus review on changes within the harness ranges above.
 
 **Outcomes**:
 - **APPROVE**: `run.status = "completed"`, `currentPhase = 8` (terminal sentinel)
-- **REJECT** (retries < 3): Phase 5 reopens with `gate-7-feedback.md` + any prior `verify-feedback.md`. `gateRetries[7]` increments. `verifyRetries` resets.
-- **REJECT** (retries ≥ 3): Escalation menu
+- **REJECT** (retries < limit): full flow는 Phase 5 reopen. light flow는 `Scope: impl` 이면 Phase 5 reopen, `Scope: design|mixed|missing` 이면 Phase 1 reopen. `gate-7-feedback.md` 는 저장되고, light flow의 Phase 1 reopen 경로에서는 `carryoverFeedback` 으로 다시 전달된다. `gateRetries[7]` increments. `verifyRetries` resets.
+- **REJECT** (retries ≥ limit): Escalation menu. retry limit은 full 3 / light 5.
 - **Error**: Retry/Skip/Quit menu
 
 ---

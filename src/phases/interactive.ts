@@ -307,7 +307,8 @@ async function waitForPhaseCompletion(
     watcher = chokidar.watch(sentinelPath, {
       persistent: true,
       ignoreInitial: false,
-      usePolling: false,
+      usePolling: true,
+      interval: 200,
     });
 
     watcher.on('add', onSentinelDetected);

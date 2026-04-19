@@ -750,7 +750,7 @@ async function replayPendingAction(
       } else {
         // Gate escalation: targetPhase is the rejected gate (2/4/7)
         const gatePhase = action.targetPhase as 2 | 4 | 7;
-        await handleGateEscalation(gatePhase, comments, state, runDir, cwd, createNoOpInputManager(), new NoopLogger());
+        await handleGateEscalation(gatePhase, comments, action.scope, state, runDir, cwd, createNoOpInputManager(), new NoopLogger());
       }
       if ((state.status as string) === 'paused') return;
       await runPhaseLoop(state, harnessDir, runDir, cwd, createNoOpInputManager(), new NoopLogger(), { value: false });
