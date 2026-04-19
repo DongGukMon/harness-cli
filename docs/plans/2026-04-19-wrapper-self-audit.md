@@ -262,8 +262,8 @@ The Phase 6 `harness-verify.sh` checklist below mirrors `SC1-SC21` exactly. `SC4
   },
   {
     "id": "SC15",
-    "description": "All three wrapper skills include the missing-Deferred fallback instruction",
-    "command": "sh -c 'for f in src/context/skills/harness-phase-1-spec.md src/context/skills/harness-phase-3-plan.md src/context/skills/harness-phase-5-implement.md; do rg -UPq \"(?s)없으면.{0,200}파일 끝.{0,200}## Deferred\" \"$f\" || exit 1; done'",
+    "description": "All three wrapper skills include the missing-Deferred fallback instruction (order: 없으면 → 파일 끝 → ## Deferred). Window widened post-plan review to match the Test Design regex (`[\\s\\S]*`) since Phase 5 has larger inter-token distance than Phase 1/3.",
+    "command": "sh -c 'for f in src/context/skills/harness-phase-1-spec.md src/context/skills/harness-phase-3-plan.md src/context/skills/harness-phase-5-implement.md; do perl -0777 -ne \"\\$f=1 if /없으면.*파일 끝.*## Deferred/s; END{exit(\\$f ? 0 : 1)}\" \"$f\" || exit 1; done'",
     "expect": "exit code 0"
   },
   {
