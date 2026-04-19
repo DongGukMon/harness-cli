@@ -1,6 +1,5 @@
 import fs from 'fs';
 import path, { join } from 'path';
-import { createInterface } from 'readline';
 import { getGitRoot } from '../git.js';
 import { updateLockPid, readLock, releaseLock } from '../lock.js';
 import { findHarnessRoot, clearCurrentRun } from '../root.js';
@@ -16,6 +15,7 @@ import { REQUIRED_PHASE_KEYS, getEffectiveReopenTarget, getRequiredPhaseKeys } f
 import { createSessionLogger } from '../logger.js';
 import { codexHomeFor } from '../runners/codex-isolation.js';
 import type { SessionLogger, HarnessState } from '../types.js';
+import { promptForTask } from '../task-prompt.js';
 
 export interface InnerOptions {
   root?: string;
@@ -90,7 +90,7 @@ export async function innerCommand(runId: string, options: InnerOptions = {}): P
 
     let capturedTask = '';
     while (!capturedTask) {
-      const result = await promptForTask();
+      const result = await promptForTask(state.runId);
       switch (result.kind) {
         case 'task':
           capturedTask = result.value;
@@ -337,37 +337,4 @@ function consumePendingAction(runDir: string, state: HarnessState): void {
     // Best-effort: corrupted pending action is skipped
     try { fs.unlinkSync(pendingPath); } catch { /* ignore */ }
   }
-}
-
-type PromptResult =
-  | { kind: 'task'; value: string }
-  | { kind: 'empty' }
-  | { kind: 'eof' }
-  | { kind: 'interrupt' };
-
-function promptForTask(): Promise<PromptResult> {
-  const rl = createInterface({ input: process.stdin, output: process.stderr });
-
-  return new Promise<PromptResult>((resolve) => {
-    let answered = false;
-
-    rl.on('SIGINT', () => {
-      answered = true;
-      rl.close();
-      resolve({ kind: 'interrupt' });
-    });
-
-    rl.question('  > ', (answer) => {
-      answered = true;
-      rl.close();
-      const trimmed = answer.trim();
-      resolve(trimmed ? { kind: 'task', value: trimmed } : { kind: 'empty' });
-    });
-
-    rl.on('close', () => {
-      if (!answered) {
-        resolve({ kind: 'eof' });
-      }
-    });
-  });
 }

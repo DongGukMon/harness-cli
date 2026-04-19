@@ -1,37 +1,111 @@
 # harness-cli
 
-A TypeScript CLI that orchestrates a 7-phase AI agent development lifecycle: brainstorm → spec gate → plan → plan gate → implement → verify → eval gate.
+`harness-cli` is a TypeScript CLI for running AI-assisted engineering work as a reproducible, resumable tmux workflow.
 
-Each phase runs in its own isolated subprocess inside a **tmux session** — Claude Code for interactive phases (each in a separate tmux window), Codex companion for independent gate review, and a shell script for automated verification. A control panel in tmux window 0 provides real-time phase status while Claude works in adjacent windows. Context is passed between phases through files, not shared sessions, so context bloat and self-review bias are eliminated.
+It supports:
+- a **full 7-phase flow**: spec → spec gate → plan → plan gate → implement → verify → eval gate
+- a **light 4-phase flow** for smaller tasks: design+plan → implement → verify → eval gate
+- **per-phase model preset selection** at start/resume
+- **tmux-based crash recovery** with `resume`, `status`, `list`, `skip`, and `jump`
+- **optional session logging** and a live footer with elapsed time and token totals
 
-The CLI manages phase lifecycle externally: crash-safe state via atomic `state.json` writes, two-level file locking with atomic handoff (outer → inner process), and full crash recovery through `resume` / `jump` / `skip` commands.
+Unlike a single long-lived chat session, harness passes context through files and state, so each phase can restart cleanly and independent review phases do not inherit the implementation session's context.
+
+---
+
+## What actually runs in each phase
+
+By default, harness uses:
+- **Claude** presets for interactive phases (1 / 3 / 5)
+- **Codex** presets for review gates (2 / 4 / 7)
+- the bundled **`harness-verify.sh`** script for phase 6
+
+Those defaults are configurable at runtime. On every `harness start` / `harness resume`, harness prompts for the model preset of every remaining non-verify phase.
+
+Current built-in presets:
+- `opus-max`, `opus-xhigh`, `opus-high`
+- `sonnet-max`, `sonnet-high`
+- `codex-high`, `codex-medium`
+
+Default phase assignments:
+- Phase 1 → `opus-high`
+- Phase 2 → `codex-high`
+- Phase 3 → `sonnet-high`
+- Phase 4 → `codex-high`
+- Phase 5 → `sonnet-high`
+- Phase 7 → `codex-high`
+
+---
+
+## Full flow vs light flow
+
+### Full flow (`harness start "task"`)
+
+```text
+P1 spec → P2 spec gate → P3 plan → P4 plan gate → P5 implement → P6 verify → P7 eval gate
+```
+
+Use the full flow when independent pre-implementation review matters: migrations, API/contract work, security-sensitive changes, or anything where the extra gate cost is worth it.
+
+### Light flow (`harness start --light "task"`)
+
+```text
+P1 design+plan → P5 implement → P6 verify → P7 eval gate
+```
+
+In light flow:
+- phases **2 / 3 / 4** are marked as `skipped`
+- phase 1 must produce a combined design document with `## Complexity`, `## Open Questions`, and `## Implementation Plan`
+- phase 7 can reopen **phase 5** for impl-only feedback, or **phase 1** for design/mixed feedback
+- light-flow gate retry limit is **5** (full flow stays at **3**)
+- the flow is frozen when the run is created, so `harness resume --light` is rejected
+
+---
+
+## Runtime layout inside tmux
+
+Harness runs the workflow inside tmux with a split-pane control surface:
+- **control pane**: current phase, retries, gate/verify output, escalation menus
+- **workspace pane**: the active interactive agent session
+
+Behavior depends on where you launch it:
+- **outside tmux**: creates a dedicated session named `harness-<runId>`
+- **inside tmux**: reuses the current tmux session and creates a `harness-ctrl` window
+
+On macOS, harness tries to open the tmux session automatically in **iTerm2** first, then **Terminal.app**.
+On Linux, or when AppleScript launch fails, harness prints a manual attach command instead:
+
+```bash
+tmux attach -t harness-<runId>
+```
 
 ---
 
 ## Prerequisites
 
-Before using the CLI, install these dependencies (all are checked by preflight):
+Harness is designed for a git working tree and will auto-commit artifacts between phases.
+Install these first:
 
-| Dependency | Purpose | Install |
-|------------|---------|---------|
-| **Node.js ≥ 18** | Runtime for the CLI and Codex companion | [nodejs.org](https://nodejs.org) |
-| **pnpm** | Package manager (for this repo) | `npm install -g pnpm` |
-| **git** | Required; target project must be a git repo with ≥1 commit | built-in on macOS/Linux |
-| **Claude Code CLI** (`claude`) | Used for interactive phases 1/3/5 | [claude.ai/code](https://claude.ai/code) |
-| **Codex companion** | Used for gate phases 2/4/7. Path is auto-detected at `~/.claude/plugins/cache/openai-codex/codex/*/scripts/codex-companion.mjs` | Install the `openai-codex` Claude plugin |
-| **harness-verify.sh** | Used for Phase 6 auto-verification. Expected at `~/.claude/scripts/harness-verify.sh` | Copy from this repo's skill distribution |
-| **jq** | Used by `harness-verify.sh` to parse `checklist.json` | `brew install jq` / `apt install jq` |
-| **tmux** | Hosts the control panel and Claude windows | `brew install tmux` / `apt install tmux` |
+| Dependency | Why it is needed |
+|---|---|
+| Node.js 18+ | CLI runtime |
+| tmux | session / pane orchestration |
+| Claude Code CLI (`claude`) | default interactive runner |
+| Codex CLI (`codex`) | default gate runner and optional interactive runner |
+| `jq` | checklist parsing in phase 6 verify |
+| Git | commit anchors, diffs, artifact commits |
+| Interactive TTY | start/resume model selection and escalation UI |
 
-**Platform**: macOS only. iTerm2 is preferred for automatic window opening; Terminal.app is used as fallback. Linux support is out of scope.
-
-**Terminal**: The CLI opens a new iTerm2 (or Terminal.app) window for the tmux session. Your original terminal is returned immediately. Escalation menus run inside the tmux control window, so a TTY is always available.
+Notes:
+- Supported platforms are **macOS and Linux**.
+- The verify script is resolved from the installed package first, with legacy fallback to `~/.claude/scripts/harness-verify.sh`.
+- If you switch an interactive phase to a Codex preset, harness will use the Codex CLI for that phase too.
 
 ---
 
 ## Installation
 
-Clone the repo and link globally for development:
+For local development:
 
 ```bash
 git clone <repo-url> harness-cli
@@ -41,15 +115,15 @@ pnpm run build
 pnpm link --global
 ```
 
-After linking, the `harness` command is available in any directory.
+After linking, `harness` is available globally.
 
-When you modify source code, rebuild to propagate changes to the global command:
+Rebuild after source changes:
 
 ```bash
 pnpm run build
 ```
 
-To uninstall:
+Remove the global link:
 
 ```bash
 pnpm unlink --global harness-cli
@@ -57,213 +131,184 @@ pnpm unlink --global harness-cli
 
 ---
 
-## Usage
+## Quick start
 
-Run all commands from a target git project (NOT from `harness-cli` itself):
+Run harness from the target project root (or pass `--root` to place `.harness/` elsewhere):
 
 ```bash
 cd /path/to/your/project
 harness --help
 ```
 
-### Start a new run
+Start a run:
 
 ```bash
-harness run "Add GraphQL API with user authentication"
+harness start "Add GraphQL API with user authentication"
+# same as: harness run "Add GraphQL API with user authentication"
 ```
 
-This creates a **tmux session** and opens it in a new iTerm2 window. Your original terminal is returned immediately.
+If you omit the task, harness asks for it inside the control pane.
+That control-pane prompt supports **multiline paste** while still treating a normal `Enter` as submit.
 
-Inside the tmux session:
-- **Window 0 (control panel)**: Shows real-time phase status, gate/verify streaming logs, and escalation menus
-- **Window N (phase-N)**: Claude runs interactively in a separate window per phase
+Typical sequence:
+1. harness creates or finds `.harness/`
+2. it creates the tmux control surface
+3. it prompts for model presets for the remaining phases
+4. it starts phase 1 (or the saved phase on resume)
 
-The control panel displays which phase is active. Switch between windows with `Ctrl-B 0` (control) and `Ctrl-B 1` (Claude).
+---
 
-Phase 1 (brainstorming) starts automatically. Claude asks clarifying questions and writes:
+## Command reference
 
-- `docs/specs/<runId>-design.md` — spec document
-- `.harness/<runId>/decisions.md` — decision log
+### `harness start [task]`
 
-When Phase 1 finishes, the Claude window closes automatically, focus returns to the control panel, and the CLI advances through:
-
-- **Phase 2**: Codex reviews the spec (progress streamed to control panel) → `APPROVE` or `REJECT`
-- **Phase 3**: Claude opens in a new tmux window for planning → `docs/plans/<runId>.md` + `.harness/<runId>/checklist.json`
-- **Phase 4**: Codex reviews spec + plan
-- **Phase 5**: Claude opens in a new tmux window for implementation (must git commit before exit)
-- **Phase 6**: `harness-verify.sh` runs the checklist (output streamed to control panel) → `docs/process/evals/<runId>-eval.md`
-- **Phase 7**: Codex reviews everything (spec + plan + eval report + diff)
-
-### Flags for `harness run`
+Starts a new run.
 
 ```bash
-harness run "task" --allow-dirty   # allow unstaged/untracked changes at start (staged still blocked)
-harness run "task" --auto          # autonomous mode: no escalation menus, limit-exceeded → force-pass
-harness run "task" --root <dir>    # use <dir>/.harness/ instead of the git root
+harness start "task"
+harness run "task"                  # alias
+harness start --light "task"
+harness start --require-clean "task"
+harness start --enable-logging "task"
+harness start --root /tmp/demo "task"
 ```
 
-**Already inside tmux?** The CLI detects `$TMUX` and creates a new window in your current session instead of launching a new terminal — no tmux-in-tmux nesting.
+Flags:
+- `--require-clean` — block if the working tree has any uncommitted changes
+- `--auto` — autonomous mode for escalation handling
+- `--enable-logging` — write session logs under `~/.harness/sessions/...`
+- `--light` — use the 4-phase light flow
+- `--codex-no-isolate` — disable per-run `CODEX_HOME` isolation for Codex subprocesses; not recommended
+- `--strict-tree` — disable phase-5 dirty-tree auto-recovery and write diagnostics instead
+- global `--root <dir>` — use `<dir>/.harness` as the harness root
+
+Important behavior:
+- unstaged/untracked changes are allowed by default
+- staged changes are warned about by default
+- if `--require-clean` is set, both staged and unstaged changes are blocked
+- on first run, harness ensures `.harness/` is present in `.gitignore`
+
+### `harness resume [runId]`
+
+Resumes the current run or a specific run.
 
 ```bash
-# Inside an existing tmux session:
-harness run "task"   # creates a 'harness-ctrl' window in the current session
-```
-
-### Resume a run
-
-If the terminal closes, the tmux session stays alive. Re-attach:
-
-```bash
-harness resume                       # resumes the current run (.harness/current-run pointer)
-harness resume 2026-04-12-graphql-api   # resume a specific runId
+harness resume
+harness resume 2026-04-19-graphql-api
 ```
 
 Resume handles three cases automatically:
-1. **Session + inner alive** — re-attaches to the existing tmux session (opens iTerm2 window)
-2. **Session alive, inner dead** — restarts the phase loop inside the existing tmux session
-3. **No session** — creates a fresh tmux session and starts the phase loop from the saved checkpoint
+1. tmux session alive + inner process alive → reattach only
+2. tmux session alive + inner process dead → restart the inner loop in place
+3. no tmux session → recreate tmux and continue from saved state
 
-Pending actions (from `skip`/`jump`) are consumed on restart.
+On resume, harness again prompts for presets for the remaining phases.
 
-### Inspect state
+### `harness status`
+
+Prints the current run state:
+- run/task/status
+- current phase
+- artifact paths
+- retry counters
+- commit anchors
+- pending action
+
+### `harness list`
+
+Lists all runs under the harness root.
+
+### `harness skip`
+
+Force-passes the current phase.
+
+If the inner process is alive, harness writes a pending action and signals the running session immediately.
+If not, the skip is saved and consumed by the next `harness resume`.
+
+### `harness jump <phase>`
+
+Jumps backward to an earlier phase.
 
 ```bash
-harness status     # print current phase, artifacts, retries, pending action
-harness list       # show all runs in this repo with their status
+harness jump 3
 ```
 
-`status` and `list` are read-only and work without a TTY, so they're safe to use in CI or pipelines.
-
-### Force progression
-
-```bash
-harness skip                  # force-pass the current phase (e.g., skip a re-review cycle)
-harness jump 3                # backward jump — reset to Phase 3 and restart from there
-```
-
-These are **control-plane commands** — they don't acquire the lock. Instead:
-- If the inner process is running: writes a `pending-action.json` file and sends `SIGUSR1` to the inner process. The active Claude window is killed and the phase loop re-enters at the new phase.
-- If no inner process is running: saves the action to `pending-action.json` for the next `harness resume` to pick up.
-
-`jump` is **backward-only** (N must be less than the current phase, or the run must be completed).
+Rules:
+- backward only unless the run is already completed
+- cannot jump into a `skipped` phase in light flow
+- saved/applied the same way as `skip`
 
 ---
 
-## Typical workflow
+## Artifacts and state
 
-```bash
-# 1. Start in a clean git repo
-cd ~/projects/my-app
-git status   # should be clean
+Harness stores run state under `.harness/<runId>/`.
 
-# 2. Kick off a run — a new iTerm2 window opens with the tmux session
-harness run "Add dark mode toggle to the settings page"
-# Your terminal is returned immediately. Work happens in the new window.
+Common artifacts:
+- `.harness/<runId>/state.json` — atomic run state
+- `.harness/<runId>/task.md` — normalized task text
+- `.harness/current-run` — pointer used by `resume`, `status`, `skip`, and `jump`
+- `docs/specs/<runId>-design.md` — spec or combined design doc
+- `docs/plans/<runId>.md` — full-flow implementation plan
+- `.harness/<runId>/checklist.json` — verify checklist
+- `docs/process/evals/<runId>-eval.md` — phase 6 evaluation report
 
-# 3. In the tmux session:
-#    - Ctrl-B 0 → control panel (phase status, gate logs)
-#    - Ctrl-B 1 → active Claude window
-#    If Codex rejects the spec, Claude reopens automatically with the feedback.
-#    If it rejects 3 times, the control panel shows an escalation menu.
+Optional session logging (`--enable-logging`) writes to:
 
-# 4. Close the iTerm2 window — the tmux session survives
-harness status   # see where you are (read-only, works from any terminal)
-harness resume   # re-attach to the running tmux session
-
-# 5. Skip or jump while the session is running (from another terminal):
-harness skip     # sends SIGUSR1 → current phase force-passed
-harness jump 3   # sends SIGUSR1 → resets to Phase 3
+```text
+~/.harness/sessions/<repoKey>/<runId>/
+  meta.json
+  events.jsonl
+  summary.json
 ```
+
+When logging is enabled, the control pane footer shows:
+- current phase / attempt
+- phase elapsed time
+- current session elapsed time
+- cumulative Claude + gate token totals
 
 ---
 
-## How it works
+## Operational notes
 
-### Architecture: outer/inner split
-
-`harness run` is split into two processes:
-
-```
-[Your terminal]                          [iTerm2 — tmux session]
-$ harness run "task"                     Window 0 (control):
-  ├── preflight checks                     harness __inner <runId>
-  ├── state init                           ├── Phase 1: tmux new-window "claude ..."
-  ├── tmux new-session                     │   ├── control shows "Phase 1 ▶"
-  ├── tmux send-keys "__inner"             │   ├── sentinel detected → kill window
-  ├── poll for handoff complete            │   └── control: "Phase 1 ✓"
-  ├── open iTerm2 window                   ├── Phase 2: codex runs in control
-  └── exit(0) ← terminal returned         │   └── stderr streamed live
-                                           ├── Phase 3: tmux new-window "claude ..."
-                                           └── ... through Phase 7
-```
-
-**Outer** (your terminal): preflight → state init → create tmux session → handoff lock to inner → open iTerm2 → exit.
-
-**Inner** (`__inner`, hidden command): claims lock ownership → runs the phase loop inside tmux window 0. Claude sessions spawn as separate tmux windows. Gate/verify output streams to the control panel.
-
-### Phase execution
-
-```
-tmux session "harness-<runId>"
-  ├── Window 0 (control panel)
-  │     harness __inner — phase loop + status display
-  │     Gate/verify stderr streamed here
-  │
-  ├── Window "phase-1" (Claude brainstorm)    ← auto-created, auto-killed
-  ├── Window "phase-3" (Claude planning)      ← auto-created, auto-killed
-  └── Window "phase-5" (Claude implementation)← auto-created, auto-killed
-```
-
-| Phase | Where it runs | What happens |
-|-------|--------------|--------------|
-| 1 | tmux window `phase-1` | Claude brainstorms → spec doc |
-| 2 | control window | Codex reviews spec (stderr streamed) |
-| 3 | tmux window `phase-3` | Claude writes plan + checklist |
-| 4 | control window | Codex reviews plan |
-| 5 | tmux window `phase-5` | Claude implements (must git commit) |
-| 6 | control window | `harness-verify.sh` runs checklist (output streamed) |
-| 7 | control window | Codex reviews everything |
-
-### Lock handoff
-
-The outer process acquires the lock and sets `handoff: true` with its PID. The inner process claims ownership by updating `cliPid` to its own PID and setting `handoff: false`. The outer polls for this transition (max 5 seconds) before exiting. If the inner fails to start, the outer kills the tmux session and releases the lock.
-
-### Execution modes
-
-- **Dedicated mode** (default, outside tmux): Creates a new tmux session `harness-<runId>`. On completion, the entire session is killed.
-- **Reused mode** (inside an existing tmux session): Creates windows in the current session. On completion, only harness-owned windows are killed; the parent session is preserved.
-
-State is persisted in `.harness/<runId>/state.json` (atomically written). All artifacts (`spec`, `plan`, `eval report`) are auto-committed at phase boundaries so the eval gate (Phase 7) can review the full diff.
-
-**For a detailed phase-by-phase breakdown** (which AI agent runs where, model names, output locations, session clear points, state management, signal handling) see [`docs/HOW-IT-WORKS.md`](docs/HOW-IT-WORKS.md).
-
-**For the tmux rearchitecture design** (ADRs on outer/inner split, lock handoff, reused-session mode, control-plane signals), see [`docs/specs/2026-04-14-tmux-rearchitecture-design.md`](docs/specs/2026-04-14-tmux-rearchitecture-design.md).
-
-**For the original CLI design rationale** (ADRs, edge cases), see [`docs/specs/2026-04-12-harness-cli-design.md`](docs/specs/2026-04-12-harness-cli-design.md).
+- Harness uses **atomic state writes** and **lock handoff** between the outer starter process and the inner tmux process.
+- Interactive phases are validated with sentinel files such as `.harness/<runId>/phase-1.done`.
+- Phase 5 requires a clean tree and at least one commit after `implRetryBase` unless it is a reopen path that only fixes non-commit artifacts.
+- `skip` and `jump` are control-plane operations; they do not take the main run lock.
+- Re-selecting presets can invalidate saved gate replay sidecars when the effective runner/model lineage changes.
 
 ---
 
 ## Troubleshooting
 
-**First run in a new project looks hung** — On first use in a project directory, Claude Code prompts you to approve folder access (the "Do you trust the files in this folder?" dialog). The prompt appears in the Claude tmux window, not the control panel, so the control panel sits at *Phase 1 ▶* until you respond. Switch to the Claude window with `Ctrl-B 1` and pick the "trust / proceed" option in the dialog. Subsequent runs in the same directory skip this prompt.
+**First run looks idle on Phase 1**  
+Claude may be waiting in the workspace pane for a directory trust / proceed confirmation. Switch to the workspace pane and approve it.
 
-**`tmux is required. Install with: brew install tmux`** — The CLI requires tmux for its multi-window architecture. Install it and try again.
+**`Codex CLI not found in PATH`**  
+Install the Codex CLI and retry. Harness now validates the actual `codex` binary, not the older companion path.
 
-**`harness requires a git repository`** — Run from inside a git repo with at least one commit.
+**`Could not open a terminal window automatically.`**  
+Expected on Linux and possible on macOS fallback failure. Attach manually with the printed `tmux attach -t ...` command.
 
-**`harness is already running (PID: ...)`** — Another CLI instance holds the lock. If it really is dead, check `.harness/repo.lock` manually.
+**`No active run.`**  
+Run `harness list` to discover existing runs, or start a new one.
 
-**`Cannot start harness run: staged changes exist`** — Harness refuses to start with staged changes because it auto-commits artifacts. Unstage (`git restore --staged .`) or commit them first.
+**`flow is frozen at run creation`**  
+`--light` is a start-time choice only. Resume the existing run as-is, or start a fresh light run.
 
-**`Inner process failed to start within 5 seconds.`** — The `__inner` process didn't claim lock ownership in time. The tmux session is cleaned up automatically. Check for errors with `tmux list-sessions` and retry.
+**Dirty tree failure in phase 5**  
+Retry normally first. If you need a hard failure instead of auto-recovery for ignorable leftovers, start the run with `--strict-tree`.
 
-**`Could not open a terminal window automatically.`** — Neither iTerm2 nor Terminal.app could be launched via AppleScript. The tmux session is still alive — attach manually with the printed `tmux attach -t harness-<runId>` command.
+**Need to inspect current progress from another terminal?**  
+Use `harness status`, `harness skip`, or `harness jump <phase>`.
 
-**`claude @file syntax is required but not supported`** — Upgrade Claude Code CLI to the current version.
+---
 
-**Closed the iTerm2 window by accident?** — The tmux session survives. Run `harness resume` to re-attach, or manually: `tmux attach -t harness-<runId>`.
+## Related docs
 
-**Stuck on a phase?** — `harness status` shows exactly where you are. `harness resume` re-attaches to the running session. `harness skip` / `harness jump N` work from any terminal, even while the session is running.
+- [`docs/HOW-IT-WORKS.md`](docs/HOW-IT-WORKS.md)
+- [`README.ko.md`](README.ko.md)
 
 ---
 
