@@ -37,6 +37,7 @@ function makeState(): HarnessState {
     phasePresets: { '1': 'opus-xhigh', '2': 'codex-high', '3': 'sonnet-high', '4': 'codex-high', '5': 'sonnet-high', '7': 'codex-high' },
     phaseReopenFlags: { '1': false, '3': false, '5': false },
     phaseCodexSessions: { '2': null, '4': null, '7': null },
+    phaseClaudeSessions: { '1': null, '3': null, '5': null },
     lastWorkspacePid: null, lastWorkspacePidStartTime: null,
     tmuxSession: '', tmuxMode: 'dedicated', tmuxWindows: [],
     tmuxControlWindow: '', tmuxWorkspacePane: '', tmuxControlPane: '',

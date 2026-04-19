@@ -18,7 +18,7 @@ import { commitEvalReport, normalizeArtifactCommit } from '../artifact.js';
 import { runInteractivePhase } from './interactive.js';
 import { runGatePhase } from './gate.js';
 import { runVerifyPhase } from './verify.js';
-import { readClaudeSessionUsage } from '../runners/claude-usage.js';
+import { readClaudeSessionUsage, claudeSessionJsonlExists } from '../runners/claude-usage.js';
 import {
   promptChoice,
   printPhaseTransition,
@@ -284,12 +284,47 @@ export async function handleInteractivePhase(
   state.phases[String(phase)] = 'in_progress';
   writeState(runDir, state);
 
-  const attemptId = randomUUID();
-  const phaseStartTs = Date.now();
-
   const isReopen = state.phaseReopenFlags[String(phase)] ?? false;
-  const reopenFromGate = isReopen ? (state.phaseReopenSource[String(phase)] ?? undefined) : undefined;
+  const prevAttemptId = state.phaseAttemptId[String(phase)];
+  const prevClaudeSess = state.phaseClaudeSessions?.[String(phase) as '1' | '3' | '5'] ?? null;
   const preset = getPhasePresetMeta(state, phase);
+
+  // Determine whether to resume a prior Claude session or start fresh.
+  let attemptId: string;
+  let resume = false;
+  let claudeResumeSessionId: string | null = null;
+
+  if (
+    isReopen &&
+    preset?.runner === 'claude' &&
+    typeof prevAttemptId === 'string' && prevAttemptId.trim().length > 0 &&
+    prevClaudeSess !== null &&
+    prevClaudeSess.model === preset.model &&
+    prevClaudeSess.effort === preset.effort &&
+    claudeSessionJsonlExists(prevAttemptId, cwd)
+  ) {
+    attemptId = prevAttemptId;
+    resume = true;
+    claudeResumeSessionId = prevAttemptId;
+  } else {
+    attemptId = randomUUID();
+    if (isReopen && preset?.runner === 'claude') {
+      let reason: string;
+      if (!prevAttemptId || prevAttemptId.trim().length === 0) {
+        reason = 'no prior attempt id';
+      } else if (prevClaudeSess === null) {
+        reason = 'no prior claude session record';
+      } else if (prevClaudeSess.model !== preset.model || prevClaudeSess.effort !== preset.effort) {
+        reason = 'preset incompatible';
+      } else {
+        reason = 'jsonl missing';
+      }
+      process.stderr.write(`⚠️  claude session resume fallback: ${reason}\n`);
+    }
+  }
+
+  const phaseStartTs = Date.now();
+  const reopenFromGate = isReopen ? (state.phaseReopenSource[String(phase)] ?? undefined) : undefined;
 
   // Token capture helper: runner=claude → read ~/.claude/projects/<cwd>/<attemptId>.jsonl;
   // runner=codex → return undefined so the field is omitted from phase_end entirely (§2.5).
@@ -297,8 +332,6 @@ export async function handleInteractivePhase(
     preset?.runner === 'claude'
       ? readClaudeSessionUsage({ sessionId: attemptId, cwd, phaseStartTs })
       : undefined;
-
-  logger.logEvent({ event: 'phase_start', phase, attemptId, reopenFromGate, preset });
 
   let watchdogTimer: NodeJS.Timeout | null = null;
   const clearWatchdog = (): void => {
@@ -324,7 +357,43 @@ export async function handleInteractivePhase(
   }
 
   try {
-    const result = await runInteractivePhase(phase, state, harnessDir, runDir, cwd, attemptId);
+    // Hard prerequisite (R5/D5): purge any stale sentinel before spawning Claude.
+    // Must happen on both resume and fresh paths so the watchdog only observes
+    // sentinels written by the current launch.
+    const sentinelPath = path.join(runDir, `phase-${phase}.done`);
+    let sentinelPurgeErr: unknown;
+    try {
+      fs.rmSync(sentinelPath, { force: true });
+    } catch (e) {
+      sentinelPurgeErr = e;
+    }
+    if (fs.existsSync(sentinelPath)) {
+      throw new Error(
+        `pre-relaunch sentinel purge failed: ${sentinelPath} still present` +
+          (sentinelPurgeErr instanceof Error ? ` (cause: ${sentinelPurgeErr.message})` : ''),
+      );
+    }
+
+    // Lineage atomic commit (R7/D5b): sentinel purge passed — persist both fields together.
+    state.phaseAttemptId[String(phase)] = attemptId;
+    if (preset?.runner === 'claude') {
+      state.phaseClaudeSessions[String(phase) as '1' | '3' | '5'] = {
+        runner: 'claude',
+        model: preset.model,
+        effort: preset.effort,
+      };
+    }
+    writeState(runDir, state);
+    logger.logEvent({
+      event: 'phase_start',
+      phase,
+      attemptId,
+      reopenFromGate,
+      preset,
+      ...(claudeResumeSessionId !== null ? { claudeResumeSessionId } : {}),
+    });
+
+    const result = await runInteractivePhase(phase, state, harnessDir, runDir, cwd, attemptId, resume);
     clearWatchdog();
 
     // Check for control-signal redirect BEFORE branching on result.status.
