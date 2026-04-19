@@ -313,13 +313,33 @@ describe('FileSessionLogger.finalizeSummary', () => {
     const sessionsRoot = path.join(harnessDir, 'sessions-root');
     const logger = new FileSessionLogger('runK', harnessDir, { sessionsRoot });
     logger.writeMeta({ task: 't' });
-    logger.logEvent({ event: 'gate_error', phase: 2, retryIndex: 0, runner: 'codex', error: 'boom', durationMs: 5000, recoveredFromSidecar: false });
-    logger.logEvent({ event: 'gate_error', phase: 2, retryIndex: 0, runner: 'codex', error: 'boom', durationMs: 5000, recoveredFromSidecar: true });
+    logger.logEvent({ event: 'gate_error', phase: 2, retryIndex: 0, runner: 'codex', error: 'boom', durationMs: 5000, tokensTotal: 12000, recoveredFromSidecar: false });
+    logger.logEvent({ event: 'gate_error', phase: 2, retryIndex: 0, runner: 'codex', error: 'boom', durationMs: 5000, tokensTotal: 12000, recoveredFromSidecar: true });
     const state = { status: 'completed', autoMode: false } as HarnessState;
     logger.finalizeSummary(state);
     const repoKey = computeRepoKey(harnessDir);
     const summary = JSON.parse(fs.readFileSync(path.join(sessionsRoot, repoKey, 'runK', 'summary.json'), 'utf-8'));
     expect(summary.totals.gateErrors).toBe(1);
+    expect(summary.totals.gateTokens).toBe(12000);
+  });
+
+  it('accumulates gate_error.tokensTotal into gateTokens (sidecar-only event still counts when no authoritative exists)', () => {
+    const harnessDir = makeTempHarnessDir();
+    const sessionsRoot = path.join(harnessDir, 'sessions-root');
+    const logger = new FileSessionLogger('runP31', harnessDir, { sessionsRoot });
+    logger.writeMeta({ task: 't' });
+    // Phase 2: authoritative with tokensTotal=12000 → counted once
+    logger.logEvent({ event: 'gate_error', phase: 2, retryIndex: 0, runner: 'codex', error: 'boom', durationMs: 5000, tokensTotal: 12000, recoveredFromSidecar: false });
+    // Phase 4: sidecar-only (no authoritative) with tokensTotal=8000 → counted
+    logger.logEvent({ event: 'gate_error', phase: 4, retryIndex: 0, runner: 'codex', error: 'fail', durationMs: 3000, tokensTotal: 8000, recoveredFromSidecar: true });
+    // Phase 7: authoritative with no tokensTotal field → contributes 0, does not NaN
+    logger.logEvent({ event: 'gate_error', phase: 7, retryIndex: 0, runner: 'codex', error: 'oops', durationMs: 2000, recoveredFromSidecar: false });
+    const state = { status: 'completed', autoMode: false } as HarnessState;
+    logger.finalizeSummary(state);
+    const repoKey = computeRepoKey(harnessDir);
+    const summary = JSON.parse(fs.readFileSync(path.join(sessionsRoot, repoKey, 'runP31', 'summary.json'), 'utf-8'));
+    expect(summary.totals.gateErrors).toBe(3);
+    expect(summary.totals.gateTokens).toBe(20000);
   });
 
   it('renameSync failure warns once but does NOT disable logger (retry on next phase per §6.1)', () => {

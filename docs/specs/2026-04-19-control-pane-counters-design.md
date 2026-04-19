@@ -83,7 +83,7 @@ Task prescribes polling; polling at 1 Hz is sufficient and simpler. `fs.readFile
    - `authoritativeErrors`: `Set<phase>` for `gate_error`.
 2. Second pass (token accumulation): for a `gate_verdict` with `recoveredFromSidecar === true`, skip if the key is already in `authoritativeVerdicts`. For `gate_error` with `recoveredFromSidecar === true`, skip if `phase` is in `authoritativeErrors`.
 
-**Intentional divergence from `summary.json.totals.gateTokens` — NOT a consistency guarantee.** `src/logger.ts:218–220` currently increments `gateErrors++` on `gate_error` but does **not** add `e.tokensTotal` to `gateTokens`. The footer counts `gate_error.tokensTotal` (it's spend that occurred and users care about live cost tracking) while `finalizeSummary` does not. The two totals will therefore differ on runs that experience a `gate_error`. This is a known pre-existing asymmetry in `finalizeSummary`; reconciling it is **out of scope** for this spec (recorded as a plan TODO per the round-2 gate feedback). The dedup rule above still applies so sidecar replay does not double-count either side.
+**Converges with `summary.json.totals.gateTokens` (as of P3.1 follow-up).** `src/logger.ts` now accumulates `gate_error.tokensTotal` into `summary.json.totals.gateTokens` using the same `authoritativeErrors` sidecar dedup as the footer. The two totals are therefore symmetric on both healthy and error-containing runs.
 
 ### 3.7 Current phase + attempt (hybrid — state.json + events)
 
