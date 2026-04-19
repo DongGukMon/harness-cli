@@ -23,10 +23,15 @@ vi.mock('../../src/phases/verify.js', () => ({
   isEvalReportValid: vi.fn(() => true),
 }));
 
-vi.mock('../../src/artifact.js', () => ({
-  normalizeArtifactCommit: vi.fn(),
-  runPhase6Preconditions: vi.fn(),
-}));
+vi.mock('../../src/artifact.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/artifact.js')>();
+  return {
+    ...actual,
+    commitEvalReport: vi.fn(),
+    normalizeArtifactCommit: vi.fn(),
+    runPhase6Preconditions: vi.fn(),
+  };
+});
 
 vi.mock('../../src/git.js', () => ({
   getHead: vi.fn(() => 'mock-head'),

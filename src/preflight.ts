@@ -142,7 +142,7 @@ function runItem(item: PreflightItem, cwd?: string): { codexPath?: string } {
           {
             stdio: 'pipe',
             encoding: 'utf-8',
-            timeout: 5000,
+            timeout: 10_000,
             killSignal: 'SIGKILL',
           }
         );
@@ -153,7 +153,7 @@ function runItem(item: PreflightItem, cwd?: string): { codexPath?: string } {
 
         if (timedOut) {
           process.stderr.write(
-            '⚠️  preflight: claude @file check timed out (5s); skipping — runtime failure will be surfaced at phase level if @file is unsupported.\n'
+            '⚠️  preflight: claude @file check delayed (>10s); continuing — runtime failure will be surfaced at phase level if @file is unsupported.\n'
           );
           return {};
         }

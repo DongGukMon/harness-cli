@@ -14,7 +14,7 @@ import {
 } from '../config.js';
 import { writeState } from '../state.js';
 import { getHead } from '../git.js';
-import { normalizeArtifactCommit } from '../artifact.js';
+import { commitEvalReport, normalizeArtifactCommit } from '../artifact.js';
 import { runInteractivePhase } from './interactive.js';
 import { runGatePhase } from './gate.js';
 import { runVerifyPhase } from './verify.js';
@@ -77,6 +77,8 @@ function nextPhase(phase: number): number {
   return phase + 1;
 }
 
+export const WATCHDOG_DELAY_MS = 30_000;
+
 // ─── Sidecar cleanup helpers ──────────────────────────────────────────────────
 
 function deleteGateSidecars(runDir: string, phase: number): void {
@@ -97,13 +99,55 @@ function deleteVerifyResult(runDir: string): void {
 
 // ─── Save gate feedback ───────────────────────────────────────────────────────
 
-function saveGateFeedback(runDir: string, phase: number, comments: string): string {
+function saveGateFeedback(
+  runDir: string,
+  phase: number,
+  comments: string,
+  retryIndex: number,
+  cycleIndex: number,
+): string {
   const feedbackPath = path.join(runDir, `gate-${phase}-feedback.md`);
   const content =
     `# Gate ${phase} Feedback\n\n` +
     `## Reviewer Comments\n\n${comments}\n`;
   fs.writeFileSync(feedbackPath, content);
+
+  const archivePath = path.join(
+    runDir,
+    `gate-${phase}-cycle-${cycleIndex}-retry-${retryIndex}-feedback.md`,
+  );
+  try {
+    fs.writeFileSync(archivePath, content);
+  } catch (err) {
+    printWarning(`Failed to archive Gate ${phase} feedback: ${(err as Error).message}`);
+  }
+
   return feedbackPath;
+}
+
+function saveGateApproveVerdict(
+  runDir: string,
+  phase: number,
+  retryIndex: number,
+  cycleIndex: number,
+  metadata: { codexSessionId?: string; tokensTotal?: number; durationMs?: number },
+): void {
+  const verdictPath = path.join(runDir, `gate-${phase}-cycle-${cycleIndex}-verdict.json`);
+  const payload = {
+    verdict: 'APPROVE' as const,
+    retryIndex,
+    cycleIndex,
+    codexSessionId: metadata.codexSessionId,
+    tokensTotal: metadata.tokensTotal,
+    durationMs: metadata.durationMs,
+    timestamp: new Date().toISOString(),
+  };
+
+  try {
+    fs.writeFileSync(verdictPath, JSON.stringify(payload, null, 2));
+  } catch (err) {
+    printWarning(`Failed to save Gate ${phase} approve verdict: ${(err as Error).message}`);
+  }
 }
 
 // ─── Normalize artifacts for Phase 1/3 ───────────────────────────────────────
@@ -245,6 +289,23 @@ export async function handleInteractivePhase(
 
   logger.logEvent({ event: 'phase_start', phase, attemptId, reopenFromGate, preset });
 
+  let watchdogTimer: NodeJS.Timeout | null = null;
+  const clearWatchdog = (): void => {
+    if (watchdogTimer !== null) {
+      clearTimeout(watchdogTimer);
+      watchdogTimer = null;
+    }
+  };
+
+  if (preset?.runner === 'claude') {
+    watchdogTimer = setTimeout(() => {
+      printWarning(
+        `⚠️  30s 동안 출력 없음 — Claude 작업 창에서 folder-trust 다이얼로그 대기 중일 수 있음 (tmux pane: ${state.tmuxWorkspacePane ?? '?'}).`
+      );
+      watchdogTimer = null;
+    }, WATCHDOG_DELAY_MS);
+  }
+
   // Clear the logging-only reopen source (keep phaseReopenFlags for runInteractivePhase)
   if (state.phaseReopenSource[String(phase)] !== null) {
     state.phaseReopenSource[String(phase)] = null;
@@ -253,11 +314,13 @@ export async function handleInteractivePhase(
 
   try {
     const result = await runInteractivePhase(phase, state, harnessDir, runDir, cwd, attemptId);
+    clearWatchdog();
 
     // Check for control-signal redirect BEFORE branching on result.status.
     // SIGUSR1 skip/jump can mutate state.currentPhase mid-run regardless of
     // whether runInteractivePhase itself returns completed or failed.
     if (state.currentPhase !== phase) {
+      clearWatchdog();
       printInfo(`Phase ${phase} interrupted by control signal → phase ${state.currentPhase}`);
       renderControlPanel(state);
       logger.logEvent({
@@ -277,6 +340,7 @@ export async function handleInteractivePhase(
         try {
           normalizeInteractiveArtifacts(phase, state, cwd);
         } catch (err) {
+          clearWatchdog();
           printError(`Phase ${phase} artifact commit failed: ${(err as Error).message}`);
           state.phases[String(phase)] = 'error';
           savePausedAtHead(state, cwd);
@@ -316,6 +380,7 @@ export async function handleInteractivePhase(
       const next = nextPhase(phase);
       state.currentPhase = next;
 
+      clearWatchdog();
       renderControlPanel(state);
       writeState(runDir, state);
 
@@ -339,6 +404,7 @@ export async function handleInteractivePhase(
       }
     } else {
       // Normal failure (redirect case already handled above)
+      clearWatchdog();
       state.phases[String(phase)] = 'failed';
       savePausedAtHead(state, cwd);
       printError(`Phase ${phase} failed`);
@@ -354,6 +420,7 @@ export async function handleInteractivePhase(
       });
     }
   } catch (err) {
+    clearWatchdog();
     const thrownTokens = collectClaudeTokens();
     logger.logEvent({
       event: 'phase_end',
@@ -400,6 +467,14 @@ export async function handleGatePhase(
 
   if (result.type === 'verdict') {
     if (result.verdict === 'APPROVE') {
+      const key = String(phase) as '2' | '4' | '7';
+      const cycleIndex = state.gateEscalationCycles?.[key] ?? 0;
+      saveGateApproveVerdict(runDir, phase, retryIndex, cycleIndex, {
+        codexSessionId: result.codexSessionId,
+        tokensTotal: result.tokensTotal,
+        durationMs: result.durationMs,
+      });
+
       // Emit gate_verdict (skip if legacy sidecar replay with runner undefined)
       if (result.runner) {
         logger.logEvent({
@@ -528,7 +603,9 @@ export async function handleGateReject(
 
     // Save feedback and reopen. For Phase 7 reject → Phase 5, include any existing
     // verify-feedback.md so Claude sees BOTH the eval gate feedback and prior verify failures.
-    const feedbackPath = saveGateFeedback(runDir, phase, comments);
+    const key = String(phase) as '2' | '4' | '7';
+    const cycleIndex = state.gateEscalationCycles?.[key] ?? 0;
+    const feedbackPath = saveGateFeedback(runDir, phase, comments, retryIndex, cycleIndex);
     const feedbackBytes = fs.statSync(feedbackPath).size;
     const feedbackPreview = comments.slice(0, 200);
 
@@ -585,13 +662,14 @@ export async function handleGateReject(
     writeState(runDir, state);
   } else {
     // Escalation
-    await handleGateEscalation(phase, comments, state, runDir, cwd, inputManager, logger);
+    await handleGateEscalation(phase, comments, retryIndex, state, runDir, cwd, inputManager, logger);
   }
 }
 
 export async function handleGateEscalation(
   phase: GatePhase,
   comments: string,
+  retryIndex: number,
   state: HarnessState,
   runDir: string,
   cwd: string,
@@ -619,12 +697,25 @@ export async function handleGateEscalation(
   });
 
   if (choice === 'C') {
+    const key = String(phase) as '2' | '4' | '7';
+    const cycleIndex = state.gateEscalationCycles?.[key] ?? 0;
+
     // Reset retries, reopen
     state.gateRetries[String(phase)] = 0;
     if (phase === 7) state.verifyRetries = 0;
 
     const targetInteractive = getReopenTarget(state.flow, phase);
-    const feedbackPath = saveGateFeedback(runDir, phase, comments);
+    const feedbackPath = saveGateFeedback(runDir, phase, comments, retryIndex, cycleIndex);
+    const feedbackPaths = [feedbackPath];
+    if (phase === 7) {
+      const verifyFeedback = path.join(runDir, 'verify-feedback.md');
+      if (fs.existsSync(verifyFeedback)) {
+        feedbackPaths.push(verifyFeedback);
+      }
+    }
+
+    state.gateEscalationCycles = state.gateEscalationCycles ?? {};
+    state.gateEscalationCycles[key] = (state.gateEscalationCycles[key] ?? 0) + 1;
 
     if (state.flow === 'light' && phase === 7) {
       state.carryoverFeedback = {
@@ -644,7 +735,7 @@ export async function handleGateEscalation(
       type: 'reopen_phase',
       targetPhase: targetInteractive,
       sourcePhase: phase as PhaseNumber,
-      feedbackPaths: [feedbackPath],
+      feedbackPaths,
     };
     state.phases[String(targetInteractive)] = 'pending';
     state.phaseReopenFlags[String(targetInteractive)] = true;
@@ -657,7 +748,9 @@ export async function handleGateEscalation(
   } else {
     // Quit
     const targetInteractive = getReopenTarget(state.flow, phase);
-    const feedbackPath = saveGateFeedback(runDir, phase, comments);
+    const key = String(phase) as '2' | '4' | '7';
+    const cycleIndex = state.gateEscalationCycles?.[key] ?? 0;
+    const feedbackPath = saveGateFeedback(runDir, phase, comments, retryIndex, cycleIndex);
     state.pendingAction = {
       type: 'show_escalation',
       targetPhase: phase as PhaseNumber,
@@ -796,13 +889,8 @@ export async function handleVerifyPhase(
     logger.logEvent({ event: 'verify_result', passed: true, retryIndex, durationMs });
 
     // Commit the eval report artifact (spec requires committed eval report before Phase 7)
-    const evalReportPath = path.join(cwd, state.artifacts.evalReport);
     try {
-      normalizeArtifactCommit(
-        evalReportPath,
-        `harness[${state.runId}]: Phase 6 — eval report`,
-        cwd
-      );
+      commitEvalReport(state, cwd);
     } catch (err) {
       // Commit failure → phase goes to error, pendingAction for retry
       printError(`Failed to commit eval report: ${(err as Error).message}`);

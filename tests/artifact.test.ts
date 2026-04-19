@@ -140,7 +140,7 @@ describe('runPhase6Preconditions', () => {
     expect(status).toBe('');
   });
 
-  it('git rm + commit for tracked eval report', () => {
+  it('git rm stages tracked eval report deletion without creating a reset commit', () => {
     // Create, add and commit the eval report so it is tracked
     writeRepoFile(repo.path, evalReportPath, '# Eval Report');
     execSync(`git add "${evalReportPath}" && git commit -m "add eval report"`, {
@@ -153,12 +153,14 @@ describe('runPhase6Preconditions', () => {
     runPhase6Preconditions(evalReportPath, 'my-run', repo.path);
 
     expect(existsSync(fullPath)).toBe(false);
-    // A new commit should have been created
+    // Reset is staged only; the commit is deferred to the next eval report write.
     const headAfter = getHead(repo.path);
-    expect(headAfter).not.toBe(headBefore);
-    // Tree should be clean
-    const status = execSync('git status --porcelain', { cwd: repo.path, encoding: 'utf-8' }).trim();
-    expect(status).toBe('');
+    expect(headAfter).toBe(headBefore);
+    const stagedDeletion = execSync(`git diff --cached --name-status -- "${evalReportPath}"`, {
+      cwd: repo.path,
+      encoding: 'utf-8',
+    }).trim();
+    expect(stagedDeletion).toBe(`D\t${evalReportPath}`);
   });
 
   it('aborts when non-eval files are staged', () => {

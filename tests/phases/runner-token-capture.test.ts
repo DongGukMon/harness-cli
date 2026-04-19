@@ -28,10 +28,15 @@ vi.mock('../../src/ui.js', () => ({
   printInfo: vi.fn(),
 }));
 
-vi.mock('../../src/artifact.js', () => ({
-  normalizeArtifactCommit: vi.fn().mockReturnValue(true),
-  runPhase6Preconditions: vi.fn(),
-}));
+vi.mock('../../src/artifact.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/artifact.js')>();
+  return {
+    ...actual,
+    commitEvalReport: vi.fn(),
+    normalizeArtifactCommit: vi.fn().mockReturnValue(true),
+    runPhase6Preconditions: vi.fn(),
+  };
+});
 
 vi.mock('../../src/git.js', () => ({
   getHead: vi.fn().mockReturnValue('mock-head-sha'),

@@ -84,6 +84,16 @@ export function getFileStatus(filePath: string, cwd?: string): string {
   }
 }
 
+// Returns true iff the file is staged for deletion in the index.
+export function isStagedDeletion(filePath: string, cwd?: string): boolean {
+  try {
+    const output = exec(`git diff --cached --name-status -- "${normalize(filePath)}"`, cwd);
+    return output.startsWith('D\t');
+  } catch {
+    return false;
+  }
+}
+
 // Generate a runId from task description.
 // Rules:
 // 1. Lowercase

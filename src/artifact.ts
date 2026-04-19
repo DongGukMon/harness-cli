@@ -1,7 +1,8 @@
 import { execSync } from 'child_process';
 import { existsSync, unlinkSync } from 'fs';
 import { join } from 'path';
-import { getStagedFiles, getFileStatus } from './git.js';
+import { getStagedFiles, getFileStatus, isStagedDeletion } from './git.js';
+import type { HarnessState } from './types.js';
 
 function exec(cmd: string, cwd?: string): string {
   return execSync(cmd, { cwd, encoding: 'utf-8' }).trim();
@@ -12,8 +13,7 @@ function exec(cmd: string, cwd?: string): string {
  * Returns true if a new commit was created, false if no-op.
  *
  * Checks staged changes before committing:
- * - No staged files → git add + commit
- * - Only target file staged → commit directly (interrupted normalize recovery)
+ * - Only target file staged → git add + commit current working-tree state
  * - Other files staged → throw error
  */
 export function normalizeArtifactCommit(filePath: string, message: string, cwd?: string): boolean {
@@ -34,16 +34,8 @@ export function normalizeArtifactCommit(filePath: string, message: string, cwd?:
   // Step 2: Check staged files
   const stagedFiles = getStagedFiles(cwd);
 
-  if (stagedFiles.length === 0) {
-    // No staged files → git add + commit
+  if (stagedFiles.length === 0 || (stagedFiles.length === 1 && stagedFiles[0] === filePath)) {
     exec(`git add "${filePath}"`, cwd);
-    exec(`git commit -m "${message}"`, cwd);
-    return true;
-  }
-
-  // Check if only the target file is staged
-  if (stagedFiles.length === 1 && stagedFiles[0] === filePath) {
-    // Only target file staged → skip git add, just commit (recovery from interrupted normalize)
     exec(`git commit -m "${message}"`, cwd);
     return true;
   }
@@ -55,7 +47,7 @@ export function normalizeArtifactCommit(filePath: string, message: string, cwd?:
 /**
  * Run Phase 6 preconditions in order:
  * 1. Check tree clean (excluding eval report) — abort if other files dirty
- * 2. Clean up eval report (untracked→rm, staged-new→restore+rm, tracked→git rm+commit)
+ * 2. Clean up eval report (untracked→rm, staged-new→restore+rm, tracked→git rm)
  * 3. Final clean-tree verification
  */
 export function runPhase6Preconditions(evalReportPath: string, runId: string, cwd?: string): void {
@@ -94,17 +86,15 @@ export function runPhase6Preconditions(evalReportPath: string, runId: string, cw
   // Step 3: Eval report cleanup
   const fileStatus = getFileStatus(evalReportPath, cwd);
 
-  if (fileStatus === '') {
+  if (isStagedDeletion(evalReportPath, cwd)) {
+    // Already reset — no-op
+  } else if (fileStatus === '') {
     // Either not present or tracked and clean — check physical existence
     if (!existsSync(join(resolvedCwd, evalReportPath))) {
       // Not present → no-op
     } else {
-      // Tracked and clean → git rm + commit
+      // Tracked and clean → git rm
       exec(`git rm -f "${evalReportPath}"`, cwd);
-      exec(
-        `git commit -m "harness[${runId}]: Phase 6 — reset eval report for re-verification"`,
-        cwd
-      );
     }
   } else if (fileStatus.startsWith('??')) {
     // Untracked → rm
@@ -114,17 +104,36 @@ export function runPhase6Preconditions(evalReportPath: string, runId: string, cw
     exec(`git restore --staged "${evalReportPath}"`, cwd);
     unlinkSync(join(resolvedCwd, evalReportPath));
   } else {
-    // Any other non-empty status → treat as tracked → git rm + commit
+    // Any other non-empty status → treat as tracked → git rm
     exec(`git rm -f "${evalReportPath}"`, cwd);
-    exec(
-      `git commit -m "harness[${runId}]: Phase 6 — reset eval report for re-verification"`,
-      cwd
-    );
   }
 
   // Step 4: Final clean check
   const finalStatus = exec('git status --porcelain', cwd);
   if (finalStatus !== '') {
-    throw new Error('Working tree is not clean after eval report cleanup');
+    const evalReportDeleted = isStagedDeletion(evalReportPath, cwd);
+    const dirtyLines = finalStatus
+      .split('\n')
+      .filter(Boolean)
+      .filter((line) => {
+        const linePath = line.slice(3);
+        if (linePath !== evalReportPath && !evalReportPath.startsWith(linePath)) {
+          return true;
+        }
+        return linePath === evalReportPath && !evalReportDeleted;
+      });
+
+    if (dirtyLines.length > 0) {
+      throw new Error('Working tree is not clean after eval report cleanup');
+    }
   }
+
+  void runId;
+}
+
+export function commitEvalReport(state: HarnessState, cwd: string): void {
+  const filePath = state.artifacts.evalReport;
+  const k = state.verifyRetries + 1;
+  const message = `harness[${state.runId}]: Phase 6 — rev ${k} eval report`;
+  normalizeArtifactCommit(filePath, message, cwd);
 }

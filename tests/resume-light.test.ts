@@ -5,9 +5,14 @@ import path from 'path';
 import { createInitialState } from '../src/state.js';
 import type { HarnessState } from '../src/types.js';
 
-vi.mock('../src/artifact.js', () => ({
-  normalizeArtifactCommit: vi.fn(),
-}));
+vi.mock('../src/artifact.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/artifact.js')>();
+  return {
+    ...actual,
+    commitEvalReport: vi.fn(),
+    normalizeArtifactCommit: vi.fn(),
+  };
+});
 vi.mock('../src/git.js', () => ({
   getHead: vi.fn(() => 'head-sha'),
   isAncestor: vi.fn(() => true),

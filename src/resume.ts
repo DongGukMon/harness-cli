@@ -3,7 +3,7 @@ import { execSync } from 'child_process';
 import { isAbsolute, join } from 'path';
 import { getHead, isAncestor, detectExternalCommits } from './git.js';
 import { readState, writeState } from './state.js';
-import { normalizeArtifactCommit } from './artifact.js';
+import { commitEvalReport, normalizeArtifactCommit } from './artifact.js';
 import { checkGateSidecars } from './phases/gate.js';
 import { readVerifyResult, isEvalReportValid } from './phases/verify.js';
 import {
@@ -14,7 +14,7 @@ import {
 } from './phases/runner.js';
 import { InputManager } from './input.js';
 import { NoopLogger } from './logger.js';
-import { getPhaseArtifactFiles } from './config.js';
+import { GATE_RETRY_LIMIT, getPhaseArtifactFiles } from './config.js';
 import { isValidChecklistSchema } from './phases/checklist.js';
 import type { HarnessState, PhaseNumber } from './types.js';
 
@@ -168,9 +168,8 @@ async function recoverGeneralState(
   if (phase === 6 && phaseStatus === 'error') {
     const evalReportPath = join(cwd, state.artifacts.evalReport);
     if (isEvalReportValid(evalReportPath)) {
-      const { normalizeArtifactCommit: commit } = await import('./artifact.js');
       try {
-        commit(state.artifacts.evalReport, `harness[${state.runId}]: Phase 6 — eval report`, cwd);
+        commitEvalReport(state, cwd);
         const head = getHead(cwd);
         state.evalCommit = head;
         state.verifiedAtHead = head;
@@ -210,12 +209,11 @@ async function applyStoredVerifyResult(
   cwd: string
 ): Promise<void> {
   const evalReportPath = join(cwd, state.artifacts.evalReport);
-  const { normalizeArtifactCommit: commit } = await import('./artifact.js');
 
   if (result.exitCode === 0 && isEvalReportValid(evalReportPath)) {
     // PASS: commit the eval report (normalize_artifact_commit), set anchors, advance
     try {
-      commit(state.artifacts.evalReport, `harness[${state.runId}]: Phase 6 — eval report`, cwd);
+      commitEvalReport(state, cwd);
     } catch {
       // Commit failed — leave as error for runner to handle
       state.phases['6'] = 'error';
@@ -740,7 +738,10 @@ async function replayPendingAction(
       let comments = '';
       if (action.feedbackPaths.length > 0) {
         try {
-          comments = readFileSync(action.feedbackPaths[0], 'utf-8');
+          const raw = readFileSync(action.feedbackPaths[0], 'utf-8');
+          const marker = '## Reviewer Comments\n\n';
+          const idx = raw.indexOf(marker);
+          comments = idx >= 0 ? raw.slice(idx + marker.length).trimEnd() : raw;
         } catch { /* best-effort */ }
       }
 
@@ -750,7 +751,20 @@ async function replayPendingAction(
       } else {
         // Gate escalation: targetPhase is the rejected gate (2/4/7)
         const gatePhase = action.targetPhase as 2 | 4 | 7;
-        await handleGateEscalation(gatePhase, comments, state, runDir, cwd, createNoOpInputManager(), new NoopLogger());
+        const retryIndex = Math.max(
+          0,
+          (state.gateRetries[String(gatePhase)] ?? GATE_RETRY_LIMIT) - 1,
+        );
+        await handleGateEscalation(
+          gatePhase,
+          comments,
+          retryIndex,
+          state,
+          runDir,
+          cwd,
+          createNoOpInputManager(),
+          new NoopLogger(),
+        );
       }
       if ((state.status as string) === 'paused') return;
       await runPhaseLoop(state, harnessDir, runDir, cwd, createNoOpInputManager(), new NoopLogger(), { value: false });
