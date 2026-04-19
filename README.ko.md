@@ -1,6 +1,6 @@
-# harness-cli
+# phase-harness
 
-`harness-cli`는 AI 기반 개발 작업을 **재현 가능하고 재개 가능한 tmux 워크플로우**로 실행하는 TypeScript CLI입니다.
+`phase-harness`는 AI 기반 개발 작업을 **재현 가능하고 재개 가능한 tmux 워크플로우**로 실행하는 TypeScript CLI입니다.
 
 지원 기능:
 - **7단계 full flow**: spec → spec gate → plan → plan gate → implement → verify → eval gate
@@ -109,11 +109,19 @@ Harness는 git working tree를 기준으로 동작하며, phase 경계에서 art
 
 ## 설치
 
+npm에서 전역 설치:
+
+```bash
+npm install -g phase-harness
+# or
+pnpm add -g phase-harness
+```
+
 로컬 개발 기준 설치:
 
 ```bash
-git clone <repo-url> harness-cli
-cd harness-cli
+git clone <repo-url> phase-harness
+cd phase-harness
 pnpm install
 pnpm run build
 pnpm link --global
@@ -130,7 +138,7 @@ pnpm run build
 전역 링크 제거:
 
 ```bash
-pnpm unlink --global harness-cli
+pnpm unlink --global phase-harness
 ```
 
 ---
