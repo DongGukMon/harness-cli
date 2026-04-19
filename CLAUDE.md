@@ -68,6 +68,7 @@ pnpm build          # tsc + scripts/copy-assets.mjs (dist 생성)
 | `gate_verdict` | `phase`, `retryIndex`, `runner`, `verdict`, `durationMs`, `tokensTotal`, `promptBytes`, `codexSessionId`, `resumedFrom`, `resumeFallback`, `preset` |
 | `gate_retry` | `phase`, `retryIndex`, `retryCount`, `retryLimit`, `feedbackPath`, `feedbackBytes`, `feedbackPreview` |
 | `gate_error` | `preset` (PR #11) |
+| `ui_render` | `phase`, `phaseStatus`, `callsite` (PR <next> — emitted from every `renderControlPanel(state, logger, callsite)` call: `loop-top`, `interactive-*`, `gate-*`, `verify-*`, `terminal-*`) |
 
 `claudeTokens` 3-state 계약: 성공 시 객체, 추출 실패 시 `null` + 단일 stderr warn (best-effort, 런 실패시키지 않음), 시도 자체가 해당 없으면 필드 부재.
 

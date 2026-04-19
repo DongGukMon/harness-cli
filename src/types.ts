@@ -244,6 +244,12 @@ export type LogEvent =
   | (LogEventBase & { event: 'verify_result'; passed: boolean; retryIndex: number; durationMs: number; failedChecks?: string[] })
   | (LogEventBase & { event: 'phase_end'; phase: number; attemptId?: string | null; status: 'completed' | 'failed'; durationMs: number; details?: { reason: string }; claudeTokens?: ClaudeTokens | null })
   | (LogEventBase & { event: 'state_anomaly'; kind: string; details: Record<string, unknown> })
+  | (LogEventBase & {
+      event: 'ui_render';
+      phase: number;
+      phaseStatus: PhaseStatus;
+      callsite: string;
+    })
   | (LogEventBase & { event: 'session_end'; status: 'completed' | 'paused' | 'interrupted'; totalWallMs: number });
 
 export interface SessionMeta {

@@ -217,7 +217,7 @@ When enabled, harness writes under:
   summary.json
 ```
 
-Important logged events include `phase_start`, `phase_end`, `gate_verdict`, `gate_error`, `gate_retry`, `verify_result`, and `session_end`.
+Important logged events include `phase_start`, `phase_end`, `gate_verdict`, `gate_error`, `gate_retry`, `verify_result`, `ui_render`, and `session_end`.
 The control-pane footer aggregates elapsed time plus Claude/gate token totals from those logs.
 
 ---

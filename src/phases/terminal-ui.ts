@@ -132,7 +132,7 @@ export async function enterFailedTerminalState(
   const sidecarReplayAllowed = { value: false };
 
   while (true) {
-    renderControlPanel(state);
+    renderControlPanel(state, logger, 'terminal-failed');
 
     const failedPhase = findFailedPhase(state);
     if (failedPhase !== null) {
@@ -199,7 +199,7 @@ export async function enterCompleteTerminalState(
   abortSignal?: AbortSignal,
 ): Promise<void> {
   void cwd;
-  renderControlPanel(state);
+  renderControlPanel(state, logger, 'terminal-complete');
 
   process.stderr.write('\n');
   printInfo('Run complete.');

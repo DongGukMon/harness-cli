@@ -1,7 +1,7 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { renderControlPanel, renderModelSelection } from '../src/ui.js';
 import { createInitialState } from '../src/state.js';
-import type { HarnessState } from '../src/types.js';
+import type { HarnessState, SessionLogger } from '../src/types.js';
 
 function makeState(overrides: Partial<HarnessState> = {}): HarnessState {
   const base = createInitialState('run', 't', 'base', false);
@@ -99,5 +99,68 @@ describe('renderModelSelection — flow-aware row visibility', () => {
     }
     const transcript = captured.join('\n');
     expect(transcript).toMatch(/Phase 1 \(Spec 작성\)/);
+  });
+});
+
+function makeLogger(): SessionLogger {
+  return {
+    logEvent: vi.fn(),
+    writeMeta: vi.fn(),
+    updateMeta: vi.fn(),
+    finalizeSummary: vi.fn(),
+    close: vi.fn(),
+    hasBootstrapped: () => false,
+    hasEmittedSessionOpen: () => true,
+    getStartedAt: () => 0,
+    getEventsPath: () => null,
+  };
+}
+
+describe('renderControlPanel — ui_render emission', () => {
+  it('emits ui_render when both logger and callsite are provided', () => {
+    const state = makeState({ flow: 'full', currentPhase: 5 });
+    state.phases['5'] = 'in_progress';
+    const logger = makeLogger();
+    const captured: string[] = [];
+    const origErr = console.error;
+    console.error = (...args: any[]) => { captured.push(args.join(' ')); };
+    try {
+      renderControlPanel(state, logger, 'unit-test');
+    } finally {
+      console.error = origErr;
+    }
+    expect(logger.logEvent).toHaveBeenCalledWith({
+      event: 'ui_render',
+      phase: 5,
+      phaseStatus: 'in_progress',
+      callsite: 'unit-test',
+    });
+  });
+
+  it('does not emit when logger is omitted', () => {
+    const state = makeState();
+    const captured: string[] = [];
+    const origErr = console.error;
+    console.error = (...args: any[]) => { captured.push(args.join(' ')); };
+    try {
+      renderControlPanel(state); // legacy single-arg call
+    } finally {
+      console.error = origErr;
+    }
+    // No assertion on logger; the test passes as long as no throw and no logger call.
+  });
+
+  it('does not emit when callsite is omitted', () => {
+    const state = makeState();
+    const logger = makeLogger();
+    const captured: string[] = [];
+    const origErr = console.error;
+    console.error = (...args: any[]) => { captured.push(args.join(' ')); };
+    try {
+      renderControlPanel(state, logger);
+    } finally {
+      console.error = origErr;
+    }
+    expect(logger.logEvent).not.toHaveBeenCalled();
   });
 });

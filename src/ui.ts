@@ -1,6 +1,6 @@
 import { MODEL_PRESETS, REQUIRED_PHASE_KEYS, getPresetById } from './config.js';
 import type { FooterSummary } from './metrics/footer-aggregator.js';
-import type { HarnessState, FlowMode } from './types.js';
+import type { HarnessState, FlowMode, SessionLogger } from './types.js';
 import type { InputManager } from './input.js';
 
 // ANSI color codes
@@ -31,7 +31,11 @@ function phaseLabel(phase: number, flow: FlowMode = 'full'): string {
   return labels[phase] ?? `Phase ${phase}`;
 }
 
-export function renderControlPanel(state: HarnessState): void {
+export function renderControlPanel(
+  state: HarnessState,
+  logger?: SessionLogger,
+  callsite?: string,
+): void {
   process.stdout.write('\x1b[2J\x1b[H'); // clear screen
   console.error(separator());
   console.error(`${GREEN}▶${RESET} Harness Control Panel`);
@@ -56,6 +60,16 @@ export function renderControlPanel(state: HarnessState): void {
   }
   console.error('');
   console.error(separator());
+
+  if (logger !== undefined && callsite !== undefined) {
+    const phaseStatus = state.phases[String(state.currentPhase)] ?? 'pending';
+    logger.logEvent({
+      event: 'ui_render',
+      phase: state.currentPhase,
+      phaseStatus,
+      callsite,
+    });
+  }
 }
 
 export function formatFooter(summary: FooterSummary, columns: number): string {

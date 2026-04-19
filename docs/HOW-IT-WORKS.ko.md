@@ -217,7 +217,7 @@ light flow에서는 skipped phase로 jump할 수 없습니다.
   summary.json
 ```
 
-주요 이벤트는 `phase_start`, `phase_end`, `gate_verdict`, `gate_error`, `gate_retry`, `verify_result`, `session_end` 등입니다.
+주요 이벤트는 `phase_start`, `phase_end`, `gate_verdict`, `gate_error`, `gate_retry`, `verify_result`, `ui_render`, `session_end` 등입니다.
 control pane footer는 이 로그를 바탕으로 경과 시간과 Claude/gate 토큰 합계를 집계합니다.
 
 ---
