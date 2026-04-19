@@ -171,7 +171,7 @@ describe('inner.ts: consumePendingAction behavior', () => {
     const state: any = makeState({
       currentPhase: 2,
       phases: { '1': 'completed', '2': 'pending', '3': 'pending', '4': 'pending', '5': 'pending', '6': 'pending', '7': 'pending' },
-      phasePresets: { '1': 'opus-max', '2': 'codex-high', '3': 'sonnet-high', '4': 'codex-high', '5': 'sonnet-high', '7': 'codex-high' },
+      phasePresets: { '1': 'opus-xhigh', '2': 'codex-high', '3': 'sonnet-high', '4': 'codex-high', '5': 'sonnet-high', '7': 'codex-high' },
       phaseReopenFlags: { '1': false, '3': false, '5': false },
       phaseCodexSessions: {
         '2': { sessionId: 'sess-aa', runner: 'codex', model: 'gpt-5.4', effort: 'high', lastOutcome: 'reject' },

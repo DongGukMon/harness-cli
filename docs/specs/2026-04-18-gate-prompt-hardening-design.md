@@ -33,7 +33,7 @@ Key decisions:
 - `phase_start` events carry the preset used, for all phases where a runner preset is applicable (interactive phases 1/3/5 and gate phases 2/4/7).
 
 ### Non-Goals (this PR)
-- Changing the Phase 1 default preset (opus-max → opus-high) — defer; `quality > speed > tokens` preference concern.
+- Changing the Phase 1 default preset (opus-xhigh → opus-high) — defer; `quality > speed > tokens` preference concern.
 - Discouraging skill auto-loading or otherwise tuning overengineering — not reproduced as a hard failure yet; needs more data.
 - Isolating Codex's HOME / disabling `~/.codex/AGENTS.md` globally — broader change, defer until prompt-level fix proves insufficient.
 - Reducing Phase 3 advisor cost *inside* the gate itself (gate reviewer uses no advisor).
@@ -162,7 +162,7 @@ No manual end-to-end retest required for this PR; dog-fooding will re-run the fu
 
 ## 5. Out of Scope / Deferred
 
-- Phase 1 default preset tuning (opus-max → opus-high) — user-preference-sensitive.
+- Phase 1 default preset tuning (opus-xhigh → opus-high) — user-preference-sensitive.
 - Skill-load-time reduction in interactive phases — low-confidence fix, needs more data.
 - Per-phase token accounting for Claude (not just Codex gates).
 - Pane layout auto-width / readability at narrow terminals.

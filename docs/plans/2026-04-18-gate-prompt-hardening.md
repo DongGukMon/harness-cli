@@ -741,7 +741,7 @@ Then create a PR via `gh pr create` with the title `fix: gate prompt hardening +
 
 ## Deferred / out-of-scope (explicitly not in this PR)
 
-- Phase 1 default preset tuning (`opus-max` → `opus-high`).
+- Phase 1 default preset tuning (`opus-xhigh` → `opus-high`).
 - Skill-load-time reduction (separate investigation).
 - Isolating `HOME` when spawning Codex to skip `~/.codex/AGENTS.md` globally.
 - Per-phase Claude token accounting (not just Codex).

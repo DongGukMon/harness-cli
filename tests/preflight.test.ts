@@ -338,9 +338,9 @@ describe('runRunnerAwarePreflight', () => {
   });
 
   it('skips codex preflight when all phases use claude runner', () => {
-    // opus-max, sonnet-high, sonnet-high are all claude-runner presets
+    // opus-xhigh, sonnet-high, sonnet-high are all claude-runner presets
     const presets = {
-      '1': 'opus-max',
+      '1': 'opus-xhigh',
       '3': 'sonnet-high',
       '5': 'sonnet-high',
     };

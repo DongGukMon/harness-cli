@@ -57,7 +57,7 @@
 | ADR-3 | Light Phase 1 산출물: 단일 결합 문서 + checklist 분리 유지 |
 | ADR-4 | Light Phase 7은 REJECT 시 항상 Phase 1을 reopen. Phase 5 reopen은 verify FAIL 전용 |
 | ADR-5 | 활성화: `harness start --light` 플래그. `state.flow: 'full' \| 'light'` 필드로 영속화 |
-| ADR-6 | Light mode 기본 preset: `opus-max`(P1) / `sonnet-high`(P5) / `codex-high`(P7) |
+| ADR-6 | Light mode 기본 preset: `opus-xhigh`(P1) / `sonnet-high`(P5) / `codex-high`(P7) |
 | ADR-7 | `state.flow` 마이그레이션 기본값 `'full'`. `carryoverFeedback` 마이그레이션 기본값 `null` |
 | ADR-8 | `--light` + `--auto` 직교. 동시 사용 허용 |
 | ADR-9 | `/harness` 스킬 통합: 본 스펙 범위 밖 (구현 시점 별도 설계). `--light` 플래그 전파가 기본 방향 |
@@ -97,7 +97,7 @@
 | | |
 |---|---|
 | **Agent** | Claude Code CLI |
-| **Model (default)** | `opus-max` (Claude Opus 4.7 / xHigh) |
+| **Model (default)** | `opus-xhigh` (Claude Opus 4.7 / xHigh) |
 | **Mode** | Interactive |
 | **Input** | `.harness/<runId>/task.md` + (reopen 시) `gate-7-feedback.md` |
 | **Output** | `docs/specs/<runId>-design.md` (결합 문서)<br>`.harness/<runId>/checklist.json` (verify 검증 항목, 여전히 별도 파일)<br>`.harness/<runId>/decisions.md` (Decision log) |
@@ -372,7 +372,7 @@ export interface HarnessState {
 ```ts
 // src/config.ts — 신규 상수 추가
 export const LIGHT_PHASE_DEFAULTS: Record<number, string> = {
-  1: 'opus-max',      // design (결합)
+  1: 'opus-xhigh',      // design (결합)
   5: 'sonnet-high',   // impl
   7: 'codex-high',    // eval-gate
   // 2/3/4는 skip, 6은 runner 없음

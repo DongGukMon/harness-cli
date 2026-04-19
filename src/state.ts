@@ -63,6 +63,13 @@ export function migrateState(raw: any): HarnessState {
   if (!raw.phasePresets || typeof raw.phasePresets !== 'object') {
     raw.phasePresets = {};
   }
+  // Legacy rename: 'opus-max' → 'opus-xhigh' (same lineage; id only). Apply
+  // before the unknown-id reset below so existing runs retain user intent.
+  for (const phaseKey of Object.keys(raw.phasePresets)) {
+    if (raw.phasePresets[phaseKey] === 'opus-max') {
+      raw.phasePresets[phaseKey] = 'opus-xhigh';
+    }
+  }
   for (const phase of REQUIRED_PHASE_KEYS) {
     const presetId = raw.phasePresets[phase];
     if (!presetId || !MODEL_PRESETS.find(p => p.id === presetId)) {
