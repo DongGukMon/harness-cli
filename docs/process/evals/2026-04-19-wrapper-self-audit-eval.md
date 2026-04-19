@@ -10,7 +10,7 @@
 | Check | Status | Detail |
 |-------|--------|--------|
 | SC1 typecheck | pass | `pnpm tsc --noEmit` exit 0 |
-| SC2 tests | pass | `pnpm vitest run` — 647 passed / 1 skipped (baseline 617 → +30 new) |
+| SC2 tests | pass | `pnpm vitest run` — 648 passed / 1 skipped (baseline 617 → +31 new, including Gate-7 R1 `plan 문서` + fallback guard) |
 | SC3 build | pass | `pnpm build` exit 0; assets copied to `dist/context/skills/` |
 | SC4 | pass | Phase 1 skill has `Pre-sentinel self-audit` |
 | SC5 | pass | Phase 3 skill has `Pre-sentinel self-audit` |
@@ -72,3 +72,15 @@ d9f2621 chore(handoff): pause at gate-1 Round 2 resubmission (Codex 미실행)
 - Spec gate (Gate 1) took 6 rounds; plan gate (Gate 2) took 2 rounds; all P1 converged.
 - Scope stayed text-only (no runtime/assembler changes per Decision 5).
 - Eval checklist SC15 command was revised post-plan-review because Phase 5 skill text has >200-char distance between `파일 끝` and the nearest `## Deferred` — widened to unlimited (`[\s\S]*`) to match plan's Test Design regex. This is a verification-side change, not a spec/plan requirement change.
+
+## Gate 7 Round 1 Fix (2026-04-19)
+Codex Round 1 REJECT raised 2 P1:
+- **P1.1**: Phase 5 self-audit escalation generic `## Deferred` missing "plan 문서 하단" + missing-section fallback (R3a feedback-independent requirement).
+- **P1.2**: New rendering tests didn't guard the above.
+- **P2**: `plan-bug` branch (line 25) missing explicit `plan: append deferred item` commit reference.
+
+Fixes:
+- Phase 5 skill line 49 expanded to name "plan 문서 하단 `## Deferred`" + "없으면 파일 끝에 새로 헤딩을 만든 뒤 append" + "feedback 블록과 독립적... 첫 패스에서도 동일".
+- Phase 5 skill line 25 (plan-bug) adds explicit `plan: append deferred item` commit instruction.
+- New rendering test: `'phase 5 — self-audit escalation names plan document target + missing-section fallback (R3a feedback-independent)'`.
+- Total tests now: 648 passed / 1 skipped (+31 from baseline; was 647 / +30 before this round).

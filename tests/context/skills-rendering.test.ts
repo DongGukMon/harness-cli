@@ -247,6 +247,13 @@ describe('self-audit + feedback triage rendering', () => {
     expect(prompt).toMatch(/## Deferred/);
   });
 
+  it('phase 5 — self-audit escalation names plan document target + missing-section fallback (R3a feedback-independent)', () => {
+    const prompt = renderPrompt(5);
+    expect(prompt).toMatch(/해결 불가[\s\S]{0,400}plan 문서 하단 `## Deferred`/);
+    expect(prompt).toMatch(/plan 문서에 `## Deferred` 섹션이 없으면[\s\S]{0,200}파일 끝/);
+    expect(prompt).toMatch(/feedback 블록과 독립적|첫 패스에서도 동일/);
+  });
+
   it('phase 5 — triage block is absent without feedback_paths', () => {
     const prompt = renderPrompt(5);
     expect(prompt).not.toMatch(/P1-only 정책 · Phase 5 전용/);
