@@ -173,7 +173,7 @@ verify PASS면 eval report를 auto-commit하고, FAIL이면 `verify-feedback.md`
 - `specCommit`, `planCommit`, `implCommit`, `evalCommit`, `verifiedAtHead`
 - `phaseAttemptId`, `phaseOpenedAt`
 - tmux/session bookkeeping
-- `loggingEnabled`, `codexNoIsolate`, `strictTree`
+- `loggingEnabled`, `codexNoIsolate`
 
 아티팩트 경로:
 - spec/design 문서: `docs/specs/<runId>-design.md`

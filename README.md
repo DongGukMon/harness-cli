@@ -180,7 +180,6 @@ Flags:
 - `--enable-logging` — write session logs under `~/.harness/sessions/...`
 - `--light` — use the 4-phase light flow
 - `--codex-no-isolate` — disable per-run `CODEX_HOME` isolation for Codex subprocesses; not recommended
-- `--strict-tree` — disable phase-5 dirty-tree auto-recovery and write diagnostics instead
 - global `--root <dir>` — use `<dir>/.harness` as the harness root
 
 Important behavior:
@@ -297,9 +296,6 @@ Run `harness list` to discover existing runs, or start a new one.
 
 **`flow is frozen at run creation`**  
 `--light` is a start-time choice only. Resume the existing run as-is, or start a fresh light run.
-
-**Dirty tree failure in phase 5**  
-Retry normally first. If you need a hard failure instead of auto-recovery for ignorable leftovers, start the run with `--strict-tree`.
 
 **Need to inspect current progress from another terminal?**  
 Use `harness status`, `harness skip`, or `harness jump <phase>`.

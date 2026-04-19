@@ -173,7 +173,7 @@ Important fields include:
 - `specCommit`, `planCommit`, `implCommit`, `evalCommit`, `verifiedAtHead`
 - `phaseAttemptId`, `phaseOpenedAt`
 - tmux/session bookkeeping
-- `loggingEnabled`, `codexNoIsolate`, `strictTree`
+- `loggingEnabled`, `codexNoIsolate`
 
 Artifact locations:
 - spec/design doc: `docs/specs/<runId>-design.md`

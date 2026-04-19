@@ -88,10 +88,6 @@ export interface HarnessState {
   // codex-phase spawn runs inside <runDir>/codex-home/ with only auth.json
   // symlinked in. Persisted so that `harness resume` honors the decision.
   codexNoIsolate: boolean;
-  // Phase 5 dirty-tree auto-recovery opt-out. When true, `validatePhaseArtifacts`
-  // skips `tryAutoRecoverDirtyTree` and fails immediately on non-empty porcelain.
-  // Persisted so that `harness resume` honors the original `--strict-tree` choice.
-  strictTree: boolean;
 }
 
 export interface LockData {

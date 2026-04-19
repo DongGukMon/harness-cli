@@ -11,7 +11,6 @@ import { isPidAlive } from '../process.js';
 import { assembleInteractivePrompt } from '../context/assembler.js';
 import { runClaudeInteractive } from '../runners/claude.js';
 import { isValidChecklistSchema } from './checklist.js';
-import { tryAutoRecoverDirtyTree, writeDirtyTreeDiagnostic } from './dirty-tree.js';
 
 /**
  * Inline Complexity-section check (spec R5). Kept here instead of importing
@@ -113,10 +112,10 @@ export function checkSentinelFreshness(
  * Validate artifacts for the completed phase.
  * Phase 1/3: check existence + non-empty (reopen-aware per ADR-13; freshness
  * is carried by sentinel attemptId alone — no mtime staleness heuristic).
- * Phase 5: enforce clean working tree + HEAD advancement, with optional
- * auto-recovery of allowlisted residuals unless `state.strictTree` is set.
- * `runDir` is used only to render a Phase 5 dirty-tree diagnostic when
- * strict-tree or auto-recovery blocks validation.
+ * Phase 5: success when HEAD has advanced past `implRetryBase`, or when the
+ * sentinel was written during a reopen with `implCommit` already set
+ * (verify-failure case where only gitignored fixes are needed). Working-tree
+ * cleanliness is no longer enforced — see 2026-04-19 spec.
  */
 export function validatePhaseArtifacts(
   phase: InteractivePhase,
@@ -187,38 +186,10 @@ export function validatePhaseArtifacts(
   }
 
   if (phase === 5) {
+    void runDir;
     try {
-      let status = execSync('git status --porcelain', { cwd, encoding: 'utf-8' }).trim();
-      if (status !== '') {
-        if (state.strictTree) {
-          writeDirtyTreeDiagnostic(runDir, 'strict-tree', status);
-          return false;
-        }
-        try {
-          const recovery = tryAutoRecoverDirtyTree(cwd, state.runId);
-          if (recovery.outcome === 'blocked') {
-            writeDirtyTreeDiagnostic(runDir, 'blocked', recovery.blockers.join('\n'));
-            return false;
-          }
-          // outcome: 'recovered' — HEAD advanced via gitignore commit.
-          status = '';
-        } catch (err) {
-          writeDirtyTreeDiagnostic(
-            runDir,
-            'blocked',
-            `${status}\n\n(auto-recovery threw: ${(err as Error).message})`,
-          );
-          return false;
-        }
-      }
       const head = execSync('git rev-parse HEAD', { cwd, encoding: 'utf-8' }).trim();
-      const base = state.implRetryBase;
-      // HEAD advanced — always valid
-      if (head !== base) return true;
-      // HEAD did not advance. Accept only on reopen (implCommit already set):
-      // a verify-failure reopen may legitimately require only gitignored artifact
-      // fixes (e.g., checklist.json) and no further impl commits. First-attempt
-      // zero-commit is still rejected to prevent empty sessions passing through.
+      if (head !== state.implRetryBase) return true;
       return state.implCommit !== null;
     } catch {
       return false;

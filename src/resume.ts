@@ -16,7 +16,6 @@ import { InputManager } from './input.js';
 import { NoopLogger } from './logger.js';
 import { getGateRetryLimit, getPhaseArtifactFiles } from './config.js';
 import { isValidChecklistSchema } from './phases/checklist.js';
-import { tryAutoRecoverDirtyTree, writeDirtyTreeDiagnostic } from './phases/dirty-tree.js';
 import type { HarnessState, PhaseNumber } from './types.js';
 
 /** Inline Complexity-section check (spec R5); mirrors `interactive.ts`. */
@@ -560,33 +559,9 @@ export function completeInteractivePhaseFromFreshSentinel(
     }
 
     if (phase === 5) {
-      // Symmetric with validatePhaseArtifacts: tolerate ignorable residuals via
-      // auto-recovery (unless strictTree), then enforce the completion contract.
-      let status = execSync('git status --porcelain', { cwd, encoding: 'utf-8' }).trim();
-      if (status !== '') {
-        if (state.strictTree) {
-          writeDirtyTreeDiagnostic(runDir, 'strict-tree', status);
-          return false;
-        }
-        try {
-          const recovery = tryAutoRecoverDirtyTree(cwd, state.runId);
-          if (recovery.outcome === 'blocked') {
-            writeDirtyTreeDiagnostic(runDir, 'blocked', recovery.blockers.join('\n'));
-            return false;
-          }
-          status = '';
-        } catch (err) {
-          writeDirtyTreeDiagnostic(
-            runDir,
-            'blocked',
-            `${status}\n\n(auto-recovery threw: ${(err as Error).message})`,
-          );
-          return false;
-        }
-      }
+      void runDir;
       const head = getHead(cwd);
       if (head === state.implRetryBase) {
-        // No commits since implRetryBase — fails completion contract
         return false;
       }
       state.implCommit = head;
