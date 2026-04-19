@@ -204,6 +204,12 @@ Resume handles three cases automatically:
 
 On resume, harness again prompts for presets for the remaining phases.
 
+### Terminal-state UI
+
+When `runPhaseLoop` returns, the control panel stays on screen instead of dropping you to a shell:
+- **Failed phase** → an inline action prompt appears with `[R]esume` (re-runs the failed phase in place), `[J]ump` (single-key prompt for an interactive phase: `1/3/5` in full flow, `1/5` in light), and `[Q]uit` (clean exit). Errors during R/J keep the panel open so you can try a different action.
+- **Run complete** → an idle summary panel shows the eval report path, commit range, and wall time. Press Ctrl+C to exit.
+
 ### `harness status`
 
 Prints the current run state:

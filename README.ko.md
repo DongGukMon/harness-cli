@@ -204,6 +204,12 @@ resume은 세 경우를 자동 처리합니다:
 
 resume 때도 남아 있는 phase들에 대해 모델 preset 선택 UI가 다시 뜹니다.
 
+### Terminal-state UI
+
+`runPhaseLoop`가 종료해도 control panel이 사라지지 않고 화면에 남습니다:
+- **Phase 실패 시** → 인라인 액션 프롬프트가 뜹니다. `[R]esume` (실패한 phase 재시도), `[J]ump` (interactive phase 선택; full flow는 `1/3/5`, light flow는 `1/5` single-key), `[Q]uit` (정상 종료). R/J 도중 에러가 나도 패널은 그대로 유지되어 다른 액션을 시도할 수 있습니다.
+- **전체 완료 시** → eval report 경로, commit range, wall time을 보여주는 idle 요약 패널이 떠 있습니다. Ctrl+C로 종료합니다.
+
 ### `harness status`
 
 현재 run 상태를 출력합니다:
