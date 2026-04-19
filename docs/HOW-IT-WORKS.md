@@ -49,7 +49,7 @@ Default assignments:
 - full flow: P1 `opus-1m-high`, P2 `codex-high`, P3 `sonnet-1m-high`, P4 `codex-high`, P5 `sonnet-1m-high`, P7 `codex-high`
 - light flow: P1 `opus-1m-high`, P2 `codex-high`, P5 `sonnet-1m-high`, P7 `codex-high`
 
-Users can change every non-verify phase preset during `harness start` and `harness resume`.
+Users can change every non-verify phase preset during `phase-harness start` and `phase-harness resume`.
 Selections persist in `state.phasePresets`.
 Existing saved runs are not auto-migrated to the new 1M defaults; only newly created runs pick them up automatically.
 
@@ -66,7 +66,7 @@ Phase outputs are:
 - P5 → git commits
 - P6 → `docs/process/evals/<runId>-eval.md`
 
-### Light flow (`harness start --light`)
+### Light flow (`phase-harness start --light`)
 
 Light flow skips phases 3 and 4 by initializing them as `skipped`.
 Phase 2 is active (`pending`) and runs a pre-impl Codex review of the combined design doc.
@@ -76,7 +76,7 @@ Light-flow specifics:
 - P1 writes a combined design+plan doc to `docs/specs/<runId>-design.md`
 - the combined doc must include `## Complexity`, `## Open Questions`, and `## Implementation Plan`
 - `checklist.json` still exists as a separate file under `.harness/<runId>/checklist.json`
-- `harness resume --light` is rejected because flow is frozen at run creation
+- `phase-harness resume --light` is rejected because flow is frozen at run creation
 - P2 (pre-impl gate): Codex reviews the combined design doc using a 4-axis rubric. REJECT → immediate P1 reopen with feedback delivered via `pendingAction.feedbackPaths` only; `state.carryoverFeedback` is not set at Gate 2. Gate retry limit 3 (same as full-flow P2). Legacy light runs created before P2 activation keep `phases['2']='skipped'` — activation is forward-only via `createInitialState`, not retroactive migration.
 - gate retry limit: light P2 = 3, light P7 = 5, full flow = 3
 - on P7 `REJECT`:
@@ -198,7 +198,7 @@ State writes are atomic: write `state.json.tmp` → fsync → rename.
 
 ## Resume and recovery
 
-`harness resume` handles three cases:
+`phase-harness resume` handles three cases:
 1. tmux session alive + inner alive → attach only
 2. tmux session alive + inner dead → restart inner in the existing control pane when possible
 3. no tmux session → recreate tmux and continue from saved state
@@ -210,7 +210,7 @@ Recovery is built from:
 - artifact commit anchors (`specCommit`, `planCommit`, `implCommit`, `evalCommit`)
 - gate sidecars and verify sidecars
 
-`harness jump <phase>` only moves backward unless the run is already complete.
+`phase-harness jump <phase>` only moves backward unless the run is already complete.
 In light flow, jumping into skipped phases is rejected.
 
 When `runPhaseLoop` returns, the inner process keeps the control panel alive instead of exiting:

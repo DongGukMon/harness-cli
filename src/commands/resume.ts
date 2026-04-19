@@ -19,8 +19,8 @@ export interface ResumeOptions {
 export async function resumeCommand(runId?: string, options: ResumeOptions = {}): Promise<void> {
   if (options.light) {
     process.stderr.write(
-      "Error: --light is only valid on 'harness start'. flow is frozen at run creation; " +
-      "start a new run with 'harness start --light' if you want the light flow.\n",
+      "Error: --light is only valid on 'phase-harness start'. flow is frozen at run creation; " +
+      "start a new run with 'phase-harness start --light' if you want the light flow.\n",
     );
     process.exit(1);
   }
@@ -38,7 +38,7 @@ export async function resumeCommand(runId?: string, options: ResumeOptions = {})
     const current = getCurrentRun(harnessDir);
     if (current === null) {
       process.stderr.write(
-        "No active run. Use 'harness start' to start a new run or 'harness list' to see all runs.\n"
+        "No active run. Use 'phase-harness start' to start a new run or 'phase-harness list' to see all runs.\n"
       );
       process.exit(1);
     }
@@ -78,7 +78,7 @@ export async function resumeCommand(runId?: string, options: ResumeOptions = {})
   if (state.status === 'completed') {
     setCurrentRun(harnessDir, targetRunId);
     process.stderr.write(
-      `Run '${targetRunId}' is already completed. Use 'harness jump N' to re-run a phase.\n`
+      `Run '${targetRunId}' is already completed. Use 'phase-harness jump N' to re-run a phase.\n`
     );
     process.exit(1);
   }

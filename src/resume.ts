@@ -69,7 +69,7 @@ export async function resumeRun(
   if (state.status === 'paused' && state.pendingAction === null) {
     process.stderr.write(
       `Run state is inconsistent: paused run has no pendingAction.\n` +
-      `Use 'harness jump N' to re-run from a specific phase or delete .harness/${state.runId}/ to discard this run.\n`
+      `Use 'phase-harness jump N' to re-run from a specific phase or delete .harness/${state.runId}/ to discard this run.\n`
     );
     process.exit(1);
   }
@@ -121,7 +121,7 @@ async function recoverGeneralState(
     // Validation failed → abort with guidance; do NOT respawn (would erase artifacts)
     process.stderr.write(
       `Artifact validation failed for phase ${phase}. The artifact may have been modified or deleted.\n` +
-      `Use 'harness jump ${phase}' to re-run from that phase.\n`
+      `Use 'phase-harness jump ${phase}' to re-run from that phase.\n`
     );
     process.exit(1);
   }
@@ -163,7 +163,7 @@ async function recoverGeneralState(
           // Critically: do NOT delete sentinel (reopening would erase Phase 1/3 artifacts).
           process.stderr.write(
             `Failed to commit Phase ${phase} artifact on resume: ${(err as Error).message}\n` +
-            `Phase left in 'error' state; fix git state and run 'harness resume' to retry.\n`
+            `Phase left in 'error' state; fix git state and run 'phase-harness resume' to retry.\n`
           );
           state.phases[phaseKey] = 'error';
           writeState(runDir, state);
@@ -200,7 +200,7 @@ async function recoverGeneralState(
       } catch (err) {
         process.stderr.write(
           `Phase 6 normalize_artifact_commit retry failed: ${(err as Error).message}\n` +
-          `Fix git state and run 'harness resume' again.\n`
+          `Fix git state and run 'phase-harness resume' again.\n`
         );
         process.exit(1);
       }
@@ -336,7 +336,7 @@ function validateCompletedArtifacts(state: HarnessState, cwd: string): void {
     if (!isEvalReportValid(join(cwd, state.artifacts.evalReport))) {
       process.stderr.write(
         `Artifact missing or invalid for completed phase 6: ${state.artifacts.evalReport}.\n` +
-        `Use 'harness jump 6' to re-run from that phase.\n`
+        `Use 'phase-harness jump 6' to re-run from that phase.\n`
       );
       process.exit(1);
     }
@@ -360,7 +360,7 @@ function requireCommittedClean(relPath: string, commit: string | null, cwd: stri
     if (diff.length > 0) {
       process.stderr.write(
         `Artifact ${relPath} has been modified since it was committed at ${commit}.\n` +
-        `Commit changes first, or use 'harness jump N' to re-run from that phase.\n`
+        `Commit changes first, or use 'phase-harness jump N' to re-run from that phase.\n`
       );
       process.exit(1);
     }
@@ -388,7 +388,7 @@ function requireValidChecklist(absPath: string): void {
     const msg = (err as Error).message;
     process.stderr.write(
       `Checklist ${absPath} is invalid: ${msg}.\n` +
-      `Use 'harness jump 3' to re-run planning.\n`
+      `Use 'phase-harness jump 3' to re-run planning.\n`
     );
     process.exit(1);
   }
@@ -398,7 +398,7 @@ function requireNonEmpty(path: string, label: string, runId: string): void {
   if (!existsSync(path)) {
     process.stderr.write(
       `Artifact missing for completed phase: ${path}.\n` +
-      `Use 'harness jump N' to re-run from that phase.\n`
+      `Use 'phase-harness jump N' to re-run from that phase.\n`
     );
     process.exit(1);
   }
@@ -407,7 +407,7 @@ function requireNonEmpty(path: string, label: string, runId: string): void {
     if (content.trim().length === 0) {
       process.stderr.write(
         `Artifact empty for completed phase: ${path}.\n` +
-        `Use 'harness jump N' to re-run from that phase.\n`
+        `Use 'phase-harness jump N' to re-run from that phase.\n`
       );
       process.exit(1);
     }
@@ -425,7 +425,7 @@ function validateAncestry(state: HarnessState, cwd: string): void {
       if (!isAncestor(state.specCommit, 'HEAD', cwd)) {
         process.stderr.write(
           `Spec commit is no longer in git history (HEAD has diverged from specCommit).\n` +
-          `Use 'harness jump 1' to re-run brainstorming.\n`
+          `Use 'phase-harness jump 1' to re-run brainstorming.\n`
         );
         process.exit(1);
       }
@@ -434,7 +434,7 @@ function validateAncestry(state: HarnessState, cwd: string): void {
       if (!isAncestor(state.planCommit, 'HEAD', cwd)) {
         process.stderr.write(
           `Plan commit is no longer in git history.\n` +
-          `Use 'harness jump 3' to re-run planning.\n`
+          `Use 'phase-harness jump 3' to re-run planning.\n`
         );
         process.exit(1);
       }
@@ -453,7 +453,7 @@ function validateAncestry(state: HarnessState, cwd: string): void {
       if (!isAncestor(state.evalCommit, 'HEAD', cwd)) {
         process.stderr.write(
           `Eval report commit is no longer in git history.\n` +
-          `Use 'harness jump 6' to re-run verification.\n`
+          `Use 'phase-harness jump 6' to re-run verification.\n`
         );
         process.exit(1);
       }

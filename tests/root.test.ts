@@ -154,7 +154,7 @@ describe('resolveRunId', () => {
 
   it('no arg + no pointer → throws with guidance', () => {
     expect(() => resolveRunId(tmpDir)).toThrow(
-      "No active run. Use 'harness start' to start a new run or 'harness list' to see all runs."
+      "No active run. Use 'phase-harness start' to start a new run or 'phase-harness list' to see all runs."
     );
   });
 });

@@ -49,7 +49,7 @@ P1 design+plan → P2 pre-impl gate → P5 implement → P6 verify → P7 eval g
 - full flow: P1 `opus-1m-high`, P2 `codex-high`, P3 `sonnet-1m-high`, P4 `codex-high`, P5 `sonnet-1m-high`, P7 `codex-high`
 - light flow: P1 `opus-1m-high`, P2 `codex-high`, P5 `sonnet-1m-high`, P7 `codex-high`
 
-사용자는 `harness start` / `harness resume` 때 모든 non-verify phase preset을 바꿀 수 있고,
+사용자는 `phase-harness start` / `phase-harness resume` 때 모든 non-verify phase preset을 바꿀 수 있고,
 선택값은 `state.phasePresets`에 저장됩니다.
 기존 saved run은 자동으로 1M 기본값으로 마이그레이션되지 않고, 새로 만드는 run에만 1M 기본값이 자동 적용됩니다.
 
@@ -66,7 +66,7 @@ P1 design+plan → P2 pre-impl gate → P5 implement → P6 verify → P7 eval g
 - P5 → git commits
 - P6 → `docs/process/evals/<runId>-eval.md`
 
-### Light flow (`harness start --light`)
+### Light flow (`phase-harness start --light`)
 
 light flow는 phase 3/4를 `skipped`로 초기화하고 phase loop가 그대로 건너뜁니다.
 Phase 2는 활성(`pending`) 상태로 결합 design doc에 대한 pre-impl Codex 리뷰를 실행합니다.
@@ -76,7 +76,7 @@ light flow 특이사항:
 - P1은 결합 design+plan 문서를 `docs/specs/<runId>-design.md`에 작성합니다
 - 결합 문서에는 `## Complexity`, `## Open Questions`, `## Implementation Plan`이 반드시 있어야 합니다
 - `checklist.json`은 여전히 `.harness/<runId>/checklist.json`으로 별도 유지됩니다
-- flow는 run 생성 시 고정되므로 `harness resume --light`는 거부됩니다
+- flow는 run 생성 시 고정되므로 `phase-harness resume --light`는 거부됩니다
 - P2 (pre-impl gate): Codex가 결합 design doc를 4축 루브릭으로 리뷰합니다. REJECT 시 즉시 P1 재진입 — feedback은 `pendingAction.feedbackPaths`로만 전달되고 `state.carryoverFeedback`는 Gate 2에서 설정되지 않습니다. Gate retry limit 3 (풀 플로우 P2와 동일). P2 활성화 이전에 생성된 legacy light run은 `phases['2']='skipped'` 상태를 유지합니다 — activation은 `createInitialState`를 통한 forward-only이고 retroactive migration이 아닙니다.
 - gate retry limit: light P2 = 3회, light P7 = 5회, 풀 플로우 = 3회
 - P7 `REJECT` 시:
@@ -198,7 +198,7 @@ verify PASS면 eval report를 auto-commit하고, FAIL이면 `verify-feedback.md`
 
 ## Resume와 복구
 
-`harness resume`는 세 경우를 처리합니다.
+`phase-harness resume`는 세 경우를 처리합니다.
 1. tmux session alive + inner alive → attach만 수행
 2. tmux session alive + inner dead → 가능한 경우 기존 control pane에서 inner 재시작
 3. tmux session 없음 → tmux를 다시 만들고 저장 상태부터 계속 진행
@@ -210,7 +210,7 @@ verify PASS면 eval report를 auto-commit하고, FAIL이면 `verify-feedback.md`
 - artifact commit anchor (`specCommit`, `planCommit`, `implCommit`, `evalCommit`)
 - gate / verify sidecar
 
-`harness jump <phase>`는 완료된 run이 아닌 이상 backward-only입니다.
+`phase-harness jump <phase>`는 완료된 run이 아닌 이상 backward-only입니다.
 light flow에서는 skipped phase로 jump할 수 없습니다.
 
 `runPhaseLoop`가 종료해도 inner process는 즉시 종료하지 않고 control panel을 유지합니다:

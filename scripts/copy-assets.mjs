@@ -11,9 +11,10 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = join(__dirname, '..');
 
 const assets = [
-  { from: 'src/context/prompts',   to: 'dist/src/context/prompts',   recursive: true },
-  { from: 'src/context/skills',    to: 'dist/src/context/skills',    recursive: true },
-  { from: 'src/context/playbooks', to: 'dist/src/context/playbooks', recursive: true },
+  { from: 'src/context/prompts',            to: 'dist/src/context/prompts',            recursive: true },
+  { from: 'src/context/skills',             to: 'dist/src/context/skills',             recursive: true },
+  { from: 'src/context/skills-standalone',  to: 'dist/src/context/skills-standalone',  recursive: true },
+  { from: 'src/context/playbooks',          to: 'dist/src/context/playbooks',          recursive: true },
   { from: 'scripts/harness-verify.sh', to: 'dist/scripts/harness-verify.sh', recursive: false, executable: true },
 ];
 

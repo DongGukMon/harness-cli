@@ -20,7 +20,7 @@ By default, harness uses:
 - **Codex** presets for review gates (2 / 4 / 7)
 - the bundled **`harness-verify.sh`** script for phase 6
 
-Those defaults are configurable at runtime. On every `harness start` / `harness resume`, harness prompts for the model preset of every remaining non-verify phase.
+Those defaults are configurable at runtime. On every `phase-harness start` / `phase-harness resume`, harness prompts for the model preset of every remaining non-verify phase.
 
 Current built-in presets:
 - `opus-1m-max`, `opus-1m-xhigh`, `opus-1m-high`
@@ -41,7 +41,7 @@ Default phase assignments:
 
 ## Full flow vs light flow
 
-### Full flow (`harness start "task"`)
+### Full flow (`phase-harness start "task"`)
 
 ```text
 P1 spec → P2 spec gate → P3 plan → P4 plan gate → P5 implement → P6 verify → P7 eval gate
@@ -49,7 +49,7 @@ P1 spec → P2 spec gate → P3 plan → P4 plan gate → P5 implement → P6 ve
 
 Use the full flow when independent pre-implementation review matters: migrations, API/contract work, security-sensitive changes, or anything where the extra gate cost is worth it.
 
-### Light flow (`harness start --light "task"`)
+### Light flow (`phase-harness start --light "task"`)
 
 ```text
 P1 design+plan → P5 implement → P6 verify → P7 eval gate
@@ -60,7 +60,7 @@ In light flow:
 - phase 1 must produce a combined design document with `## Complexity`, `## Open Questions`, and `## Implementation Plan`
 - phase 7 can reopen **phase 5** for impl-only feedback, or **phase 1** for design/mixed feedback
 - light-flow gate retry limit is **5** (full flow stays at **3**)
-- the flow is frozen when the run is created, so `harness resume --light` is rejected
+- the flow is frozen when the run is created, so `phase-harness resume --light` is rejected
 
 ---
 
@@ -127,7 +127,7 @@ pnpm run build
 pnpm link --global
 ```
 
-After linking, `harness` is available globally.
+After linking, `phase-harness` is available globally.
 
 Rebuild after source changes:
 
@@ -141,6 +141,29 @@ Remove the global link:
 pnpm unlink --global phase-harness
 ```
 
+### Install standalone skills
+
+After installation, install the bundled Claude Code skills into your user scope:
+
+```bash
+phase-harness install-skills          # installs to ~/.claude/skills/
+phase-harness install-skills --project  # installs to ./.claude/skills/ (project scope)
+```
+
+This installs `phase-harness-codex-gate-review` — the gate review skill used by the harness lifecycle.
+To uninstall:
+
+```bash
+phase-harness uninstall-skills
+phase-harness uninstall-skills --project
+```
+
+**Testing / advanced:** Use `--project-dir <path>` to install to an arbitrary directory:
+
+```bash
+phase-harness install-skills --project-dir /tmp/test-skills
+```
+
 ---
 
 ## Quick start
@@ -149,14 +172,14 @@ Run harness from the target project root (or pass `--root` to place `.harness/` 
 
 ```bash
 cd /path/to/your/project
-harness --help
+phase-harness --help
 ```
 
 Start a run:
 
 ```bash
-harness start "Add GraphQL API with user authentication"
-# same as: harness run "Add GraphQL API with user authentication"
+phase-harness start "Add GraphQL API with user authentication"
+# same as: phase-harness run "Add GraphQL API with user authentication"
 ```
 
 If you omit the task, harness asks for it inside the control pane.
@@ -172,17 +195,17 @@ Typical sequence:
 
 ## Command reference
 
-### `harness start [task]`
+### `phase-harness start [task]`
 
 Starts a new run.
 
 ```bash
-harness start "task"
-harness run "task"                  # alias
-harness start --light "task"
-harness start --require-clean "task"
-harness start --enable-logging "task"
-harness start --root /tmp/demo "task"
+phase-harness start "task"
+phase-harness run "task"                  # alias
+phase-harness start --light "task"
+phase-harness start --require-clean "task"
+phase-harness start --enable-logging "task"
+phase-harness start --root /tmp/demo "task"
 ```
 
 Flags:
@@ -199,13 +222,13 @@ Important behavior:
 - if `--require-clean` is set, both staged and unstaged changes are blocked
 - on first run, harness ensures `.harness/` is present in `.gitignore`
 
-### `harness resume [runId]`
+### `phase-harness resume [runId]`
 
 Resumes the current run or a specific run.
 
 ```bash
-harness resume
-harness resume 2026-04-19-graphql-api
+phase-harness resume
+phase-harness resume 2026-04-19-graphql-api
 ```
 
 Resume handles three cases automatically:
@@ -221,7 +244,7 @@ When `runPhaseLoop` returns, the control panel stays on screen instead of droppi
 - **Failed phase** → an inline action prompt appears with `[R]esume` (re-runs the failed phase in place), `[J]ump` (single-key prompt for an interactive phase: `1/3/5` in full flow, `1/5` in light), and `[Q]uit` (clean exit). Errors during R/J keep the panel open so you can try a different action.
 - **Run complete** → an idle summary panel shows the eval report path, commit range, and wall time. Press Ctrl+C to exit.
 
-### `harness status`
+### `phase-harness status`
 
 Prints the current run state:
 - run/task/status
@@ -231,29 +254,49 @@ Prints the current run state:
 - commit anchors
 - pending action
 
-### `harness list`
+### `phase-harness list`
 
 Lists all runs under the harness root.
 
-### `harness skip`
+### `phase-harness skip`
 
 Force-passes the current phase.
 
 If the inner process is alive, harness writes a pending action and signals the running session immediately.
-If not, the skip is saved and consumed by the next `harness resume`.
+If not, the skip is saved and consumed by the next `phase-harness resume`.
 
-### `harness jump <phase>`
+### `phase-harness jump <phase>`
 
 Jumps backward to an earlier phase.
 
 ```bash
-harness jump 3
+phase-harness jump 3
 ```
 
 Rules:
 - backward only unless the run is already completed
 - cannot jump into a `skipped` phase in light flow
 - saved/applied the same way as `skip`
+
+### `phase-harness install-skills`
+
+Installs bundled Claude Code skills to the user or project scope.
+
+```bash
+phase-harness install-skills            # user scope: ~/.claude/skills/
+phase-harness install-skills --project  # project scope: ./.claude/skills/
+```
+
+Options: `--user` (default), `--project`, `--project-dir <path>` (implies `--project`).
+
+### `phase-harness uninstall-skills`
+
+Removes `phase-harness-*` skills from the user or project scope. Skills without the `phase-harness-` prefix are preserved.
+
+```bash
+phase-harness uninstall-skills
+phase-harness uninstall-skills --project
+```
 
 ---
 
@@ -309,13 +352,13 @@ Install the Codex CLI and retry. Harness now validates the actual `codex` binary
 Expected on Linux and possible on macOS fallback failure. Attach manually with the printed `tmux attach -t ...` command.
 
 **`No active run.`**  
-Run `harness list` to discover existing runs, or start a new one.
+Run `phase-harness list` to discover existing runs, or start a new one.
 
 **`flow is frozen at run creation`**  
 `--light` is a start-time choice only. Resume the existing run as-is, or start a fresh light run.
 
 **Need to inspect current progress from another terminal?**  
-Use `harness status`, `harness skip`, or `harness jump <phase>`.
+Use `phase-harness status`, `phase-harness skip`, or `phase-harness jump <phase>`.
 
 ---
 

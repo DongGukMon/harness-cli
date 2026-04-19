@@ -7,11 +7,13 @@ import { listCommand } from '../src/commands/list.js';
 import { skipCommand } from '../src/commands/skip.js';
 import { jumpCommand } from '../src/commands/jump.js';
 import { innerCommand } from '../src/commands/inner.js';
+import { installSkillsCommand } from '../src/commands/install-skills.js';
+import { uninstallSkillsCommand } from '../src/commands/uninstall-skills.js';
 
 const program = new Command();
 
 program
-  .name('harness')
+  .name('phase-harness')
   .description('AI agent harness orchestrator')
   .version('0.1.0')
   .option('--root <dir>', 'explicit .harness/ parent directory');
@@ -92,6 +94,26 @@ program
   .action(async (runId: string, opts: { root?: string; controlPane?: string; resume?: boolean }) => {
     const globalOpts = program.opts();
     await innerCommand(runId, { root: opts.root ?? globalOpts.root, controlPane: opts.controlPane, resume: opts.resume });
+  });
+
+program
+  .command('install-skills')
+  .description('install standalone skills to user or project Claude Code scope')
+  .option('--user', 'install to user scope (~/.claude/skills/) [default]')
+  .option('--project', 'install to project scope (./.claude/skills/)')
+  .option('--project-dir <path>', 'install to <path>/.claude/skills/ (implies --project)')
+  .action(async (opts: { user?: boolean; project?: boolean; projectDir?: string }) => {
+    await installSkillsCommand(opts);
+  });
+
+program
+  .command('uninstall-skills')
+  .description('uninstall phase-harness skills from user or project Claude Code scope')
+  .option('--user', 'uninstall from user scope (~/.claude/skills/) [default]')
+  .option('--project', 'uninstall from project scope (./.claude/skills/)')
+  .option('--project-dir <path>', 'uninstall from <path>/.claude/skills/ (implies --project)')
+  .action(async (opts: { user?: boolean; project?: boolean; projectDir?: string }) => {
+    await uninstallSkillsCommand(opts);
   });
 
 program.parseAsync(process.argv).catch((err) => {
