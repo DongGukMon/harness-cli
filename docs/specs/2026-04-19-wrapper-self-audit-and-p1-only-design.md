@@ -1,11 +1,18 @@
 # Wrapper-skill pre-sentinel self-audit + P1-only feedback triage — Design
 
-- Status: Draft (Phase 1 / harness-cli)
+- Status: Draft (Phase 1 / harness-cli) — Round 2 Codex P1 피드백 반영 (3 P1 해소 + P2 in-situ 해소)
 - Date: 2026-04-19
 - Author: Claude Code (자율 모드)
 - Related followups: `~/.grove/github.com/DongGukMon/harness-cli/worktrees/gate-convergence/FOLLOWUPS.md` §P1.2, §P1.3
 - Target branch: `feat/wrapper-self-audit` (worktree: `wrapper-self-audit`)
 - Scope key: T3 (self-audit) + T4 (P1-only triage)
+
+### Round 2 fix 요약 (2026-04-19)
+
+- **P1.1 (Deferred fallback)**: R4a 신규 요건 + 세 phase 프롬프트에 "섹션 없으면 파일 끝에 새로 만들고 append" 문장 명시 + SC15 가드 추가.
+- **P1.2 (Phase 5 plan/checklist-origin P1)**: R5를 3-way로 확장 — (a) impl-only fix, (b) spec-bug escalation, (c) plan-bug escalation. 구현 수정 불가 P1은 전부 plan doc `## Deferred` append. SC16 가드 추가.
+- **P1.3 (stale baseline)**: Goals #5 · SC2에서 고정 숫자(617) 의존 제거. "회귀 없음 + 순증만" 기준으로 재정의.
+- **P2 (commit message inconsistency)**: P1.2 fix 과정에서 in-situ 해소 — 세 escalation 카테고리 모두 `plan: append deferred item` 단일 커밋 메시지 사용, 분류는 본문 태그로.
 
 ## Context & Decisions
 
@@ -44,7 +51,10 @@
   - **Phase 1**: spec doc 하단 `## Deferred` 섹션 (자기 자신 수정).
   - **Phase 3**: plan doc 하단 `## Deferred` 섹션 (자기 자신 수정).
   - **Phase 5 P2 defer**: plan doc 하단 `## Deferred` 섹션에 **1-2 라인 append-only 추가** + 별도 `plan: append deferred item` 커밋. Phase 5는 plan 본문 재구조화 금지이지만 `## Deferred` 섹션 append는 "구조 변경"이 아닌 "기록" 이므로 허용.
-  - **Phase 5 P1 spec-bug (spec/plan 재구조화 유발)**: plan doc 하단 `## Deferred` 섹션에 `spec-bug: <detail>` 1-2 라인 append + `plan: append spec-bug escalation` 커밋. Gate 7이 `<plan>` 블록에서 해당 줄을 읽어 reviewer 판단에 반영. 후속 round 또는 별도 plan 업데이트 phase에서 본격 재구조화.
+  - **Phase 5 P1 spec-bug (spec/plan 재구조화 유발)**: plan doc 하단 `## Deferred` 섹션에 `spec-bug: <detail>` 1-2 라인 append + `plan: append deferred item` 커밋. Gate 7이 `<plan>` 블록에서 해당 줄을 읽어 reviewer 판단에 반영. 후속 round 또는 별도 plan 업데이트 phase에서 본격 재구조화.
+  - **Phase 5 P1 plan-bug (plan 본문/eval checklist 자체 결함)**: plan doc 하단 `## Deferred` 섹션에 `plan-bug: <detail>` 1-2 라인 append + `plan: append deferred item` 커밋. 구현 변경 금지.
+- 모든 세 카테고리(`spec-bug:`, `plan-bug:`, 일반 defer)가 동일한 커밋 메시지 `plan: append deferred item`을 공유한다. 분류는 append한 본문의 태그 prefix로 수행. 이는 커밋 메시지 policy의 단일성을 유지하면서 Gate 7 `<plan>` 블록 내 태그로 reviewer가 구분 가능하게 함.
+- `## Deferred` 섹션이 artifact에 없을 경우 파일 끝에 새 헤딩으로 생성한 뒤 append (R4a 참조).
 - "커밋 메시지 trailer" 채널은 **Gate 7 prompt가 커밋 메시지를 읽지 않으므로 무효**. 이 PR에서는 사용 금지. 다만 `git log` 추가는 §Deferred의 후속 항목으로 append.
 - 근거: Gate 7 입력 계약을 건드리지 않으면서 "skill-only" 스코프 유지. plan doc `## Deferred` 섹션 append는 이미 Phase 3 채널과 동일한 규칙을 재사용하므로 reviewer 인지 부담도 낮다.
 
@@ -60,7 +70,7 @@
 2. Phase 1/3 wrapper skill의 **feedback 조건부 블록에 P1-only triage 문장** 추가.
 3. Phase 5 wrapper skill의 `{{#if feedback_paths}}` 블록에 **Phase 5 전용 P1-only triage** 추가 (spec/plan re-structuring 금지 명시).
 4. assembler inline 경로(two-pass 렌더)를 통해 새 블록이 Claude 프롬프트에 실제 도달함을 snapshot/grep 테스트로 증명.
-5. 기존 테스트 617 passed / 1 skipped 유지 — 새 테스트만 순증.
+5. **기존 테스트 회귀 없음** — 현재 branch HEAD(`feat/wrapper-self-audit` @ `d9f2621` 시점 측정: `617 passed / 1 skipped`) 대비 fail 발생 없음, 새 테스트만 순증. 절대 숫자는 branch가 진행되면서 바뀔 수 있으므로 "회귀 없음 + 새 테스트 순증"이 기준이다.
 
 ### Non-goals
 
@@ -78,7 +88,8 @@
 - **R2** — Phase 3 wrapper skill Process에 self-audit step 추가. 위치: 기존 sentinel step 바로 앞. 문구는 "방금 작성한 plan을 spec의 success-criteria/invariants와 대조. plan 내 eval checklist도 spec grep-rule 포함 여부 체크" 취지.
 - **R3** — Phase 5 wrapper skill Process에 self-audit step 추가. 대상: `baseCommit..HEAD`의 diff + 해당 범위에서 변경된 tracked files. 검증 규칙 원천: `spec의 ## Success Criteria/## Invariants 섹션 grep/regex` + `plan eval checklist checks[].command`. 문구에 "단일 artifact가 아닌 commits 합집합" + "baseCommit..HEAD 범위 (Gate 7과 동일)" 명시.
 - **R4** — Phase 1/3 wrapper skill의 `{{#if feedback_path}}` feedback 블록에 P1-only triage 3-tier 지침 추가 (P1 반드시, P2 ≤2-line inline or `## Deferred`, severity 누락은 blocker 가정).
-- **R5** — Phase 5 wrapper skill의 `{{#if feedback_paths}}` 블록에 P1-only triage 추가. 추가 조항: "P5 retry는 구현 수정만. P2 defer + spec/plan 재구조화 유발하는 P1 spec-bug는 모두 **plan doc 하단 `## Deferred` 섹션에 1-2 라인 append** + 별도 `plan: append deferred item` 커밋 (Gate 7이 `<plan>` 블록에서 읽음). plan 본문 재구조화 금지 유지 — `## Deferred` append-only는 허용."
+- **R4a** — **`## Deferred` 섹션 부재 시 fallback**: R4/R5의 모든 "Deferred append" 지시는 대상 artifact(spec 또는 plan doc)에 `## Deferred` 헤딩이 **없으면 파일 끝에 새로 생성한 뒤 append**한다. 이 fallback 문장은 세 phase 모두의 P1-only triage 프롬프트 본문에 명시적으로 포함되어야 하며 rendering 테스트로 가드한다(SC15).
+- **R5** — Phase 5 wrapper skill의 `{{#if feedback_paths}}` 블록에 P1-only triage 추가. 추가 조항: "**구현 전용 변경**으로 해결 가능한 P1만 Phase 5에서 반영한다. 다음은 모두 **plan doc 하단 `## Deferred` 섹션에 1-2 라인 append** + 별도 `plan: append deferred item` 커밋으로 escalation: (a) P2 defer, (b) spec/plan 재구조화가 필요한 P1 (`spec-bug: <detail>`), (c) plan 또는 eval checklist 자체 결함으로 인한 P1 (예: `checks[].command` 오류, 잘못된 regex) (`plan-bug: <detail>`). plan 본문 재구조화 금지 유지 — `## Deferred` append-only는 허용."
 - **R5a** — 다중 feedback 경로(`pendingAction.feedbackPaths` + `carryoverFeedback.paths`) 충돌 처리: "동일 쟁점이 서로 다른 severity로 중복될 때 highest severity wins, 동일 severity면 한 번만 반영." (`src/context/assembler.ts:368-391` 참조)
 - **R6** — 모든 self-audit 문구에 "sentinel에 쓰기 직전" + "각 gate round ≈ 40× local grep 비용" 취지 포함 (이유 제시가 문구 유지에 효과적). **테스트 가드**: SC11-SC13에서 세 phase 모두 `sentinel` 단어와 `40× local grep` 문구 존재를 regex 검증.
 
@@ -125,6 +136,9 @@
      하면 거부** — 이번 gate는 P2로 rerun하지 않음.
   3. **severity 라벨 누락된 comment**: blocker 가정(보수적). 단 reviewer가
      P1으로 명시한 항목만 구조 변경을 정당화.
+
+  `## Deferred` 섹션이 artifact에 **없으면 파일 끝에 `## Deferred`
+  헤딩을 새로 만든 뒤** 1-2 라인 항목을 append한다.
 {{/if}}
 ```
 
@@ -151,7 +165,8 @@
 {{feedback_paths}}
 
   **Feedback triage (P1-only 정책 · Phase 5 전용)** — 각 comment에 대해:
-  1. **P1 (blocker)**: 구현 수정으로 해결되면 반드시 반영.
+  1. **P1 (blocker · impl-only fix)**: **구현 파일 변경만으로** 해결되면
+     반드시 반영.
   2. **P2**: ≤2 라인 inline fix는 지금 수정. 그 외엔 **plan doc 하단
      `## Deferred` 섹션에 1-2 라인 append** + 별도 `plan: append deferred
      item` 커밋. P2로 spec/plan 본문 재구조화 금지. `## Deferred` append는
@@ -159,13 +174,23 @@
   3. **severity 누락**: blocker 가정.
   4. **spec/plan 재구조화가 필요한 P1**: Phase 5 범위 밖. 구현 쪽은 그대로
      두고 plan doc의 `## Deferred` 섹션에 `spec-bug: <detail>` 1-2 라인을
-     append → `plan: append spec-bug escalation` 커밋. Gate 7 reviewer가
-     `<plan>` 블록에서 그 judgement를 상속받는다. 본격적 재구조화는 후속
-     plan 업데이트 phase 책임. (커밋 메시지 trailer는 Gate 7 prompt에
-     포함되지 않으므로 채널로 사용하지 않는다 — `assembler.ts:253-310`.)
+     append → `plan: append deferred item` 커밋. Gate 7 reviewer가 `<plan>`
+     블록에서 그 judgement를 상속받는다. 본격적 재구조화는 후속 plan 업데이트
+     phase 책임. (커밋 메시지 trailer는 Gate 7 prompt에 포함되지 않으므로
+     채널로 사용하지 않는다 — `assembler.ts:253-310`.)
+  4a. **plan 또는 eval checklist 자체 결함으로 인한 P1**: (예: 잘못된
+     `checks[].command`, 맞지 않는 regex, 범위 오지정) 역시 Phase 5 범위 밖.
+     plan doc의 `## Deferred` 섹션에 `plan-bug: <detail>` 1-2 라인을 append
+     → `plan: append deferred item` 커밋. 구현 변경은 하지 않는다.
   5. **다중 피드백 충돌**: `pendingAction.feedbackPaths`와 `carryoverFeedback.
      paths`가 중복 제시될 수 있다. 동일 쟁점이 서로 다른 severity로 올라오면
      highest severity wins, 동일 severity면 한 번만 반영.
+
+  세 escalation 카테고리(`spec-bug:`, `plan-bug:`, 일반 P2 defer) 모두
+  plan doc 하단 `## Deferred` 섹션이 **없으면 파일 끝에 새로 만들고** 항목을
+  append한다. 커밋 메시지는 세 카테고리 모두 `plan: append deferred item`
+  으로 통일 — 내용 분류는 append한 본문 태그(`spec-bug:`/`plan-bug:`/defer)
+  로 수행한다.
 {{/if}}
 ```
 
@@ -187,6 +212,8 @@ describe('P1-only feedback triage (P1.3)', () => {
   it('phase 5 — triage block absent when no feedback', ...);
   it('phase 5 — triage block present when feedback_paths set', ...);
   it('phase 5 — forbids spec/plan re-structuring in retry', ...);
+  it.each([1, 3, 5] as const)('phase %i — `## Deferred` fallback instruction present (SC15)', ...);
+  it('phase 5 — `plan-bug:` escalation category present (SC16)', ...);
 });
 ```
 
@@ -212,7 +239,7 @@ state stub에 `pendingAction: { feedbackPaths: ['path/to/feedback.md'] }`를 주
 ### Machine-checkable (Phase 6 verify 대상)
 
 - **SC1** — `pnpm tsc --noEmit` passes.
-- **SC2** — `pnpm vitest run`: baseline 617 passed / 1 skipped에서 new tests 추가분만큼 순증. 기존 fail 없음.
+- **SC2** — `pnpm vitest run`: **기존 테스트 회귀 없음**, 새 테스트는 이 PR이 순증만 추가. 절대 baseline은 branch HEAD 기준이며 고정 숫자로 검증하지 않는다 (측정 시점에 따라 상이 — `d9f2621`에서 617 passed / 1 skipped 관측, PR 머지 시점에 재측정).
 - **SC3** — `pnpm build` OK (assets copy 포함).
 - **SC4** — grep test: `src/context/skills/harness-phase-1-spec.md`에 `Pre-sentinel self-audit` 문자열 존재.
 - **SC5** — grep test: `src/context/skills/harness-phase-3-plan.md`에 `Pre-sentinel self-audit` 존재.
@@ -225,6 +252,8 @@ state stub에 `pendingAction: { feedbackPaths: ['path/to/feedback.md'] }`를 주
 - **SC12** — grep test: 세 phase wrapper 모두에 `sentinel` 단어 존재 + self-audit 블록 직전 라인에 "sentinel" 어휘 포함 (R6 timing 가드).
 - **SC13** — grep test: `harness-phase-5-implement.md`에 `baseCommit..HEAD` 문자열 존재 (Phase 5 commit range pin 가드).
 - **SC14** — grep test: `harness-phase-5-implement.md`에 `spec-bug:` + `## Deferred` 문자열 존재 (Phase 5 escalation 채널 가드 — plan doc Deferred 섹션 append 경로).
+- **SC15** — grep test: 세 phase wrapper(`harness-phase-{1,3,5}-*.md`) 모두에 `없으면` + `파일 끝` + `## Deferred` 문자열 조합 존재 (R4a `## Deferred` 부재 fallback 가드 — P1.1 Round 2 fix).
+- **SC16** — grep test: `harness-phase-5-implement.md`에 `plan-bug:` 문자열 존재 (R5 Round 2 fix — plan/checklist 결함 escalation 카테고리 가드).
 
 ### Invariants (회귀 금지)
 
