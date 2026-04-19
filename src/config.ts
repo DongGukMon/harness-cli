@@ -17,7 +17,7 @@ export const MODEL_PRESETS: ModelPreset[] = [
 ];
 
 export const PHASE_DEFAULTS: Record<number, string> = {
-  1: 'opus-max',
+  1: 'opus-high',
   2: 'codex-high',
   3: 'sonnet-high',
   4: 'codex-high',
@@ -65,7 +65,7 @@ export const PHASE_ARTIFACT_FILES: Record<number, string[]> = {
 export const LIGHT_REQUIRED_PHASE_KEYS = ['1', '5', '7'] as const;
 
 export const LIGHT_PHASE_DEFAULTS: Record<number, string> = {
-  1: 'opus-max',
+  1: 'opus-high',
   5: 'sonnet-high',
   7: 'codex-high',
 };

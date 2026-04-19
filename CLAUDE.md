@@ -94,7 +94,7 @@ Session meta: `~/.harness/sessions/<hash>/<runId>/{events.jsonl, meta.json, summ
 
 | # | 요지 | 심각도 | 상태 |
 |---|---|---|---|
-| 8 | Phase 1 default preset 과중 (`opus-max` xHigh) — 간단한 CLI에 4분+ 사용 | P1 | **미처리** (PR #11 §5 deferred). `--simple`/`--complex` 힌트 또는 `opus-high` 기본값 검토 필요. |
+| 8 | Phase 1 default preset 과중 — 간단한 CLI 한 번에 5.4M 토큰 (2026-04-18 dogfood-full 재측정) | P1 | **부분 해결**: PHASE_DEFAULTS[1]·LIGHT_PHASE_DEFAULTS[1]을 `opus-high`로 완화. `opus-max` preset 자체는 MODEL_PRESETS에 유지되어 수동 선택 가능. `--heavy` CLI flag / 자동 난이도 힌트는 별도 follow-up. |
 | 9 | `printAdvisorReminder` orphan text (control-pane tip이 Claude로 전달 안 됨) | P2 UX | PR #11 `HARNESS FLOW CONSTRAINT`가 `advisor()` 금지로 실질 무효화. **제거 PR 진행 중** (`fix/remove-advisor-reminder`, Group C). |
 | 13 | Codex `HOME` 격리 미도입 — BUG-C alternative fix | P3 | PR #11 `REVIEWER_CONTRACT` scope-rules로 일단 해결. **영구 격리 PR 진행 중** (`feat/codex-home-isolation`, Group D). |
 

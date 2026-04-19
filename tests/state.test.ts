@@ -216,7 +216,7 @@ describe('createInitialState (updated)', () => {
 
   it('initializes phasePresets from PHASE_DEFAULTS', () => {
     const state = createInitialState('run-1', 'task', 'abc123', false);
-    expect(state.phasePresets['1']).toBe('opus-max');
+    expect(state.phasePresets['1']).toBe('opus-high');
     expect(state.phasePresets['5']).toBe('sonnet-high');
   });
 
@@ -250,7 +250,7 @@ describe('migrateState', () => {
   it('replaces invalid preset IDs with defaults', () => {
     const raw = { phasePresets: { '1': 'nonexistent', '2': 'codex-high' } };
     const migrated = migrateState(raw);
-    expect(migrated.phasePresets['1']).toBe('opus-max');
+    expect(migrated.phasePresets['1']).toBe('opus-high');
     expect(migrated.phasePresets['2']).toBe('codex-high');
   });
 
