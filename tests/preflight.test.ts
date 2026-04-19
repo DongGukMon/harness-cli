@@ -191,7 +191,8 @@ describe('preflight claudeAtFile timeout behavior', () => {
     expect(() => runPreflight(['claudeAtFile'])).not.toThrow();
 
     const stderrCalls = stderrSpy.mock.calls.map((c: unknown[]) => String(c[0])).join('');
-    expect(stderrCalls).toMatch(/claude @file check timed out/);
+    expect(stderrCalls).toMatch(/claude @file check delayed/);
+    expect(stderrCalls).toMatch(/continuing/);
   });
 
   it('demotes non-zero exit (non-timeout) to warning and does not throw', () => {

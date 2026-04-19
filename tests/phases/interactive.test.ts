@@ -486,7 +486,7 @@ describe('validatePhaseArtifacts — Phase 1', () => {
     fs.mkdirSync(path.dirname(decPath), { recursive: true });
     fs.writeFileSync(specPath, '# Spec content\n\nno complexity header\n');
     fs.writeFileSync(decPath, '# Decisions');
-    expect(validatePhaseArtifacts(1, state, cwd)).toBe(false);
+    expect(validatePhaseArtifacts(1, state, cwd, cwd)).toBe(false);
   });
 
   it('rejects full-flow spec with invalid Complexity token (e.g. "ExtraLarge")', () => {
@@ -500,7 +500,7 @@ describe('validatePhaseArtifacts — Phase 1', () => {
     fs.mkdirSync(path.dirname(decPath), { recursive: true });
     fs.writeFileSync(specPath, '# Spec\n\n## Complexity\n\nExtraLarge\n');
     fs.writeFileSync(decPath, '# Decisions');
-    expect(validatePhaseArtifacts(1, state, cwd)).toBe(false);
+    expect(validatePhaseArtifacts(1, state, cwd, cwd)).toBe(false);
   });
 
   it('accepts full-flow spec with Large bucket + rationale', () => {
@@ -514,7 +514,7 @@ describe('validatePhaseArtifacts — Phase 1', () => {
     fs.mkdirSync(path.dirname(decPath), { recursive: true });
     fs.writeFileSync(specPath, '# Spec\n\n## Complexity\n\nLarge — multi-file refactor\n');
     fs.writeFileSync(decPath, '# Decisions');
-    expect(validatePhaseArtifacts(1, state, cwd)).toBe(true);
+    expect(validatePhaseArtifacts(1, state, cwd, cwd)).toBe(true);
   });
 });
 
@@ -796,7 +796,7 @@ describe('validatePhaseArtifacts — light + phase 1 extras (ADR-13)', () => {
     fs.writeFileSync(state.artifacts.decisionLog, '# D\n');
     fs.writeFileSync(state.artifacts.checklist,
       JSON.stringify({ checks: [{ name: 'n', command: 'true' }] }));
-    expect(validatePhaseArtifacts(1, state, tmp)).toBe(false);
+    expect(validatePhaseArtifacts(1, state, tmp, tmp)).toBe(false);
   });
 });
 

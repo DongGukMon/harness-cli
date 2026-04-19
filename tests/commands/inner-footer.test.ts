@@ -144,6 +144,7 @@ function makeHarnessState(runId: string): HarnessState {
     tmuxControlPane: '',
     loggingEnabled: true,
     codexNoIsolate: false,
+    strictTree: false,
   };
 }
 

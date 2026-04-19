@@ -5,9 +5,14 @@ import path from 'path';
 import { createInitialState } from '../src/state.js';
 import type { HarnessState } from '../src/types.js';
 
-vi.mock('../src/artifact.js', () => ({
-  normalizeArtifactCommit: vi.fn(),
-}));
+vi.mock('../src/artifact.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/artifact.js')>();
+  return {
+    ...actual,
+    commitEvalReport: vi.fn(),
+    normalizeArtifactCommit: vi.fn(),
+  };
+});
 vi.mock('../src/git.js', () => ({
   getHead: vi.fn(() => 'head-sha'),
   isAncestor: vi.fn(() => true),
@@ -117,7 +122,7 @@ describe('completeInteractivePhaseFromFreshSentinel — light + phase 1 extras (
     state.artifacts.checklist = path.join(tmp, 'checklist.json');
     fs.writeFileSync(
       state.artifacts.spec,
-      '# T\n## Open Questions\n없음\n\n## Implementation Plan\n- t\n',
+      '# T\n## Complexity\nmedium\n\n## Open Questions\n없음\n\n## Implementation Plan\n- t\n',
     );
     fs.writeFileSync(state.artifacts.decisionLog, '# D\n');
     fs.writeFileSync(
@@ -139,7 +144,7 @@ describe('completeInteractivePhaseFromFreshSentinel — light + phase 1 extras (
     fs.writeFileSync(state.artifacts.decisionLog, '# D\n');
     fs.writeFileSync(state.artifacts.checklist,
       JSON.stringify({ checks: [{ name: 'n', command: 'true' }] }));
-    expect(completeInteractivePhaseFromFreshSentinel(1, state, tmp)).toBe(false);
+    expect(completeInteractivePhaseFromFreshSentinel(1, state, tmp, tmp)).toBe(false);
   });
 });
 
@@ -167,7 +172,7 @@ describe('completeInteractivePhaseFromFreshSentinel — full + phase 1 Complexit
     state.artifacts.decisionLog = path.join(tmp, 'decisions.md');
     fs.writeFileSync(state.artifacts.spec, '# T\n\n## Complexity\n\nSmall\n');
     fs.writeFileSync(state.artifacts.decisionLog, '# D\n');
-    expect(completeInteractivePhaseFromFreshSentinel(1, state, tmp)).toBe(true);
+    expect(completeInteractivePhaseFromFreshSentinel(1, state, tmp, tmp)).toBe(true);
   });
 
   it('rejects a full-flow spec that lacks the `## Complexity` header', () => {
@@ -177,7 +182,7 @@ describe('completeInteractivePhaseFromFreshSentinel — full + phase 1 Complexit
     state.artifacts.decisionLog = path.join(tmp, 'decisions.md');
     fs.writeFileSync(state.artifacts.spec, '# T\n\n## Context & Decisions\n\nNo complexity here.\n');
     fs.writeFileSync(state.artifacts.decisionLog, '# D\n');
-    expect(completeInteractivePhaseFromFreshSentinel(1, state, tmp)).toBe(false);
+    expect(completeInteractivePhaseFromFreshSentinel(1, state, tmp, tmp)).toBe(false);
   });
 
   it('rejects a full-flow spec whose `## Complexity` body token is outside the 3-value enum', () => {
@@ -187,7 +192,7 @@ describe('completeInteractivePhaseFromFreshSentinel — full + phase 1 Complexit
     state.artifacts.decisionLog = path.join(tmp, 'decisions.md');
     fs.writeFileSync(state.artifacts.spec, '# T\n\n## Complexity\n\nExtraLarge\n');
     fs.writeFileSync(state.artifacts.decisionLog, '# D\n');
-    expect(completeInteractivePhaseFromFreshSentinel(1, state, tmp)).toBe(false);
+    expect(completeInteractivePhaseFromFreshSentinel(1, state, tmp, tmp)).toBe(false);
   });
 
   it('rejects a full-flow spec with duplicate `## Complexity` sections (spec Goal 1: "exactly one")', () => {
@@ -200,6 +205,6 @@ describe('completeInteractivePhaseFromFreshSentinel — full + phase 1 Complexit
       '# T\n\n## Complexity\n\nSmall\n\n## Other\n\n## Complexity\n\nLarge\n',
     );
     fs.writeFileSync(state.artifacts.decisionLog, '# D\n');
-    expect(completeInteractivePhaseFromFreshSentinel(1, state, tmp)).toBe(false);
+    expect(completeInteractivePhaseFromFreshSentinel(1, state, tmp, tmp)).toBe(false);
   });
 });

@@ -40,10 +40,15 @@ vi.mock('../../src/ui.js', () => ({
   printInfo: vi.fn(),
 }));
 
-vi.mock('../../src/artifact.js', () => ({
-  normalizeArtifactCommit: vi.fn().mockReturnValue(true),
-  runPhase6Preconditions: vi.fn(),
-}));
+vi.mock('../../src/artifact.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/artifact.js')>();
+  return {
+    ...actual,
+    commitEvalReport: vi.fn(),
+    normalizeArtifactCommit: vi.fn().mockReturnValue(true),
+    runPhase6Preconditions: vi.fn(),
+  };
+});
 
 vi.mock('../../src/git.js', () => ({
   getHead: vi.fn().mockReturnValue('mock-head-sha'),
@@ -1401,7 +1406,7 @@ describe('escalation — handleGateEscalation emission', () => {
     vi.mocked(promptChoice).mockResolvedValueOnce('Q');
 
     try {
-      await handleGateEscalation(2, 'Feedback text', undefined, state, runDir, CWD, createNoOpInputManager(), logger);
+      await handleGateEscalation(2, 'Feedback text', undefined, FULL_GATE_RETRY_LIMIT - 1, state, runDir, CWD, createNoOpInputManager(), logger);
       const events = readEvents(eventsPath);
       const escalations = events.filter((e: any) => e.event === 'escalation');
       expect(escalations).toHaveLength(1);
@@ -1424,7 +1429,7 @@ describe('escalation — handleGateEscalation emission', () => {
     vi.mocked(promptChoice).mockResolvedValueOnce('S');
 
     try {
-      await handleGateEscalation(2, 'Feedback', undefined, state, runDir, CWD, createNoOpInputManager(), logger);
+      await handleGateEscalation(2, 'Feedback', undefined, FULL_GATE_RETRY_LIMIT - 1, state, runDir, CWD, createNoOpInputManager(), logger);
       const events = readEvents(eventsPath);
       const escalation = events.find((e: any) => e.event === 'escalation');
       const forcePass = events.find((e: any) => e.event === 'force_pass');
@@ -1449,7 +1454,7 @@ describe('escalation — handleGateEscalation emission', () => {
     vi.mocked(promptChoice).mockResolvedValueOnce('C');
 
     try {
-      await handleGateEscalation(2, 'More feedback', undefined, state, runDir, CWD, createNoOpInputManager(), logger);
+      await handleGateEscalation(2, 'More feedback', undefined, FULL_GATE_RETRY_LIMIT - 1, state, runDir, CWD, createNoOpInputManager(), logger);
       // Phase 2 → prevInteractivePhase = 1
       expect(state.phaseReopenSource['1']).toBe(2);
     } finally {

@@ -53,6 +53,7 @@ export interface HarnessState {
   artifacts: Artifacts;
   phases: Record<string, PhaseStatus>; // keys "1"-"7"
   gateRetries: Record<string, number>; // keys "2","4","7"
+  gateEscalationCycles?: Partial<Record<'2' | '4' | '7', number>>;
   verifyRetries: number;
   pauseReason: PauseReason | null;
   specCommit: string | null;
