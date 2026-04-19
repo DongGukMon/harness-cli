@@ -201,6 +201,33 @@ describe('enterFailedTerminalState', () => {
     }));
   });
 
+  it('shows a fast-Claude-failure hint when the most recent phase_end matches', async () => {
+    const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    const state = makeState();
+    const runDir = makeTmpDir();
+    fs.writeFileSync(path.join(runDir, 'events.jsonl'),
+      JSON.stringify({ event: 'phase_end', phase: 5, status: 'failed', durationMs: 6800, claudeTokens: { input: 0, output: 0, cacheRead: 0, cacheCreate: 0, total: 0 } }) + '\n');
+    const input = new MockInput();
+    input.enqueue('q');
+    await enterFailedTerminalState(state, '/harness', runDir, '/cwd', input as unknown as InputManager, makeLogger());
+    const hintShown = stderrSpy.mock.calls.some(c => /Hint: Claude exited within/.test(String(c[0])));
+    expect(hintShown).toBe(true);
+    stderrSpy.mockRestore();
+  });
+
+  it('does not show the hint when duration is long', async () => {
+    const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    const state = makeState();
+    const runDir = makeTmpDir();
+    fs.writeFileSync(path.join(runDir, 'events.jsonl'),
+      JSON.stringify({ event: 'phase_end', phase: 5, status: 'failed', durationMs: 600_000, claudeTokens: null }) + '\n');
+    const input = new MockInput();
+    input.enqueue('q');
+    await enterFailedTerminalState(state, '/harness', runDir, '/cwd', input as unknown as InputManager, makeLogger());
+    const hintShown = stderrSpy.mock.calls.some(c => /Hint: Claude exited within/.test(String(c[0])));
+    expect(hintShown).toBe(false);
+    stderrSpy.mockRestore();
+  });
 });
 
 describe('enterCompleteTerminalState', () => {

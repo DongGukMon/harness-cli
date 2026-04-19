@@ -43,6 +43,32 @@ function summarizeRecentEvents(runDir: string, limit = 10): string {
   }
 }
 
+function fastClaudeFailureHint(eventsPath: string): string | null {
+  try {
+    const raw = fs.readFileSync(eventsPath, 'utf-8');
+    const lines = raw.trimEnd().split('\n');
+    for (let i = lines.length - 1; i >= 0; i--) {
+      let ev: any;
+      try { ev = JSON.parse(lines[i]); } catch { continue; }
+      if (ev.event !== 'phase_end' || ev.status !== 'failed') continue;
+      const tokens = ev.claudeTokens;
+      const dur = ev.durationMs ?? 0;
+      const zeroObj = tokens && typeof tokens === 'object' && tokens.total === 0;
+      const nullToken = tokens === null;
+      if ((zeroObj || nullToken) && dur < 30_000) {
+        return [
+          'Hint: Claude exited within ' + Math.round(dur / 1000) + 's with no assistant output.',
+          'Common causes: folder-trust dialog blocking the workspace pane, immediate crash,',
+          'or the Claude binary failing to launch. Check the workspace tmux pane for a dialog',
+          'before pressing [R] (a fresh attempt will hit the same wall).',
+        ].join('\n');
+      }
+      return null;
+    }
+  } catch { /* file missing or unreadable */ }
+  return null;
+}
+
 function summarizeGitStatus(cwd: string, headLines = 10): string {
   try {
     const out = execSync('git status --porcelain', { cwd, encoding: 'utf-8' }).trimEnd();
@@ -143,6 +169,12 @@ export async function enterFailedTerminalState(
 
     process.stderr.write('\nRecent events:\n');
     process.stderr.write(summarizeRecentEvents(runDir) + '\n');
+
+    const hint = fastClaudeFailureHint(path.join(runDir, 'events.jsonl'));
+    if (hint !== null) {
+      process.stderr.write('\n' + hint + '\n');
+    }
+
     process.stderr.write('\nWorking tree:\n');
     process.stderr.write(summarizeGitStatus(cwd) + '\n');
     process.stderr.write('\n[R] Resume   [J] Jump to phase   [Q] Quit\n');
