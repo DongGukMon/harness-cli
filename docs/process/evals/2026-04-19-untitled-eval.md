@@ -15,10 +15,14 @@
 | uninstall-skills-help | pass |  |
 | standalone-skill-vendored | pass |  |
 | standalone-skill-in-dist | pass |  |
+| scope-contract-in-gate-prompts | pass |  |
+| light-flow-in-gate-prompts | pass |  |
+| light-flow-in-skill-md | pass |  |
+| no-stale-harness-cli-refs | pass |  |
 
 ## Summary
-- Total: 9 checks
-- Pass: 9
+- Total: 13 checks
+- Pass: 13
 - Fail: 0
 
 ## Raw Output
@@ -56,103 +60,103 @@
 
  RUN  v2.1.9 /Users/daniel/.grove/github.com/DongGukMon/harness-cli/worktrees/install-skills
 
- ✓ tests/state.test.ts (45 tests) 43ms
- ✓ tests/context/skills-rendering.test.ts (45 tests) 59ms
- ✓ tests/logger.test.ts (32 tests) 107ms
- ✓ tests/phases/gate.test.ts (27 tests) 103ms
- ✓ tests/commands/inner.test.ts (20 tests) 161ms
- ✓ tests/lock.test.ts (20 tests) 379ms
- ✓ tests/context/assembler.test.ts (64 tests) 424ms
- ✓ tests/phases/runner.test.ts (76 tests) 447ms
- ✓ tests/integration/logging.test.ts (15 tests) 495ms
-   ✓ Integration: real-wiring runPhaseLoop with mocked runners > bootstrap → phase loop with mocked runners → summary produced 428ms
-[2J[H[2J[H ✓ tests/commands/footer-ticker.test.ts (10 tests) 69ms
- ✓ tests/phases/gate-resume.test.ts (13 tests) 116ms
-[2J[H[2J[H ✓ tests/signal.test.ts (16 tests) 707ms
-[2J[H[2J[H[2J[H[2J[H ✓ tests/phases/terminal-ui.test.ts (17 tests) 86ms
- ✓ tests/preflight.test.ts (29 tests | 1 skipped) 185ms
- ✓ tests/runners/claude-usage.test.ts (13 tests) 50ms
- ✓ tests/metrics/footer-aggregator.test.ts (11 tests) 23ms
- ✓ tests/integration/codex-session-resume.test.ts (6 tests) 82ms
- ✓ tests/commands/inner-footer.test.ts (2 tests) 21ms
- ✓ tests/phases/runner-token-capture.test.ts (6 tests) 17ms
- ✓ tests/resume-light.test.ts (10 tests) 70ms
- ✓ tests/integration/light-flow.test.ts (4 tests) 214ms
- ✓ tests/runners/codex-resume.test.ts (8 tests) 57ms
- ✓ tests/phases/verify.test.ts (12 tests) 8ms
- ✓ tests/phases/interactive-watchdog.test.ts (6 tests) 8ms
- ✓ tests/context/assembler-resume.test.ts (9 tests) 75ms
- ✓ tests/phases/gate-feedback-archival.test.ts (2 tests) 43ms
- ✓ tests/runners/codex-isolation.test.ts (8 tests) 17ms
-[2J[H[2J[H[2J[H[2J[H[2J[H[2J[H[2J[H[2J[H ✓ tests/ui.test.ts (8 tests) 6ms
- ✓ tests/state-invalidation.test.ts (5 tests) 15ms
- ✓ tests/runners/codex.test.ts (6 tests) 36ms
+ ✓ tests/state.test.ts (45 tests) 56ms
+ ✓ tests/context/skills-rendering.test.ts (45 tests) 79ms
+ ✓ tests/logger.test.ts (32 tests) 116ms
+ ✓ tests/phases/gate.test.ts (27 tests) 117ms
+ ✓ tests/lock.test.ts (20 tests) 230ms
+[2J[H[2J[H[2J[H[2J[H[2J[H ✓ tests/integration/logging.test.ts (15 tests) 289ms
+ ✓ tests/commands/inner.test.ts (20 tests) 314ms
+ ✓ tests/commands/footer-ticker.test.ts (10 tests) 126ms
+[2J[H ✓ tests/phases/gate-resume.test.ts (13 tests) 197ms
+[2J[H[2J[H ✓ tests/phases/terminal-ui.test.ts (17 tests) 114ms
+ ✓ tests/context/assembler.test.ts (64 tests) 425ms
+ ✓ tests/runners/claude-usage.test.ts (13 tests) 83ms
+ ✓ tests/preflight.test.ts (29 tests | 1 skipped) 222ms
+ ✓ tests/signal.test.ts (16 tests) 446ms
+ ✓ tests/phases/runner.test.ts (76 tests) 512ms
+ ✓ tests/metrics/footer-aggregator.test.ts (11 tests) 5ms
+ ✓ tests/phases/runner-token-capture.test.ts (6 tests) 16ms
+ ✓ tests/integration/codex-session-resume.test.ts (6 tests) 93ms
+ ✓ tests/commands/inner-footer.test.ts (2 tests) 25ms
+ ✓ tests/resume-light.test.ts (10 tests) 72ms
+ ✓ tests/integration/light-flow.test.ts (4 tests) 183ms
+ ✓ tests/runners/codex-resume.test.ts (8 tests) 70ms
+ ✓ tests/phases/verify.test.ts (12 tests) 10ms
+ ✓ tests/context/assembler-resume.test.ts (9 tests) 106ms
+ ✓ tests/phases/interactive-watchdog.test.ts (6 tests) 9ms
+ ✓ tests/runners/codex-isolation.test.ts (8 tests) 18ms
+ ✓ tests/phases/gate-feedback-archival.test.ts (2 tests) 44ms
+[2J[H[2J[H[2J[H[2J[H[2J[H[2J[H[2J[H[2J[H ✓ tests/ui.test.ts (8 tests) 5ms
+ ✓ tests/state-invalidation.test.ts (5 tests) 32ms
+ ✓ tests/runners/codex.test.ts (6 tests) 37ms
  ✓ tests/phases/verdict.test.ts (16 tests) 3ms
- ✓ tests/tmux.test.ts (33 tests) 835ms
-   ✓ pollForPidFile > returns null on timeout when file never appears 425ms
-   ✓ pollForPidFile > returns null when file contains non-numeric content 403ms
- ✓ tests/root.test.ts (10 tests) 166ms
- ✓ tests/phases/gate-resume-escalation.test.ts (1 test) 44ms
- ✓ tests/context/reviewer-contract.test.ts (4 tests) 48ms
- ✓ tests/commands/status-list.test.ts (7 tests) 644ms
- ✓ tests/ui-footer.test.ts (9 tests) 4ms
- ✓ tests/resume.test.ts (6 tests) 1338ms
-Installed 1 skill(s) to /var/folders/vx/1ln4rqh969s1ynxythgw3y8m0000gn/T/uninstall-skills-test-Wkstl2/.claude/skills:
+ ✓ tests/tmux.test.ts (33 tests) 845ms
+   ✓ pollForPidFile > returns null on timeout when file never appears 421ms
+   ✓ pollForPidFile > returns null when file contains non-numeric content 409ms
+ ✓ tests/root.test.ts (10 tests) 208ms
+ ✓ tests/phases/gate-resume-escalation.test.ts (1 test) 31ms
+ ✓ tests/resume.test.ts (6 tests) 1172ms
+ ✓ tests/context/reviewer-contract.test.ts (4 tests) 52ms
+ ✓ tests/commands/status-list.test.ts (7 tests) 673ms
+ ✓ tests/ui-footer.test.ts (9 tests) 5ms
+ ✓ tests/commands/jump.test.ts (6 tests) 702ms
+Installed 1 skill(s) to /var/folders/vx/1ln4rqh969s1ynxythgw3y8m0000gn/T/uninstall-skills-test-etJLjN/.claude/skills:
   phase-harness-codex-gate-review
-Uninstalled 1 skill(s) from /var/folders/vx/1ln4rqh969s1ynxythgw3y8m0000gn/T/uninstall-skills-test-Wkstl2/.claude/skills:
+Uninstalled 1 skill(s) from /var/folders/vx/1ln4rqh969s1ynxythgw3y8m0000gn/T/uninstall-skills-test-etJLjN/.claude/skills:
   phase-harness-codex-gate-review
-Installed 1 skill(s) to /var/folders/vx/1ln4rqh969s1ynxythgw3y8m0000gn/T/uninstall-skills-test-NuHpoa/.claude/skills:
+Installed 1 skill(s) to /var/folders/vx/1ln4rqh969s1ynxythgw3y8m0000gn/T/uninstall-skills-test-r4uMoV/.claude/skills:
   phase-harness-codex-gate-review
-Uninstalled 1 skill(s) from /var/folders/vx/1ln4rqh969s1ynxythgw3y8m0000gn/T/uninstall-skills-test-NuHpoa/.claude/skills:
+Uninstalled 1 skill(s) from /var/folders/vx/1ln4rqh969s1ynxythgw3y8m0000gn/T/uninstall-skills-test-r4uMoV/.claude/skills:
   phase-harness-codex-gate-review
-Installed 1 skill(s) to /var/folders/vx/1ln4rqh969s1ynxythgw3y8m0000gn/T/uninstall-skills-test-hOgM8g/.claude/skills:
+Installed 1 skill(s) to /var/folders/vx/1ln4rqh969s1ynxythgw3y8m0000gn/T/uninstall-skills-test-ncXKFi/.claude/skills:
   phase-harness-codex-gate-review
-Uninstalled 1 skill(s) from /var/folders/vx/1ln4rqh969s1ynxythgw3y8m0000gn/T/uninstall-skills-test-hOgM8g/.claude/skills:
+Uninstalled 1 skill(s) from /var/folders/vx/1ln4rqh969s1ynxythgw3y8m0000gn/T/uninstall-skills-test-ncXKFi/.claude/skills:
   phase-harness-codex-gate-review
-No skills directory found at /var/folders/vx/1ln4rqh969s1ynxythgw3y8m0000gn/T/uninstall-skills-test-WXqfIJ/.claude/skills. Nothing to uninstall.
- ✓ tests/uninstall-skills.test.ts (6 tests) 21ms
-Installed 1 skill(s) to /var/folders/vx/1ln4rqh969s1ynxythgw3y8m0000gn/T/install-skills-test-3PnEyV/.claude/skills:
+No skills directory found at /var/folders/vx/1ln4rqh969s1ynxythgw3y8m0000gn/T/uninstall-skills-test-pqy8mz/.claude/skills. Nothing to uninstall.
+ ✓ tests/uninstall-skills.test.ts (6 tests) 10ms
+Installed 1 skill(s) to /var/folders/vx/1ln4rqh969s1ynxythgw3y8m0000gn/T/install-skills-test-R2qV73/.claude/skills:
   phase-harness-codex-gate-review
-Installed 1 skill(s) to /var/folders/vx/1ln4rqh969s1ynxythgw3y8m0000gn/T/install-skills-test-zuGVKw/.claude/skills:
+Installed 1 skill(s) to /var/folders/vx/1ln4rqh969s1ynxythgw3y8m0000gn/T/install-skills-test-Xfxzgf/.claude/skills:
   phase-harness-codex-gate-review
-Installed 1 skill(s) to /var/folders/vx/1ln4rqh969s1ynxythgw3y8m0000gn/T/install-skills-test-vhDwG2/.claude/skills:
+Installed 1 skill(s) to /var/folders/vx/1ln4rqh969s1ynxythgw3y8m0000gn/T/install-skills-test-VyJbLS/.claude/skills:
   phase-harness-codex-gate-review
-Installed 1 skill(s) to /var/folders/vx/1ln4rqh969s1ynxythgw3y8m0000gn/T/install-skills-test-S000CG/.claude/skills:
-  phase-harness-codex-gate-review
-Installed 1 skill(s) to /var/folders/vx/1ln4rqh969s1ynxythgw3y8m0000gn/T/install-skills-test-J4P2BL/.claude/skills:
-  phase-harness-codex-gate-review
-Installed 1 skill(s) to /var/folders/vx/1ln4rqh969s1ynxythgw3y8m0000gn/T/install-skills-test-J4P2BL/.claude/skills:
-  phase-harness-codex-gate-review
- ✓ tests/install-skills.test.ts (7 tests) 18ms
  ✓ tests/input.test.ts (12 tests) 2ms
- ✓ tests/commands/jump.test.ts (6 tests) 753ms
+Installed 1 skill(s) to /var/folders/vx/1ln4rqh969s1ynxythgw3y8m0000gn/T/install-skills-test-mfj6gd/.claude/skills:
+  phase-harness-codex-gate-review
+Installed 1 skill(s) to /var/folders/vx/1ln4rqh969s1ynxythgw3y8m0000gn/T/install-skills-test-L8ZBCg/.claude/skills:
+  phase-harness-codex-gate-review
+Installed 1 skill(s) to /var/folders/vx/1ln4rqh969s1ynxythgw3y8m0000gn/T/install-skills-test-L8ZBCg/.claude/skills:
+  phase-harness-codex-gate-review
+ ✓ tests/commands/resume-cmd.test.ts (12 tests) 1861ms
+ ✓ tests/install-skills.test.ts (7 tests) 33ms
  ✓ tests/task-prompt.test.ts (7 tests) 2ms
- ✓ tests/commands/resume-cmd.test.ts (12 tests) 1937ms
- ✓ tests/git.test.ts (16 tests) 1414ms
- ✓ tests/integration/lifecycle.test.ts (11 tests) 1285ms
-[2J[H[2J[H[2J[H[2J[H[2J[H[2J[H[2J[H ✓ tests/ui-prompt-model-config.test.ts (3 tests) 2ms
- ✓ tests/conformance/phase-models.test.ts (9 tests) 3ms
+ ✓ tests/git.test.ts (16 tests) 1318ms
+ ✓ tests/integration/lifecycle.test.ts (11 tests) 1282ms
+[2J[H[2J[H[2J[H[2J[H[2J[H[2J[H[2J[H ✓ tests/ui-prompt-model-config.test.ts (3 tests) 5ms
  ✓ tests/terminal.test.ts (5 tests) 2ms
- ✓ tests/preflight-claude-at-file.test.ts (2 tests) 3ms
- ✓ tests/ui-separator.test.ts (5 tests) 2ms
- ✓ tests/process.test.ts (6 tests) 35ms
- ✓ tests/config.test.ts (8 tests) 4ms
- ✓ tests/resolve-skills-root.test.ts (4 tests) 1ms
- ✓ tests/runners/claude.test.ts (1 test) 16ms
- ✓ tests/phases/interactive.test.ts (45 tests) 3193ms
-   ✓ runInteractivePhase — Claude dispatch command shape > sendKeysToPane command includes --dangerously-skip-permissions and --effort 1589ms
- ✓ tests/commands/skip.test.ts (4 tests) 378ms
- ✓ tests/artifact.test.ts (12 tests) 2494ms
-   ✓ normalizeArtifactCommit > recovers from interrupted git add (target-only staged) 349ms
-   ✓ runPhase6Preconditions > git rm stages tracked eval report deletion without creating a reset commit 367ms
- ✓ tests/phases/eval-report-commit-squash.test.ts (6 tests) 3086ms
-   ✓ eval report commit squash > stages tracked eval report deletion without creating a reset commit and commits one rev-K report per round 1070ms
-   ✓ eval report commit squash > treats an already-staged eval report deletion as an idempotent precondition 554ms
-   ✓ eval report commit squash > resumes cleanly from the staged-D crash window and produces exactly one new rev-K commit 725ms
-   ✓ eval report commit squash > uses the rev-K eval report message on both resume recovery paths 319ms
- ✓ tests/commands/run.test.ts (17 tests) 3577ms
-   ✓ startCommand > accepts empty task as untitled 339ms
-   ✓ startCommand > accepts whitespace-only task as untitled 308ms
+ ✓ tests/conformance/phase-models.test.ts (9 tests) 3ms
+ ✓ tests/preflight-claude-at-file.test.ts (2 tests) 5ms
+ ✓ tests/process.test.ts (6 tests) 30ms
+ ✓ tests/ui-separator.test.ts (5 tests) 1ms
+ ✓ tests/resolve-skills-root.test.ts (4 tests) 2ms
+ ✓ tests/config.test.ts (8 tests) 2ms
+ ✓ tests/runners/claude.test.ts (1 test) 14ms
+ ✓ tests/commands/skip.test.ts (4 tests) 449ms
+ ✓ tests/phases/interactive.test.ts (45 tests) 3132ms
+   ✓ runInteractivePhase — Claude dispatch command shape > sendKeysToPane command includes --dangerously-skip-permissions and --effort 1580ms
+ ✓ tests/artifact.test.ts (12 tests) 2483ms
+   ✓ normalizeArtifactCommit > recovers from interrupted git add (target-only staged) 307ms
+   ✓ runPhase6Preconditions > git rm stages tracked eval report deletion without creating a reset commit 390ms
+ ✓ tests/phases/eval-report-commit-squash.test.ts (6 tests) 3134ms
+   ✓ eval report commit squash > stages tracked eval report deletion without creating a reset commit and commits one rev-K report per round 992ms
+   ✓ eval report commit squash > treats an already-staged eval report deletion as an idempotent precondition 560ms
+   ✓ eval report commit squash > resumes cleanly from the staged-D crash window and produces exactly one new rev-K commit 671ms
+   ✓ eval report commit squash > uses the rev 1 eval report message on the live verify pass path 324ms
+   ✓ eval report commit squash > uses the rev-K eval report message on both resume recovery paths 330ms
+ ✓ tests/commands/run.test.ts (17 tests) 3817ms
+   ✓ startCommand > accepts empty task as untitled 386ms
+   ✓ startCommand > adds .harness/ to .gitignore 309ms
 ```
 
 </details>
@@ -163,7 +167,7 @@ Installed 1 skill(s) to /var/folders/vx/1ln4rqh969s1ynxythgw3y8m0000gn/T/install
 ```
 ⚠️  Complexity signal missing or invalid in spec; defaulting to Medium.
 ⚠️  Complexity signal missing or invalid in spec; defaulting to Medium.
-⚠️  carryover feedback path not found on disk, skipping: /var/folders/vx/1ln4rqh969s1ynxythgw3y8m0000gn/T/sk-ZMHspr/phase-5-carryover-missing.md
+⚠️  carryover feedback path not found on disk, skipping: /var/folders/vx/1ln4rqh969s1ynxythgw3y8m0000gn/T/sk-RmbEdK/phase-5-carryover-missing.md
 warning: Not a git repository. Use --no-index to compare two paths outside a working tree
 usage: git diff --no-index [<options>] <path> <path>
 
@@ -357,6 +361,94 @@ Diff output format options
 
 ### standalone-skill-in-dist
 **Command:** `test -f dist/src/context/skills-standalone/codex-gate-review/SKILL.md`
+**Exit code:** 0
+
+<details>
+<summary>stdout (truncated to 100 lines)</summary>
+
+```
+
+```
+
+</details>
+
+<details>
+<summary>stderr (truncated to 50 lines)</summary>
+
+```
+
+```
+
+</details>
+
+### scope-contract-in-gate-prompts
+**Command:** `grep -q 'Scope: design | impl | mixed' src/context/skills-standalone/codex-gate-review/gate-prompts.md`
+**Exit code:** 0
+
+<details>
+<summary>stdout (truncated to 100 lines)</summary>
+
+```
+
+```
+
+</details>
+
+<details>
+<summary>stderr (truncated to 50 lines)</summary>
+
+```
+
+```
+
+</details>
+
+### light-flow-in-gate-prompts
+**Command:** `grep -q 'light flow' src/context/skills-standalone/codex-gate-review/gate-prompts.md`
+**Exit code:** 0
+
+<details>
+<summary>stdout (truncated to 100 lines)</summary>
+
+```
+
+```
+
+</details>
+
+<details>
+<summary>stderr (truncated to 50 lines)</summary>
+
+```
+
+```
+
+</details>
+
+### light-flow-in-skill-md
+**Command:** `grep -q 'light flow' src/context/skills-standalone/codex-gate-review/SKILL.md`
+**Exit code:** 0
+
+<details>
+<summary>stdout (truncated to 100 lines)</summary>
+
+```
+
+```
+
+</details>
+
+<details>
+<summary>stderr (truncated to 50 lines)</summary>
+
+```
+
+```
+
+</details>
+
+### no-stale-harness-cli-refs
+**Command:** `! grep -nE '(^|[^-a-zA-Z])harness (run|start|jump|skip|status|list|install-skills|uninstall-skills)([^a-zA-Z]|$)' README.md README.ko.md src/commands/resume.ts`
 **Exit code:** 0
 
 <details>
