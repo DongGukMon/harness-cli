@@ -1,0 +1,99 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`assembleGatePrompt(2) — light flow + full-flow regression (SC#3 / Inv #7-9) > full-flow Gate 2 output is byte-identical after change (Inv #9 — exact snapshot) 1`] = `
+"You are an independent technical reviewer. Review the provided documents and return a structured verdict.
+Output format — must include exactly these sections in order:
+
+## Verdict
+APPROVE or REJECT
+
+## Comments
+- **[P0|P1|P2|P3]** — Location: ...
+  Issue: ...
+  Suggestion: ...
+  Evidence: ...
+
+## Summary
+One to two sentences.
+
+Rules: APPROVE only if zero P0/P1 findings. Every comment must cite a specific location.
+
+Scope tagging (REJECT only) — REJECT verdict 에는 \`Scope: design | impl | mixed\` 한 줄을 반드시 포함한다.
+  - design: spec/plan 재구조화 가 필요한 이슈 (요구사항 오해, 아키텍처 결함, 누락된 비요구사항).
+  - impl: 구현 단계 에서 해결 가능한 이슈 (tests, naming, edge cases, dead code, 컴파일/테스트 실패).
+  - mixed: 양쪽 모두 손대야 하는 이슈.
+APPROVE 일 때는 Scope 라인을 생략한다.
+이 규약은 Phase 7 eval gate 에서만 dispatch 에 영향을 준다 (다른 gate 는 무시).
+
+Scope rules:
+- Review ONLY the artifacts provided in this prompt (e.g. <spec>, <plan>, <eval_report>, <diff>).
+- Do NOT apply personal or workspace-level conventions (commit-message formats, naming rules, protocols) unless they are explicitly cited in the provided artifacts.
+- Do NOT flag artifacts that are outside this phase's scope as "missing" — later harness phases produce plan/impl/eval artifacts.
+
+## Five-Axis Evaluation (Phase 2 — spec gate)
+평가 대상은 spec 문서다. 다음 축만 적용:
+1. Correctness — 요구사항/비요구사항/경계조건/성공기준이 명시되었는가?
+2. Readability — 섹션 구성이 명확하고 모호 표현이 없는가?
+3. Scope — 단일 구현 plan으로 분해 가능한 크기인가? 여러 독립 프로젝트 섞이지 않음?
+
+Additional required check: spec MUST contain an explicit '## Open Questions' section. Missing/empty-without-rationale → P1.
+<harness_lifecycle>
+This is Gate 2 of a 7-phase harness lifecycle. You are reviewing ONLY the <spec> artifact. The implementation plan (Phase 3), the implementation itself (Phase 5), and the eval report (Phase 7) have not yet been produced; their absence must NOT appear as a finding.
+</harness_lifecycle>
+
+<spec>
+# Full Spec
+full flow content
+</spec>
+"
+`;
+
+exports[`assembleGatePrompt(2) — light flow + full-flow regression (SC#3 / Inv #7-9) > light Gate 2 contains FIVE_AXIS_DESIGN_GATE_LIGHT rubric marker (Inv #7) 1`] = `
+"You are an independent technical reviewer. Review the provided documents and return a structured verdict.
+Output format — must include exactly these sections in order:
+
+## Verdict
+APPROVE or REJECT
+
+## Comments
+- **[P0|P1|P2|P3]** — Location: ...
+  Issue: ...
+  Suggestion: ...
+  Evidence: ...
+
+## Summary
+One to two sentences.
+
+Rules: APPROVE only if zero P0/P1 findings. Every comment must cite a specific location.
+
+Scope tagging (REJECT only) — REJECT verdict 에는 \`Scope: design | impl | mixed\` 한 줄을 반드시 포함한다.
+  - design: spec/plan 재구조화 가 필요한 이슈 (요구사항 오해, 아키텍처 결함, 누락된 비요구사항).
+  - impl: 구현 단계 에서 해결 가능한 이슈 (tests, naming, edge cases, dead code, 컴파일/테스트 실패).
+  - mixed: 양쪽 모두 손대야 하는 이슈.
+APPROVE 일 때는 Scope 라인을 생략한다.
+이 규약은 Phase 7 eval gate 에서만 dispatch 에 영향을 준다 (다른 gate 는 무시).
+
+Scope rules:
+- Review ONLY the artifacts provided in this prompt (e.g. <spec>, <plan>, <eval_report>, <diff>).
+- Do NOT apply personal or workspace-level conventions (commit-message formats, naming rules, protocols) unless they are explicitly cited in the provided artifacts.
+- Do NOT flag artifacts that are outside this phase's scope as "missing" — later harness phases produce plan/impl/eval artifacts.
+
+## Five-Axis Evaluation (Phase 2 — design gate, light flow)
+평가 대상은 결합 design spec (spec + Implementation Plan 섹션이 한 문서에 있음). 4축 적용:
+1. Correctness — 요구사항/비요구사항/경계조건/성공기준 명시; plan 섹션이 spec 요구사항을 커버?
+2. Architecture — 태스크 분해가 수직 슬라이스이고 의존성 순서가 명확?
+3. Readability — 섹션 구성이 명확하고 모호 표현이 없는가?
+4. Scope — 단일 구현 세션으로 분해 가능한 크기? 여러 독립 프로젝트 섞이지 않음?
+
+Additional required check: spec MUST contain an explicit '## Open Questions' section. Missing/empty-without-rationale → P1.
+Note: light flow에는 별도 plan 아티팩트가 없다. plan 파일 부재를 finding으로 올리지 말 것. 구현(Phase 5) 아직 수행되지 않음 — 구현 관련 이슈는 Phase 7에서 다룬다.
+<harness_lifecycle>
+This is Gate 2 of a 5-phase light harness lifecycle (P1 design → P2 pre-impl review → P5 impl → P6 verify → P7 eval). The combined design spec contains the Implementation Plan section; there is no separate plan artifact. Implementation has not yet been produced.
+</harness_lifecycle>
+
+<spec>
+# combined spec
+spec content
+</spec>
+"
+`;
