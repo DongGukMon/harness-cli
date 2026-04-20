@@ -41,22 +41,6 @@ function createNoOpInputManager(): InputManager {
 }
 
 /**
- * Synthesize a failed phase state from an inconsistent pause (status=paused + pendingAction=null).
- * This can happen if the process was killed after state was written as 'paused' but before
- * pendingAction was recorded. Exported so inner.ts can use the same logic for the live path.
- */
-export function synthesizeFailedFromInconsistentPause(state: HarnessState, runDir: string): void {
-  process.stderr.write(
-    `⚠️  Run ${state.runId} detected inconsistent pause state (paused + pendingAction=null); ` +
-    `synthesizing failed phase ${state.currentPhase} and routing to failed terminal UI.\n`
-  );
-  state.phases[String(state.currentPhase)] = 'failed';
-  state.status = 'in_progress';
-  state.pauseReason = null;
-  writeState(runDir, state);
-}
-
-/**
  * Resume a run. Validates state, performs recovery based on pendingAction or
  * phase status, then delegates to runPhaseLoop to continue execution.
  */
@@ -87,7 +71,8 @@ export async function resumeRun(
   if (state.status === 'paused' && state.pendingAction === null) {
     process.stderr.write(
       `⚠️  Run ${state.runId} detected inconsistent pause state (paused + pendingAction=null); ` +
-      `non-interactive resume path — use 'phase-harness resume' (tmux live path) to get the R/J/Q recovery UI.\n`
+      `non-interactive resume path — use 'phase-harness resume' (tmux live path) to get the R/J/Q recovery UI, ` +
+      `or 'phase-harness jump ${state.currentPhase}' to restart from this phase.\n`
     );
     process.exit(1);
   }

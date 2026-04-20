@@ -16,7 +16,6 @@ import { createSessionLogger } from '../logger.js';
 import { codexHomeFor } from '../runners/codex-isolation.js';
 import type { SessionLogger, HarnessState } from '../types.js';
 import { promptForTask } from '../task-prompt.js';
-import { synthesizeFailedFromInconsistentPause } from '../resume.js';
 
 export interface InnerOptions {
   root?: string;
@@ -38,9 +37,12 @@ export async function innerCommand(runId: string, options: InnerOptions = {}): P
   }
 
   // D4 live path: detect inconsistent state before entering the loop.
+  // Do NOT write state here — keep disk as paused+null so crash re-entry re-detects the inconsistency.
   let inconsistentPauseDetected = false;
   if (state.status === 'paused' && state.pendingAction === null) {
-    synthesizeFailedFromInconsistentPause(state, runDir);
+    process.stderr.write(
+      `⚠️  Run ${state.runId} detected inconsistent pause state (paused + pendingAction=null); routing to failed terminal UI.\n`
+    );
     inconsistentPauseDetected = true;
   }
 
@@ -77,7 +79,7 @@ export async function innerCommand(runId: string, options: InnerOptions = {}): P
     ? fs.readFileSync(taskMdPath, 'utf-8').trim()
     : '';
 
-  if (!existingTask) {
+  if (!existingTask && !inconsistentPauseDetected) {
     if (state.tmuxControlPane) {
       selectPane(state.tmuxSession, state.tmuxControlPane);
     }
@@ -218,10 +220,15 @@ export async function innerCommand(runId: string, options: InnerOptions = {}): P
 
   // 6. Run phase loop, then route to terminal-state UI based on outcome
   try {
-    // D4a: skip runPhaseLoop on synthesized failure — enterPhaseLoop() is already called above,
-    // state has phases[N]='failed', so anyPhaseFailed fires and routes to enterFailedTerminalState.
+    // D4a: skip runPhaseLoop on synthesized failure.
     if (!inconsistentPauseDetected) {
       await runPhaseLoop(state, harnessDir, runDir, cwd, inputManager, logger, sidecarReplayAllowed);
+    } else {
+      // Delay in-memory synthesis until UI is live (enterPhaseLoop already called above).
+      // No writeState here — disk stays as paused+null for crash-safe re-detection.
+      state.phases[String(state.currentPhase)] = 'failed';
+      state.status = 'in_progress';
+      state.pauseReason = null;
     }
 
     const { enterCompleteTerminalState, enterFailedTerminalState, anyPhaseFailed } =

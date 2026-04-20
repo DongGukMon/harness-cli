@@ -60,6 +60,7 @@ import { killSession, killWindow, selectWindow, splitPane, paneExists } from '..
 import { findHarnessRoot } from '../../src/root.js';
 import { enterFailedTerminalState } from '../../src/phases/terminal-ui.js';
 import { promptModelConfig } from '../../src/ui.js';
+import { runRunnerAwarePreflight } from '../../src/preflight.js';
 
 describe('inner.ts: consumePendingAction behavior', () => {
   let tmpDir: string;
@@ -624,6 +625,7 @@ describe('inner.ts: D4 live path — paused+null synthesizes failure → enterFa
     vi.mocked(paneExists).mockReturnValue(true);
     vi.mocked(enterFailedTerminalState).mockClear();
     vi.mocked(promptModelConfig).mockClear();
+    vi.mocked(runRunnerAwarePreflight).mockClear();
     stderrSpy = vi.spyOn(process.stderr, 'write').mockReturnValue(true as any);
   });
 
@@ -707,6 +709,7 @@ describe('inner.ts: D4 live path — paused+null synthesizes failure → enterFa
 
     // D4a: promptModelConfig and preflight must be skipped
     expect(vi.mocked(promptModelConfig)).not.toHaveBeenCalled();
+    expect(vi.mocked(runRunnerAwarePreflight)).not.toHaveBeenCalled();
 
     // D4a: enterFailedTerminalState must be reached via anyPhaseFailed after enterPhaseLoop()
     expect(vi.mocked(enterFailedTerminalState)).toHaveBeenCalled();
