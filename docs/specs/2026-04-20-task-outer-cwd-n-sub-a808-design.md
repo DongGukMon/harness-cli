@@ -1,7 +1,7 @@
 # Multi-Worktree Harness Flow — Design Spec
 
 - Date: 2026-04-20
-- Status: Draft (Phase 1 output, pending Codex gate at Phase 2)
+- Status: Draft (Phase 1 rev 2 — gate-2 P1 feedback incorporated)
 - Related Task: `.harness/2026-04-20-task-outer-cwd-n-sub-a808/task.md`
 - Related Decisions: `.harness/2026-04-20-task-outer-cwd-n-sub-a808/decisions.md`
 
@@ -51,7 +51,9 @@ outer + N sub-worktree 레이아웃에서 Phase 1~6이 자연스럽게 흐르도
 - cwd가 git이 아니면 codex에 `--skip-git-repo-check` 자동 부착.
 - diff는 어느 경우든 harness가 `assembler.ts`에서 tracked repos를 순회하여 조립한 뒤 prompt `<diff>` 블록에 주입. codex는 git을 직접 건드리지 않는다.
 - codex 샌드박스는 outer cwd 하위 전체에 걸쳐 있어 tracked repos에 대한 read 접근이 자연스럽게 커버된다.
+- **샌드박스-tracked repo 일관성 규칙 (gate-2 P1 반영)**: **모든 tracked repo 는 outer cwd 의 하위 경로(cwd-descendant) 여야 한다**. 이 전제 하에서만 codex 샌드박스(= outer cwd 트리)가 자동으로 tracked repos 를 읽기 범위에 포함한다. out-of-tree 경로 (`--track` 이 cwd 밖을 가리키는 경우) 는 start 시점 fail-fast. 상세 규칙은 FR-10. 본 spec 범위에서는 out-of-tree tracked repo 지원을 non-goal 로 둔다.
 - 기각: "docs repo에서 스폰" — runner가 경로 선택 로직을 떠안게 돼 코드 경로가 늘어난다.
+- 기각: "sandbox 를 out-of-tree 경로까지 확장" — codex CLI per-path whitelist 옵션 튜닝 + 에러 경로 확장이 필요. grove mission 실사용 레이아웃은 항상 cwd-descendant 이므로 이번 범위 제외.
 
 **[ADR-N6] Phase 5 성공 판정 = "tracked repos 중 하나라도 advanced"**
 - `src/phases/interactive.ts`의 Phase 5 판정을 단일 HEAD 비교에서 `trackedRepos` 순회로 교체: "어떤 tracked repo든 현재 HEAD가 해당 repo의 `implRetryBase`에서 전진했는가?"
@@ -124,20 +126,25 @@ harness process
 
 - `phase-harness start` / `run` / `start --light` 가 호출되면:
   1. cwd가 git repo인지 확인.
-  2. git이면 → `trackedRepos = [{ path: cwd, baseCommit: HEAD, implRetryBase: HEAD }]`. 스캔·플래그 무시. 기존 플로우와 완전히 동일한 경로.
+  2. git이면 → `trackedRepos = [{ path: cwd, baseCommit: HEAD, implRetryBase: HEAD, implHead: null }]`. 스캔·플래그 무시. 기존 플로우와 완전히 동일한 경로.
   3. git이 아니면 → auto-detect 또는 `--track` 리스트로 `trackedRepos`를 만든다. 결과가 비어 있으면 start 중단 (fail-fast).
+- **cwd-descendant 제약 (gate-2 P1)**: 채택된 모든 tracked repo 경로는 `path.resolve(cwd, …)` 후 `path.relative(cwd, resolved)` 가 `..` 로 시작하지 않아야 한다 (= cwd 트리 내부). auto-detect 는 cwd 직속 child 만 보므로 자동 만족. `--track` 이 위반하면 start 시점에 fail-fast (상세: FR-10).
 - `--track <path>` 가 하나라도 주어지면 auto-detect는 **완전히 무시**되고 명시 리스트만 사용된다.
 - `--exclude <path>` 는 auto-detect 결과에서 경로 일치(정규화 후) 제거. `--track` 과 조합 시 `--exclude` 는 노옵(explicit list에는 적용 안 함).
 
 ### FR-2 State 스키마
 
 - `state.trackedRepos: Array<{ path: string; baseCommit: string; implRetryBase: string; implHead: string | null }>` 신규 필드.
-  - `path`: cwd 기준 정규화된 절대경로.
+  - `path`: cwd 기준 정규화된 절대경로. **cwd-descendant 여야 한다** (FR-1 / ADR-N5).
   - `baseCommit`: run 시작 시점의 해당 repo HEAD.
   - `implRetryBase`: 해당 repo에서 Phase 5 재시도 기준 HEAD (초기값 = baseCommit, reopen 시 현재 HEAD로 갱신).
-  - `implHead`: Phase 5 완료 시점 해당 repo HEAD (미완료 시 null).
-- 기존 top-level `state.baseCommit` / `state.implRetryBase` 는 **항상 `trackedRepos[0]`의 거울**로 유지된다 (state 쓰기 시 동기화).
-- state migration: `state.json` 로드 시 `trackedRepos` 가 undefined 또는 빈 배열이면 `[{ path: cwd, baseCommit: state.baseCommit, implRetryBase: state.implRetryBase, implHead: state.implCommit }]` 로 합성.
+  - `implHead`: 해당 repo 에서 Phase 5 성공 판정 시점에 관찰된 HEAD. Phase 5 미완료 또는 해당 repo 가 advanced 되지 않은 경우 `null`.
+- **legacy top-level 필드 미러링 규칙 (gate-2 P1 명시화)**:
+  - `state.baseCommit ≡ state.trackedRepos[0].baseCommit` — 항상 mirror (write 시 동기화).
+  - `state.implRetryBase ≡ state.trackedRepos[0].implRetryBase` — 항상 mirror.
+  - `state.implCommit ≡ state.trackedRepos[0].implHead` — mirror. **`trackedRepos[0]` 이 advanced 되지 않아 `implHead = null` 이면 `state.implCommit = null`**.
+  - 따라서 N=1 single-repo 케이스(= trackedRepos[0] 가 cwd) 에서 legacy 소비자(`state.implCommit` 을 단일 구현 anchor 로 읽는 모든 경로)는 기존 의미가 그대로 유지된다. N>1 multi-repo 에서 repo 0 만 변경 안 된 경우 `state.implCommit` 이 `null` 로 떨어지므로, 단일 anchor 전제 소비자는 **null-safe 경로를 타야 한다** (상세: FR-5, FR-8).
+- state migration: `state.json` 로드 시 `trackedRepos` 가 undefined 또는 빈 배열이면 `[{ path: cwd, baseCommit: state.baseCommit, implRetryBase: state.implRetryBase, implHead: state.implCommit }]` 로 합성 (`state.implCommit` 이 null 이면 `implHead` 도 null).
 
 ### FR-3 Preflight
 
@@ -166,22 +173,34 @@ harness process
   ```
 
 - `trackedRepos.length === 1` **and** `trackedRepos[0].path === cwd` 인 경우 (= 기존 single-repo 케이스) **label 섹션 없이 기존 raw diff 포맷을 그대로 출력**한다. 기존 gate prompt golden fixture 가 깨지지 않도록 하는 의도적 N=1 백워드 경로다.
-- `MAX_DIFF_SIZE_KB` 상한은 concat 전체에 적용. 초과 시 `truncateDiffPerFile(concat, PER_FILE_DIFF_LIMIT_KB * 1024)` 를 그대로 호출.
-- Phase 7 의 `externalCommitsDetected` 경로 및 `buildPhase7DiffAndMetadata` 의 `primary` diff 구성도 동일한 per-repo 순회로 일반화. metadata block 의 `Harness implementation range: baseCommit..implCommit` 은 `trackedRepos[0]` 기준 값(현행 top-level 거울)을 유지한다.
+- `MAX_DIFF_SIZE_KB` 상한은 concat 전체에 적용. 초과 시 `truncateDiffPerFile(concat, PER_FILE_DIFF_LIMIT_KB * 1024)` 를 그대로 호출 (단, multi-repo 포맷에서 per-file 절단 경계가 repo 섹션과 맞물리는 세부 규칙은 **Deferred §D-1** 로 이월 — gate-2 P2).
+- **Phase 7 metadata block — multi-repo 분기 규칙 (gate-2 P1 반영)**:
+  - N=1 single-repo 케이스 (= `trackedRepos.length === 1 && trackedRepos[0].path === cwd`): 기존 포맷 그대로. `"Harness implementation range: ${state.baseCommit}..${state.implCommit}"` 한 줄. `state.implCommit = null` 이면 `"Phase 5 skipped; no implementation commit anchor."` (기존 동작과 동일).
+  - N>1 multi-repo 케이스: 단일 `baseCommit..implCommit` 라인을 **출력하지 않고**, 대신 `"Harness implementation ranges (per tracked repo):"` 블록을 출력한다. 각 repo 별로 `"  - <path>: <baseCommit>..<implHead>"` (해당 repo 가 advanced). `implHead === null` 인 repo 는 `"  - <path>: no change (baseCommit=<baseCommit>)"` 로 출력. 이로써 "top-level `implCommit` 이 null 이어도 metadata 가 정보 손실 없이 gate reviewer 에게 전달됨".
+- Phase 7 의 `externalCommitsDetected` 경로 및 `buildPhase7DiffAndMetadata` 의 `primary` diff 구성도 동일한 per-repo 순회로 일반화. 기존 코드에서 `state.implCommit` / `state.evalCommit` 을 단일 anchor 로 쓰는 외부-커밋 주석 로직은 **`trackedRepos[0]` 기준** 으로 유지하되 (`implCommit` 이 null 일 수 있으므로 null-guard 추가), 각 tracked repo 의 external commit log 는 repo 별로 수집해 `"## External Commits (not reviewed)"` 섹션에 repo 헤더와 함께 append.
 
 ### FR-6 Phase 5 성공 판정
 
-- `src/phases/interactive.ts:187-196` 의 Phase 5 sentinel 후속 판정 및 `src/resume.ts:580-588` 의 fresh-sentinel 판정에서 `getHead(cwd) === state.implRetryBase` 단일 비교를 다음으로 교체:
+- `src/phases/interactive.ts:187-196` 의 Phase 5 sentinel 후속 판정 및 `src/resume.ts:580-588` 의 fresh-sentinel 판정에서 `getHead(cwd) === state.implRetryBase` 단일 비교를 다음으로 교체 (gate-2 P1 반영 — `implHead`/`implCommit` 을 advance 여부에 따라 조건부로 기록):
 
   ```
-  const anyAdvanced = state.trackedRepos.some(r => getHead(r.path) !== r.implRetryBase);
+  let anyAdvanced = false;
+  for (const r of state.trackedRepos) {
+    const h = getHead(r.path);
+    if (h !== r.implRetryBase) {
+      r.implHead = h;                 // advance 한 repo 에만 implHead 를 설정
+      anyAdvanced = true;
+    } else {
+      r.implHead = null;              // 변경 없음 repo 는 implHead 를 null 로 남김
+    }
+  }
   if (!anyAdvanced) return false;
-  state.implCommit = getHead(trackedRepos[0].path);  // top-level 거울 유지
-  for (const r of state.trackedRepos) r.implHead = getHead(r.path);
+  state.implCommit = state.trackedRepos[0].implHead;   // legacy mirror: repo 0 advance 안 했으면 null
   return true;
   ```
 
-- Phase 5 reopen 경로 (`src/phases/interactive.ts` preparePhase / resume 의 reopen 계열) 에서는 `for (const r of trackedRepos) r.implRetryBase = getHead(r.path)` 를 수행하고 top-level `state.implRetryBase` 도 `trackedRepos[0].implRetryBase` 로 갱신.
+- 따라서 N=1 케이스에서는 `state.implCommit = getHead(cwd)` 와 동치 (기존 동작 보존). N>1 에서 repo 0 이 advance 안 한 경우 `state.implCommit = null` 이 되고, 이 값의 의미는 "legacy anchor 없음; 구현 결과는 `trackedRepos[*].implHead` 를 순회해 확인" 이다.
+- Phase 5 reopen 경로 (`src/phases/interactive.ts` preparePhase / resume 의 reopen 계열) 에서는 `for (const r of trackedRepos) { r.implRetryBase = getHead(r.path); r.implHead = null; }` 을 수행하고 top-level `state.implRetryBase` 도 `trackedRepos[0].implRetryBase` 로 갱신, `state.implCommit` 도 `null` 로 리셋.
 
 ### FR-7 Artifact 경로 해석 (docs home)
 
@@ -193,9 +212,12 @@ harness process
 ### FR-8 Resume 다중 repo 동작
 
 - `src/resume.ts`
-  - `ancestry check` (현재 `isAncestor(state.implCommit, 'HEAD', cwd)` 계열): `trackedRepos` 순회해 각 repo 별로 `isAncestor(r.implHead, 'HEAD', r.path)` 검사. 하나라도 실패하면 manual recovery 메시지에 실패한 repo.path 명시.
-  - `updateExternalCommitsDetected`: `trackedRepos` 순회로 per-repo external commit 감지. 어느 하나라도 발견되면 `state.externalCommitsDetected = true`.
-  - Phase 5 fresh-sentinel 재판정: FR-6 규칙 그대로 사용.
+  - **`ancestry check` (gate-2 P1 반영, null-safe)**: `trackedRepos` 순회해 각 repo 별로 다음 규칙을 적용한다 —
+    - `r.implHead !== null` 이면 `isAncestor(r.implHead, 'HEAD', r.path)` 검사. 실패 시 manual recovery 메시지에 실패한 `r.path` 를 명시하고 exit.
+    - `r.implHead === null` 이면 해당 repo 는 아직 Phase 5 가 commit 을 남기지 않은 상태 (미완료 run 또는 "advance 안 함" repo). ancestry 체크 **skip** — 검사할 anchor 가 없다.
+    - 추가적으로, `state.phases['5'] === 'completed'` 인데 모든 `r.implHead === null` 인 경우는 내부 불변식 위반 — `state_anomaly` 로그 emit 후 manual recovery.
+  - **`updateExternalCommitsDetected` (null-safe)**: `trackedRepos` 순회로 per-repo external commit 감지. 각 repo 의 anchor 는 `r.implHead ?? r.implRetryBase ?? r.baseCommit` 순으로 fallback. 어느 하나라도 external commit 발견 시 `state.externalCommitsDetected = true` 로 설정하고 emit 시 repo.path 를 로그 메시지에 포함.
+  - Phase 5 fresh-sentinel 재판정: FR-6 규칙 그대로 사용 (이미 null-safe — advance 하지 않은 repo 는 `implHead = null` 로 기록되므로 후속 ancestry/external 체크가 자동으로 skip/fallback 경로를 탄다).
 
 ### FR-9 Phase 6 verify (변경 범위)
 
@@ -206,8 +228,12 @@ harness process
 ### FR-10 CLI 플래그
 
 - `phase-harness start|run|start --light` 에 다음 반복 플래그 추가:
-  - `--track <path>` — 경로는 절대/상대 허용. 존재하지 않거나 git repo가 아니면 start 시 fail-fast (메시지: `"--track <path>: not a git repo"`).
-  - `--exclude <path>` — auto-detect 결과에서만 효력.
+  - `--track <path>` — 경로는 절대/상대 모두 입력 가능하나, **최종 해석 결과는 반드시 outer cwd 의 하위 경로여야 한다 (cwd-descendant)**. 검증 규칙 (순서대로):
+    1. `path.resolve(cwd, <path>)` 로 절대화.
+    2. `path.relative(cwd, resolved)` 가 `..` 로 시작하거나 절대경로면 fail-fast (메시지: `"--track ${path}: must be inside cwd (${cwd})"`). 이 규칙으로 ADR-N5 의 샌드박스-범위 일관성이 보장됨.
+    3. 존재하지 않으면 fail-fast (`"--track ${path}: path not found"`).
+    4. git repo (`.git` 디렉토리 또는 gitdir 파일) 가 아니면 fail-fast (`"--track ${path}: not a git repo"`).
+  - `--exclude <path>` — auto-detect 결과에서만 효력. `--track` 과 조합되면 no-op (warning 표시). `--exclude` 도 cwd-descendant 검증을 동일하게 받음 (밖 경로는 의미 없음).
 - 기존 플래그·의미 변경 없음.
 
 ---
@@ -240,18 +266,23 @@ harness process
 - `state.trackedRepos.length >= 1` 이 run 전 구간에서 항상 참.
 - `state.baseCommit === state.trackedRepos[0].baseCommit` 이 run 전 구간에서 항상 참 (write 시 동기화).
 - `state.implRetryBase === state.trackedRepos[0].implRetryBase` 이 run 전 구간에서 항상 참.
-- `trackedRepos.length === 1 && trackedRepos[0].path === cwd` 인 경우 gate diff 출력 바이트, Phase 5 판정 결과, artifact 경로, state.json 의 legacy 필드가 **구현 전과 byte-identical**.
+- `state.implCommit === state.trackedRepos[0].implHead` 가 run 전 구간에서 항상 참 (둘 다 null 허용; write 시 동기화) — gate-2 P1 반영.
+- **모든 `trackedRepos[i].path` 는 outer cwd 의 하위 경로여야 한다** (`path.relative(cwd, path).startsWith('..')` 금지) — gate-2 P1 반영.
+- `trackedRepos.length === 1 && trackedRepos[0].path === cwd` 인 경우 gate diff 출력 바이트, Phase 5 판정 결과 (`implCommit = getHead(cwd)`), artifact 경로, state.json 의 legacy 필드가 **구현 전과 byte-identical**.
 - auto-detect 는 cwd 가 git repo 일 때 **수행되지 않는다** (short-circuit).
-- `--track` 이 있으면 auto-detect 결과와 `--exclude` 는 모두 무시된다.
-- Phase 5 성공 판정은 `trackedRepos.some(r => currentHEAD(r) !== r.implRetryBase)` 로 표현 가능한 한 가지 규칙만 사용한다 (단일 HEAD 비교 금지).
+- `--track` 이 있으면 auto-detect 결과와 `--exclude` 는 모두 무시된다 (`--exclude` 단독 경고).
+- Phase 5 성공 판정은 `trackedRepos` 순회로 "어떤 repo 든 `currentHEAD(r) !== r.implRetryBase`" 에 해당하는 단일 규칙만 사용한다 (단일 HEAD 비교 금지).
+- Phase 5 성공 후 각 `r.implHead` 는 advance 한 repo 만 `getHead(r.path)` 로 설정되고, 변경 없는 repo 는 `null` 로 남는다. 이 `null` 값은 FR-8 resume ancestry 체크에서 skip 신호로 사용된다 — gate-2 P1 반영.
 - codex gate spawn 은 **항상 outer cwd** 에서 실행된다. 어떤 tracked repo 로도 chdir 하지 않는다.
 - FR-5 의 `### repo:` label 섹션은 N=1 + trackedRepos[0].path === cwd 케이스에서 **출력되지 않는다** (기존 golden fixture 보호).
+- Phase 7 metadata 의 `Harness implementation range: ${baseCommit}..${implCommit}` 단일 라인 포맷은 **N=1 single-repo 케이스에서만** 출력된다. N>1 에서는 `"Harness implementation ranges (per tracked repo):"` 블록으로 교체된다 — gate-2 P1 반영.
 
 ---
 
 ## Non-goals
 
-- 3+ depth 중첩 repo / submodule 자동 처리 — 지원 안 함. 필요 시 `--track` 명시.
+- 3+ depth 중첩 repo / submodule 자동 처리 — 지원 안 함. 필요 시 `--track` 명시 (단 cwd-descendant 여야 함).
+- **out-of-tree tracked repo** (cwd 밖의 path) — gate-2 P1 반영. codex 샌드박스 확장이 필요한 설계라 non-goal.
 - tracked repos 간 cross-repo 변경을 atomic commit 으로 묶는 기능.
 - docs-repo 전용 전담 플래그 (`--docs-repo`) — YAGNI 처리.
 - `--multi-worktree` 명시 플래그 — `trackedRepos.length >= 1` 단일 모델로 대체.
@@ -269,3 +300,14 @@ harness process
 - "docs-repo 플래그 추가?" → 기각 (YAGNI). `--track` 순서 규칙이 override 겸용.
 - "codex gate 스폰을 docs repo로?" → 기각. 항상 outer cwd, cwd 가 git 아니면 `--skip-git-repo-check` 자동.
 - "resume 다중 repo 는 후속 spec?" → 거부. Phase 5 reopen 이 resume 경로와 직결돼 있어 분리 불가능. 본 spec 범위에 포함.
+- **gate-2 P1 — `--track` 절대경로 허용 vs 샌드박스 일관성** → cwd-descendant 제약으로 해결. out-of-tree tracked repo 지원은 non-goal.
+- **gate-2 P1 — multi-repo 에서 `state.implCommit` 의미 손상** → `state.implCommit ≡ trackedRepos[0].implHead` 로 재정의 (null 허용). Phase 7 metadata 는 N=1/N>1 분기해서 포맷 변경. 소비자는 null-safe 경로 준수.
+- **gate-2 P1 — resume ancestry 체크 null 처리 부재** → `r.implHead !== null` 에서만 ancestry 검사. external-commit anchor 는 `implHead ?? implRetryBase ?? baseCommit` fallback.
+
+---
+
+## Deferred
+
+(gate-2 리뷰 피드백 중 본 pass 에서 ≤2 line 수정으로 해결할 수 없는 항목. Phase 3 plan 에서 세부 구현 설계.)
+
+- **D-1 (gate-2 P2)** — Diff size cap / `truncateDiffPerFile` 계약과 새 multi-repo `### repo:` 헤더 + fenced code block 래핑의 상호작용 미명세. 옵션: (i) raw per-repo diff 를 먼저 `truncateDiffPerFile` 한 뒤 markdown 래핑, (ii) `truncateDiffPerFile` 을 fenced block 인식하도록 확장, (iii) 전체 concat 바이트 초과 시 wholesale 버림. Phase 3 plan 에서 세부 규칙 확정 + 유닛테스트 시나리오 정의.
