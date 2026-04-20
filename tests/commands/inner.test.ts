@@ -59,6 +59,7 @@ import { registerSignalHandlers } from '../../src/signal.js';
 import { killSession, killWindow, selectWindow, splitPane, paneExists } from '../../src/tmux.js';
 import { findHarnessRoot } from '../../src/root.js';
 import { enterFailedTerminalState } from '../../src/phases/terminal-ui.js';
+import { promptModelConfig } from '../../src/ui.js';
 
 describe('inner.ts: consumePendingAction behavior', () => {
   let tmpDir: string;
@@ -622,6 +623,7 @@ describe('inner.ts: D4 live path — paused+null synthesizes failure → enterFa
     vi.mocked(findHarnessRoot).mockReturnValue(tmpDir);
     vi.mocked(paneExists).mockReturnValue(true);
     vi.mocked(enterFailedTerminalState).mockClear();
+    vi.mocked(promptModelConfig).mockClear();
     stderrSpy = vi.spyOn(process.stderr, 'write').mockReturnValue(true as any);
   });
 
@@ -697,7 +699,10 @@ describe('inner.ts: D4 live path — paused+null synthesizes failure → enterFa
     const warnOutput = stderrSpy.mock.calls.map((c: any) => c[0]).join('');
     expect(warnOutput).toContain('inconsistent');
 
-    // D4: enterFailedTerminalState must be reached via the short-circuit path (before promptModelConfig)
+    // D4a: promptModelConfig and preflight must be skipped
+    expect(vi.mocked(promptModelConfig)).not.toHaveBeenCalled();
+
+    // D4a: enterFailedTerminalState must be reached via anyPhaseFailed after enterPhaseLoop()
     expect(vi.mocked(enterFailedTerminalState)).toHaveBeenCalled();
   });
 });

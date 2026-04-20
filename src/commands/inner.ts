@@ -158,32 +158,6 @@ export async function innerCommand(runId: string, options: InnerOptions = {}): P
   inputManager.onConfigCancel = buildConfigCancelHandler({ state, runDir, harnessDir, runId, isResume, logger, inputManager });
   inputManager.start('configuring');
 
-  // D4 short-circuit: skip model config and preflight, route directly to failed terminal UI.
-  if (inconsistentPauseDetected) {
-    try {
-      const { enterFailedTerminalState: failedUI } = await import('../phases/terminal-ui.js');
-      await failedUI(state, harnessDir, runDir, cwd, inputManager, logger);
-      sessionEndStatus = state.status === 'completed' ? 'completed' : state.status === 'paused' ? 'paused' : 'interrupted';
-    } finally {
-      logger.logEvent({ event: 'session_end', status: sessionEndStatus, totalWallMs: Date.now() - logger.getStartedAt() });
-      logger.finalizeSummary(state);
-      logger.close();
-      inputManager.stop();
-      releaseLock(harnessDir, runId);
-    }
-    if (state.tmuxMode === 'dedicated') {
-      killSession(state.tmuxSession);
-    } else {
-      for (const windowId of state.tmuxWindows) {
-        killWindow(state.tmuxSession, windowId);
-      }
-      if (state.tmuxOriginalWindow) {
-        selectWindow(state.tmuxSession, state.tmuxOriginalWindow);
-      }
-    }
-    return;
-  }
-
   // Step 5.7: Compute remaining phases (including pendingAction reopen target).
   // Light flow skips 2/3/4 so the key set is narrowed at source (getRequiredPhaseKeys).
   const flowPhaseKeys = getRequiredPhaseKeys(state.flow);
@@ -203,26 +177,29 @@ export async function innerCommand(runId: string, options: InnerOptions = {}): P
   if (reopenTarget !== null) remainingSet.add(String(reopenTarget));
   const remainingPhases = [...remainingSet];
 
-  // Step 5.8: Prompt for model selection. Snapshot prev presets to detect changes for §4.8 invalidation.
-  const prevPresets = { ...state.phasePresets };
-  state.phasePresets = await promptModelConfig(state.phasePresets, inputManager, remainingPhases, state.flow);
-  invalidatePhaseSessionsOnPresetChange(state, prevPresets, runDir);
+  // Step 5.8 + 5.9: Skip model config and preflight on synthesized failure (D4a).
+  if (!inconsistentPauseDetected) {
+    // Step 5.8: Prompt for model selection. Snapshot prev presets to detect changes for §4.8 invalidation.
+    const prevPresets = { ...state.phasePresets };
+    state.phasePresets = await promptModelConfig(state.phasePresets, inputManager, remainingPhases, state.flow);
+    invalidatePhaseSessionsOnPresetChange(state, prevPresets, runDir);
 
-  // Clear reopen_config pendingAction (written by onConfigCancel) — model selection succeeded
-  if (state.pendingAction?.type === 'reopen_config') {
-    state.pendingAction = null;
-    state.pauseReason = null;
-    state.status = 'in_progress';
-  }
-  writeState(runDir, state);
+    // Clear reopen_config pendingAction (written by onConfigCancel) — model selection succeeded
+    if (state.pendingAction?.type === 'reopen_config') {
+      state.pendingAction = null;
+      state.pauseReason = null;
+      state.status = 'in_progress';
+    }
+    writeState(runDir, state);
 
-  // Step 5.9: Runner-aware preflight
-  try {
-    runRunnerAwarePreflight(state.phasePresets, remainingPhases);
-  } catch (err) {
-    process.stderr.write(`Preflight failed: ${(err as Error).message}\n`);
-    inputManager.onConfigCancel?.();
-    return; // onConfigCancel calls process.exit(0)
+    // Step 5.9: Runner-aware preflight
+    try {
+      runRunnerAwarePreflight(state.phasePresets, remainingPhases);
+    } catch (err) {
+      process.stderr.write(`Preflight failed: ${(err as Error).message}\n`);
+      inputManager.onConfigCancel?.();
+      return; // onConfigCancel calls process.exit(0)
+    }
   }
 
   // Step 5.10: Enter phase loop mode
@@ -237,7 +214,11 @@ export async function innerCommand(runId: string, options: InnerOptions = {}): P
 
   // 6. Run phase loop, then route to terminal-state UI based on outcome
   try {
-    await runPhaseLoop(state, harnessDir, runDir, cwd, inputManager, logger, sidecarReplayAllowed);
+    // D4a: skip runPhaseLoop on synthesized failure — enterPhaseLoop() is already called above,
+    // state has phases[N]='failed', so anyPhaseFailed fires and routes to enterFailedTerminalState.
+    if (!inconsistentPauseDetected) {
+      await runPhaseLoop(state, harnessDir, runDir, cwd, inputManager, logger, sidecarReplayAllowed);
+    }
 
     const { enterCompleteTerminalState, enterFailedTerminalState, anyPhaseFailed } =
       await import('../phases/terminal-ui.js');

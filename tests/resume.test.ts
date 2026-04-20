@@ -77,29 +77,18 @@ describe('resumeRun', () => {
     repo.cleanup();
   });
 
-  it('synthesizes failed state but does NOT call enterFailedTerminalState on paused run with null pendingAction', async () => {
-    const { enterFailedTerminalState } = await import('../src/phases/terminal-ui.js');
-    const enterFailedSpy = vi.mocked(enterFailedTerminalState);
-    enterFailedSpy.mockClear();
-
+  it('exits with code 1 and non-interactive message on paused run with null pendingAction (D4b)', async () => {
     const { state, harnessDir, runDir } = setupRun(repo, {
       status: 'paused',
       pendingAction: null,
     });
 
-    await resumeRun(state, harnessDir, runDir, repo.path);
+    await expect(resumeRun(state, harnessDir, runDir, repo.path)).rejects.toThrow('__exit__:1');
 
-    // No live InputManager in resumeRun — enterFailedTerminalState must NOT be called
-    expect(enterFailedSpy).not.toHaveBeenCalled();
-
-    // State on disk must show synthesized failure so inner.ts D4 short-circuit routes to R/J/Q
-    const diskState = JSON.parse(readFileSync(join(runDir, 'state.json'), 'utf-8'));
-    expect(diskState.phases[String(diskState.currentPhase)]).toBe('failed');
-    expect(diskState.status).toBe('in_progress');
-    expect(diskState.pendingAction).toBeNull();
-
-    // Warning about inconsistent state must have been emitted
-    expect(stderrSpy.mock.calls.map((c: any) => c[0]).join('')).toContain('inconsistent');
+    // Must include 'non-interactive resume path' so user knows to use 'phase-harness resume'
+    const warnOutput = stderrSpy.mock.calls.map((c: any) => c[0]).join('');
+    expect(warnOutput).toContain('non-interactive resume path');
+    expect(warnOutput).toContain('inconsistent');
   });
 
   it('clears pendingAction when rerun_gate target already completed', async () => {

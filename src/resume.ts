@@ -81,11 +81,15 @@ export async function resumeRun(
     return;
   }
 
-  // Step 5: Paused without pendingAction → synthesize failed state and return.
-  // No live InputManager here; inner.ts D4 short-circuit will show R/J/Q on next resume.
+  // Step 5: Paused without pendingAction → non-interactive exit (D4b).
+  // State intentionally left as-is (paused+null) so the live path (inner.ts D4a)
+  // detects the inconsistency and shows the R/J/Q UI on next 'phase-harness resume'.
   if (state.status === 'paused' && state.pendingAction === null) {
-    synthesizeFailedFromInconsistentPause(state, runDir);
-    return;
+    process.stderr.write(
+      `⚠️  Run ${state.runId} detected inconsistent pause state (paused + pendingAction=null); ` +
+      `non-interactive resume path — use 'phase-harness resume' (tmux live path) to get the R/J/Q recovery UI.\n`
+    );
+    process.exit(1);
   }
 
   // Step 6: General recovery — check for fresh sentinel / verify-result BEFORE re-entering loop
