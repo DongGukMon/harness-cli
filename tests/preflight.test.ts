@@ -78,7 +78,7 @@ describe('runPreflight - git check', () => {
   it('throws when cwd is not a git repo', () => {
     // os.tmpdir() is not a git repo.
     const cwd = os.tmpdir();
-    expect(() => runPreflight(['git'], cwd)).toThrow('harness requires a git repository.');
+    expect(() => runPreflight(['git'], cwd)).toThrow('harness requires a git repository');
   });
 });
 
@@ -162,7 +162,7 @@ describe('runPreflight - multiple items', () => {
   it('throws on first failure and does not continue', () => {
     // 'git' will fail with os.tmpdir() as cwd
     expect(() => runPreflight(['platform', 'git', 'node'], os.tmpdir())).toThrow(
-      'harness requires a git repository.'
+      'harness requires a git repository'
     );
   });
 });

@@ -2,7 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { execSync } from 'child_process';
 import { fileURLToPath } from 'url';
-import type { HarnessState, FlowMode } from '../types.js';
+import type { HarnessState, FlowMode, TrackedRepo } from '../types.js';
 import {
   MAX_FILE_SIZE_KB,
   MAX_PROMPT_SIZE_KB,
@@ -312,7 +312,8 @@ function buildLifecycleContext(phase: 2 | 4 | 7, flow: FlowMode = 'full'): strin
 // ─── Gate 2: Spec review ─────────────────────────────────────────────────────
 
 function buildGatePromptPhase2(state: HarnessState, cwd: string): string | { error: string } {
-  const specResult = readArtifactContent(state.artifacts.spec, cwd);
+  const docsRoot = state.trackedRepos?.[0]?.path || cwd;
+  const specResult = readArtifactContent(state.artifacts.spec, docsRoot);
   if ('error' in specResult) return specResult;
 
   if (state.flow === 'light') {
@@ -333,10 +334,11 @@ function buildGatePromptPhase2(state: HarnessState, cwd: string): string | { err
 // ─── Gate 4: Plan review (spec + plan, per spec) ─────────────────────────────
 
 function buildGatePromptPhase4(state: HarnessState, cwd: string): string | { error: string } {
-  const specResult = readArtifactContent(state.artifacts.spec, cwd);
+  const docsRoot = state.trackedRepos?.[0]?.path || cwd;
+  const specResult = readArtifactContent(state.artifacts.spec, docsRoot);
   if ('error' in specResult) return specResult;
 
-  const planResult = readArtifactContent(state.artifacts.plan, cwd);
+  const planResult = readArtifactContent(state.artifacts.plan, docsRoot);
   if ('error' in planResult) return planResult;
 
   return (
@@ -353,54 +355,123 @@ function buildGatePromptPhase4(state: HarnessState, cwd: string): string | { err
 // prompt and the resume prompt so resume variants include the same external-
 // commit handling and metadata block as the first-time review.
 function buildPhase7DiffAndMetadata(state: HarnessState, cwd: string): { diffSection: string; externalSummary: string; metadata: string } {
-  let diffSection: string;
-  let externalSummary = '';
+  const repos = (state.trackedRepos && state.trackedRepos.length > 0)
+    ? state.trackedRepos
+    : [{ path: cwd, baseCommit: state.baseCommit, implRetryBase: state.implRetryBase, implHead: state.implCommit } as TrackedRepo];
 
-  if (state.externalCommitsDetected) {
-    let primary = '';
-    if (state.implCommit !== null) {
-      primary += runGit(`git diff ${state.baseCommit}...${state.implCommit}`, cwd);
-      if (state.evalCommit !== null) {
-        primary += '\n' + runGit(`git diff ${state.evalCommit}^..${state.evalCommit}`, cwd);
+  const isSingleRepoCwd = repos.length === 1 && repos[0].path === cwd;
+
+  // Per-repo diff builder (ADR-D1: truncateDiffPerFile before markdown wrapping)
+  function buildRepoDiff(repo: TrackedRepo): string {
+    if (state.externalCommitsDetected) {
+      if (repo.implHead !== null) {
+        let d = runGit(`git diff ${repo.baseCommit}...${repo.implHead}`, repo.path);
+        // Per-repo pre-truncation before wrapping (ADR-D1)
+        d = truncateDiffPerFile(d, PER_FILE_DIFF_LIMIT_KB * 1024);
+        // For docs-home repo (trackedRepos[0]), also include eval commit diff
+        if (repo === repos[0] && state.evalCommit !== null) {
+          d += '\n' + runGit(`git diff ${state.evalCommit}^..${state.evalCommit}`, repo.path);
+        }
+        return d;
+      } else {
+        // No impl anchor — exclude from harness diff to avoid mixing unreviewed external changes
+        return `(no harness implementation anchor for this repo — diff excluded; external commits may exist)`;
       }
     } else {
+      let d = runGit(`git diff ${repo.baseCommit}...HEAD`, repo.path);
+      d = truncateDiffPerFile(d, PER_FILE_DIFF_LIMIT_KB * 1024);
+      return d;
+    }
+  }
+
+  let combinedDiff: string;
+  if (isSingleRepoCwd) {
+    // N=1 backward path: raw diff, no ### repo: label (ADR-N7, FR-5 invariant)
+    // For N=1 + externalCommitsDetected with null implCommit, preserve the ⚠️ prefix
+    if (state.externalCommitsDetected && repos[0].implHead === null) {
       const target = state.evalCommit ?? 'HEAD';
-      primary = runGit(`git diff ${state.baseCommit}...${target}`, cwd);
+      let primary = runGit(`git diff ${state.baseCommit}...${target}`, cwd);
+      const maxDiffBytes = MAX_DIFF_SIZE_KB * 1024;
+      if (primary.length > maxDiffBytes) {
+        primary = truncateDiffPerFile(primary, PER_FILE_DIFF_LIMIT_KB * 1024);
+      }
       primary =
         `⚠️ IMPORTANT: Phase 5 was skipped and external commits were detected. ` +
         `The primary diff below includes BOTH harness and external changes — they cannot be separated. ` +
         `Focus on the eval report and spec/plan compliance rather than the diff.\n\n` +
         primary;
-    }
-
-    const maxDiffBytes = MAX_DIFF_SIZE_KB * 1024;
-    if (primary.length > maxDiffBytes) {
-      primary = truncateDiffPerFile(primary, PER_FILE_DIFF_LIMIT_KB * 1024);
-    }
-
-    diffSection = `<diff>\n${primary}\n</diff>\n`;
-
-    const anchor = state.evalCommit ?? state.implCommit ?? state.baseCommit;
-    const externalLog = runGit(`git log ${anchor}..HEAD --oneline`, cwd);
-    if (externalLog.trim().length > 0) {
-      externalSummary = `\n## External Commits (not reviewed)\n\n\`\`\`\n${externalLog}\n\`\`\`\n`;
+      combinedDiff = primary;
+    } else {
+      combinedDiff = buildRepoDiff(repos[0]);
     }
   } else {
-    let diff = runGit(`git diff ${state.baseCommit}...HEAD`, cwd);
-    const maxDiffBytes = MAX_DIFF_SIZE_KB * 1024;
-    if (diff.length > maxDiffBytes) {
-      diff = truncateDiffPerFile(diff, PER_FILE_DIFF_LIMIT_KB * 1024);
+    // Multi-repo: concat with ### repo: labels
+    const sections: string[] = [];
+    for (const repo of repos) {
+      const relOrAbs = path.relative(cwd, repo.path) || repo.path;
+      const rawDiff = buildRepoDiff(repo);
+      sections.push(`### repo: ${relOrAbs}\n\`\`\`diff\n${rawDiff}\n\`\`\``);
     }
-    diffSection = diff ? `<diff>\n${diff}\n</diff>\n` : '';
+    combinedDiff = sections.join('\n\n');
   }
 
+  // Global size cap after concat (ADR-D1)
+  const maxDiffBytes = MAX_DIFF_SIZE_KB * 1024;
+  if (combinedDiff.length > maxDiffBytes) {
+    combinedDiff = combinedDiff.slice(0, maxDiffBytes) +
+      `\n--- (diff truncated: total exceeds ${MAX_DIFF_SIZE_KB}KB) ---\n`;
+  }
+
+  const diffSection = combinedDiff ? `<diff>\n${combinedDiff}\n</diff>\n` : '';
+
+  // External commits summary
+  let externalSummary = '';
+  if (state.externalCommitsDetected) {
+    if (isSingleRepoCwd) {
+      // N=1: existing format
+      const anchor = state.evalCommit ?? state.implCommit ?? state.baseCommit;
+      const externalLog = runGit(`git log ${anchor}..HEAD --oneline`, cwd);
+      if (externalLog.trim().length > 0) {
+        externalSummary = `\n## External Commits (not reviewed)\n\n\`\`\`\n${externalLog}\n\`\`\`\n`;
+      }
+    } else {
+      // N>1: per-repo sections
+      const sections: string[] = [];
+      for (const repo of repos) {
+        const anchor = repo.implHead ?? repo.implRetryBase ?? repo.baseCommit;
+        const externalLog = runGit(`git log ${anchor}..HEAD --oneline`, repo.path);
+        if (externalLog.trim().length > 0) {
+          const relOrAbs = path.relative(cwd, repo.path) || repo.path;
+          sections.push(`### ${relOrAbs}\n\`\`\`\n${externalLog}\n\`\`\``);
+        }
+      }
+      if (sections.length > 0) {
+        externalSummary = `\n## External Commits (not reviewed)\n\n${sections.join('\n\n')}\n`;
+      }
+    }
+  }
+
+  // Metadata block: N=1 vs N>1 format (FR-5, gate-2 P1)
   const externalNote = state.externalCommitsDetected
     ? `Note: External commits detected. See '## External Commits (not reviewed)' section below.\nPrimary diff covers harness implementation range only.\n`
     : '';
-  const implRange =
-    state.implCommit !== null
+
+  let implRange: string;
+  if (isSingleRepoCwd) {
+    // N=1: preserve existing single-line format (backward compat)
+    implRange = state.implCommit !== null
       ? `Harness implementation range: ${state.baseCommit}..${state.implCommit} (Phase 1–5 commits).`
       : `Phase 5 skipped; no implementation commit anchor.`;
+  } else {
+    // N>1: per-repo format
+    const lines = repos.map(repo => {
+      const relOrAbs = path.relative(cwd, repo.path) || repo.path;
+      return repo.implHead !== null
+        ? `  - ${relOrAbs}: ${repo.baseCommit}..${repo.implHead}`
+        : `  - ${relOrAbs}: no change (baseCommit=${repo.baseCommit})`;
+    });
+    implRange = `Harness implementation ranges (per tracked repo):\n${lines.join('\n')}`;
+  }
 
   const metadata =
     `<metadata>\n${externalNote}${implRange}\n` +
@@ -413,10 +484,11 @@ function buildPhase7DiffAndMetadata(state: HarnessState, cwd: string): { diffSec
 }
 
 function buildGatePromptPhase7(state: HarnessState, cwd: string): string | { error: string } {
-  const specResult = readArtifactContent(state.artifacts.spec, cwd);
+  const docsRoot = state.trackedRepos?.[0]?.path || cwd;
+  const specResult = readArtifactContent(state.artifacts.spec, docsRoot);
   if ('error' in specResult) return specResult;
 
-  const evalResult = readArtifactContent(state.artifacts.evalReport, cwd);
+  const evalResult = readArtifactContent(state.artifacts.evalReport, docsRoot);
   if ('error' in evalResult) return evalResult;
 
   const { diffSection, externalSummary, metadata } = buildPhase7DiffAndMetadata(state, cwd);
@@ -434,7 +506,7 @@ function buildGatePromptPhase7(state: HarnessState, cwd: string): string | { err
     );
   }
 
-  const planResult = readArtifactContent(state.artifacts.plan, cwd);
+  const planResult = readArtifactContent(state.artifacts.plan, docsRoot);
   if ('error' in planResult) return planResult;
 
   return (
@@ -588,19 +660,20 @@ function buildResumeSections(
   state: HarnessState,
   cwd: string,
 ): string | { error: string } {
-  const specResult = readArtifactContent(state.artifacts.spec, cwd);
+  const docsRoot = state.trackedRepos?.[0]?.path || cwd;
+  const specResult = readArtifactContent(state.artifacts.spec, docsRoot);
   if ('error' in specResult) return specResult;
   let body = `<spec>\n${specResult.content}\n</spec>\n`;
 
   const lightEvalGate = phase === 7 && state.flow === 'light';
 
   if ((phase === 4 || phase === 7) && !lightEvalGate) {
-    const planResult = readArtifactContent(state.artifacts.plan, cwd);
+    const planResult = readArtifactContent(state.artifacts.plan, docsRoot);
     if ('error' in planResult) return planResult;
     body += `\n<plan>\n${planResult.content}\n</plan>\n`;
   }
   if (phase === 7) {
-    const evalResult = readArtifactContent(state.artifacts.evalReport, cwd);
+    const evalResult = readArtifactContent(state.artifacts.evalReport, docsRoot);
     if ('error' in evalResult) return evalResult;
     body += `\n<eval_report>\n${evalResult.content}\n</eval_report>\n`;
 

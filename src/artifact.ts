@@ -1,8 +1,22 @@
 import { execSync } from 'child_process';
 import { existsSync, unlinkSync } from 'fs';
-import { join } from 'path';
+import { join, isAbsolute } from 'path';
 import { getStagedFiles, getFileStatus, isStagedDeletion, isPathGitignored } from './git.js';
 import type { HarnessState } from './types.js';
+
+/**
+ * Resolve a (potentially relative) artifact path to an absolute path.
+ * Uses trackedRepos[0].path as the doc root (falling back to outerCwd).
+ */
+export function resolveArtifact(state: HarnessState, relPath: string, outerCwd: string): string {
+  if (isAbsolute(relPath)) return relPath;
+  // .harness/... artifacts are system files anchored to the outer cwd, not the docs-home repo
+  if (relPath.startsWith('.harness/') || relPath.startsWith('.harness\\')) {
+    return join(outerCwd, relPath);
+  }
+  const docsRoot = state.trackedRepos?.[0]?.path || outerCwd;
+  return join(docsRoot, relPath);
+}
 
 function exec(cmd: string, cwd?: string): string {
   return execSync(cmd, { cwd, encoding: 'utf-8' }).trim();

@@ -50,7 +50,7 @@ export async function listCommand(options: ListOptions = {}): Promise<void> {
     const stateJsonPath = join(entryPath, 'state.json');
     let state: HarnessState | null;
     try {
-      state = readState(entryPath);
+      state = readState(entryPath, process.cwd());
     } catch {
       continue;
     }

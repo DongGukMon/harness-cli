@@ -85,6 +85,43 @@ light flow 특이사항:
 
 ---
 
+## 멀티 워크트리 플로우
+
+`phase-harness start`와 `phase-harness run`은 **외부(non-git) 디렉터리**에서 실행을 지원합니다. 이 디렉터리에는 depth 1에 N개의 git 서브 레포가 있을 수 있습니다.
+
+### 레포 자동 감지
+
+1. **단일 레포 (레거시)**: outer cwd가 git 레포이면 해당 레포가 유일한 tracked repo가 됩니다. 기존 동작과 동일합니다.
+2. **멀티 레포 자동 감지**: outer cwd가 git 레포가 아니면 depth-1 서브디렉터리를 스캔하고, 숨김 디렉터리 및 일반적인 비-레포 디렉터리(`node_modules`, `dist`, `build`, `.harness`)를 제외하여 발견된 모든 git 레포를 알파벳순으로 추적합니다.
+3. **`--track <path>`**: 자동 감지를 명시적인 레포 경로로 재정의합니다. 경로는 outer cwd 내부에 있어야 합니다.
+4. **`--exclude <dir>`**: 자동 감지 중 디렉터리를 건너뜁니다 (반복 가능).
+
+### 상태: `trackedRepos[]`
+
+`state.json`은 `trackedRepos: TrackedRepo[]`를 저장합니다 — tracked 레포마다 하나의 엔트리:
+- `path`: 레포의 절대 경로
+- `baseCommit`, `implRetryBase`: 레포별 커밋 앵커
+- `implHead`: Phase 5 성공 후의 HEAD (완료 전에는 null)
+
+첫 번째 엘리먼트(`trackedRepos[0]`)가 **docs 홈**입니다 — spec, plan, eval 아티팩트가 여기에 커밋됩니다.
+
+레거시 미러(`state.baseCommit`, `state.implRetryBase`, `state.implCommit`)는 단일 레포 소비자가 변경 없이 동작하도록 유지되며, 매 state 쓰기 시 `trackedRepos[0]`으로부터 자동 동기화됩니다(`syncLegacyMirror`).
+
+### Phase 5 성공 기준
+
+tracked 레포 중 **하나 이상**이 `implRetryBase`를 넘어 진행되면 Phase 5가 성공합니다. 수정되지 않은 레포는 `implHead = null`으로 유지됩니다.
+
+### Gate diff (Phase 2/4/7)
+
+- **N=1이고 `trackedRepos[0].path === cwd`**: diff 출력이 멀티 워크트리 이전 형식과 바이트 단위로 동일합니다 (레이블 없음).
+- **N>1 또는 cwd가 아닌 단일 레포**: 각 레포의 diff가 `### repo: <relPath>` 헤딩 아래 출력됩니다. 파일별 트런케이션은 마크다운 래퍼 전에 실행되며, 전체 크기 상한이 concat 후 적용됩니다.
+
+### Codex (outer-cwd gate)
+
+outer cwd가 git 레포가 아니면 gate가 실행될 수 있도록 Codex 호출에 `--skip-git-repo-check`가 자동으로 추가됩니다.
+
+---
+
 ## Phase별 요약
 
 | Phase | 기본 preset | runner 유형 | 주요 산출물 | reject/fail 시 |

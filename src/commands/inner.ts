@@ -30,7 +30,7 @@ export async function innerCommand(runId: string, options: InnerOptions = {}): P
   const runDir = join(harnessDir, runId);
 
   // 1. Load state
-  const state = readState(runDir);
+  const state = readState(runDir, cwd);
   if (state === null) {
     process.stderr.write(`Run '${runId}' has no state.\n`);
     process.exit(1);

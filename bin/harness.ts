@@ -27,9 +27,11 @@ program
   .option('--enable-logging', 'enable session logging to ~/.harness/sessions')
   .option('--light', 'use the 4-phase light flow (P1 → P5 → P6 → P7)')
   .option('--codex-no-isolate', 'bypass CODEX_HOME isolation for codex subprocesses (not recommended)')
-  .action(async (task: string | undefined, opts: { requireClean?: boolean; auto?: boolean; enableLogging?: boolean; light?: boolean; codexNoIsolate?: boolean }) => {
+  .option('--track <path>', 'explicit tracked repo (repeatable; first = docs home)', (val: string, prev: string[]) => [...prev, val], [] as string[])
+  .option('--exclude <path>', 'exclude path from auto-detect (repeatable)', (val: string, prev: string[]) => [...prev, val], [] as string[])
+  .action(async (task: string | undefined, opts: { requireClean?: boolean; auto?: boolean; enableLogging?: boolean; light?: boolean; codexNoIsolate?: boolean; track?: string[]; exclude?: string[] }) => {
     const globalOpts = program.opts();
-    await startCommand(task, { ...opts, root: globalOpts.root });
+    await startCommand(task, { ...opts, root: globalOpts.root, track: opts.track, exclude: opts.exclude });
   });
 
 program
@@ -40,9 +42,11 @@ program
   .option('--enable-logging', 'enable session logging to ~/.harness/sessions')
   .option('--light', 'use the 4-phase light flow (P1 → P5 → P6 → P7)')
   .option('--codex-no-isolate', 'bypass CODEX_HOME isolation for codex subprocesses (not recommended)')
-  .action(async (task: string | undefined, opts: { requireClean?: boolean; auto?: boolean; enableLogging?: boolean; light?: boolean; codexNoIsolate?: boolean }) => {
+  .option('--track <path>', 'explicit tracked repo (repeatable; first = docs home)', (val: string, prev: string[]) => [...prev, val], [] as string[])
+  .option('--exclude <path>', 'exclude path from auto-detect (repeatable)', (val: string, prev: string[]) => [...prev, val], [] as string[])
+  .action(async (task: string | undefined, opts: { requireClean?: boolean; auto?: boolean; enableLogging?: boolean; light?: boolean; codexNoIsolate?: boolean; track?: string[]; exclude?: string[] }) => {
     const globalOpts = program.opts();
-    await startCommand(task, { ...opts, root: globalOpts.root });
+    await startCommand(task, { ...opts, root: globalOpts.root, track: opts.track, exclude: opts.exclude });
   });
 
 program

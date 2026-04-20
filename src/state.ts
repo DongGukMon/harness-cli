@@ -15,9 +15,22 @@ const STATE_TMP_FILE = 'state.json.tmp';
 const GATE_PHASES = ['2', '4', '7'] as const;
 
 /**
+ * Keep top-level commit fields in sync with trackedRepos[0].
+ * Must be called before every writeState to preserve the legacy-mirror invariant (ADR-N3).
+ */
+export function syncLegacyMirror(state: HarnessState): void {
+  if (!state.trackedRepos || state.trackedRepos.length === 0) return;
+  const r0 = state.trackedRepos[0];
+  state.baseCommit = r0.baseCommit;
+  state.implRetryBase = r0.implRetryBase;
+  state.implCommit = r0.implHead;
+}
+
+/**
  * Write state atomically: write to .tmp → fsync → rename
  */
 export function writeState(runDir: string, state: HarnessState): void {
+  syncLegacyMirror(state);
   const statePath = path.join(runDir, STATE_FILE);
   const tmpPath = path.join(runDir, STATE_TMP_FILE);
 
@@ -39,7 +52,7 @@ export function writeState(runDir: string, state: HarnessState): void {
  * - Throws on corrupt JSON.
  * - If state.json missing but state.json.tmp exists, restore from .tmp first.
  */
-export function readState(runDir: string): HarnessState | null {
+export function readState(runDir: string, cwd?: string): HarnessState | null {
   const statePath = path.join(runDir, STATE_FILE);
   const tmpPath = path.join(runDir, STATE_TMP_FILE);
 
@@ -56,7 +69,7 @@ export function readState(runDir: string): HarnessState | null {
 
   const raw = fs.readFileSync(statePath, 'utf-8');
   try {
-    return migrateState(JSON.parse(raw));
+    return migrateState(JSON.parse(raw), cwd);
   } catch {
     throw new Error('state.json is corrupted. Manual recovery required.');
   }
@@ -65,7 +78,7 @@ export function readState(runDir: string): HarnessState | null {
 /**
  * Migrate a raw state object (potentially from an older version) to the current HarnessState shape.
  */
-export function migrateState(raw: any): HarnessState {
+export function migrateState(raw: any, cwd?: string): HarnessState {
   if (raw.flow !== 'full' && raw.flow !== 'light') {
     raw.flow = 'full';
   }
@@ -145,6 +158,14 @@ export function migrateState(raw: any): HarnessState {
   }
   if (!('carryoverFeedback' in raw) || raw.carryoverFeedback === undefined) {
     raw.carryoverFeedback = null;
+  }
+  if (!raw.trackedRepos || !Array.isArray(raw.trackedRepos) || raw.trackedRepos.length === 0) {
+    raw.trackedRepos = [{
+      path: cwd ?? '',
+      baseCommit: raw.baseCommit,
+      implRetryBase: raw.implRetryBase,
+      implHead: raw.implCommit ?? null,
+    }];
   }
   return raw as HarnessState;
 }
@@ -257,6 +278,7 @@ export function createInitialState(
     task,
     baseCommit,
     implRetryBase: baseCommit,
+    trackedRepos: [{ path: '', baseCommit, implRetryBase: baseCommit, implHead: null }],
     codexPath: null,
     externalCommitsDetected: false,
     artifacts,

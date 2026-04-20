@@ -22,7 +22,7 @@ export async function statusCommand(options: StatusOptions = {}): Promise<void> 
   const runDir = join(harnessDir, runId);
   let state: HarnessState | null;
   try {
-    state = readState(runDir);
+    state = readState(runDir, process.cwd());
   } catch (err) {
     process.stderr.write(
       `Run '${runId}' state is corrupted: ${(err as Error).message}\n`

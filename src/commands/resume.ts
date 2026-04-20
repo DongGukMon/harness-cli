@@ -61,7 +61,7 @@ export async function resumeCommand(runId?: string, options: ResumeOptions = {})
 
   let state;
   try {
-    state = readState(runDir);
+    state = readState(runDir, cwd);
   } catch (err) {
     process.stderr.write(
       `state.json for run '${targetRunId}' is corrupted: ${(err as Error).message}\n`

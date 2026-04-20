@@ -710,6 +710,12 @@ describe('Phase 5 completion sets implCommit', () => {
   it('updates implCommit after Phase 5 completes', async () => {
     const runDir = makeTmpDir();
     const state = makeState({ currentPhase: 5 });
+    // Simulate what validatePhaseArtifacts (mocked) would have set on implHead.
+    // In the multi-repo design, syncLegacyMirror reads trackedRepos[0].implHead
+    // to populate implCommit — getHead is only used for Phase 1/3 anchors.
+    if (state.trackedRepos?.[0]) {
+      state.trackedRepos[0].implHead = 'impl-commit-sha';
+    }
 
     vi.mocked(getHead).mockReturnValue('impl-commit-sha');
 
@@ -720,9 +726,8 @@ describe('Phase 5 completion sets implCommit', () => {
 
     await runPhaseLoop(state, HDIR, runDir, CWD, createNoOpInputManager(), new NoopLogger(), { value: false });
 
-    const writes = vi.mocked(writeState).mock.calls.map(([, s]) => s);
-    const withImpl = writes.find(s => s.implCommit === 'impl-commit-sha');
-    expect(withImpl).toBeDefined();
+    // implCommit is propagated from trackedRepos[0].implHead via syncLegacyMirror
+    expect(state.implCommit).toBe('impl-commit-sha');
   });
 });
 

@@ -2,6 +2,7 @@ import { describe, it, expect, afterEach, vi } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import { execSync } from 'child_process';
 import {
   assembleInteractivePrompt,
   assembleGatePrompt,
@@ -808,6 +809,126 @@ describe('complexity signal — E2E', () => {
     } finally {
       stderrSpy.mockRestore();
     }
+  });
+});
+
+describe('buildPhase7DiffAndMetadata — multi-repo (FR-5, ADR-N7, ADR-D1)', () => {
+  const tmpDirs: string[] = [];
+  afterEach(() => {
+    for (const d of tmpDirs) { try { fs.rmSync(d, { recursive: true, force: true }); } catch {} }
+    tmpDirs.length = 0;
+  });
+
+  function makeTmpDir2(prefix = 'asm-test-'): string {
+    const d = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+    tmpDirs.push(d);
+    return d;
+  }
+
+  function initRepo(dir: string): string {
+    execSync('git init', { cwd: dir, stdio: 'pipe' });
+    execSync('git config user.email "t@t.com"', { cwd: dir, stdio: 'pipe' });
+    execSync('git config user.name "T"', { cwd: dir, stdio: 'pipe' });
+    fs.writeFileSync(path.join(dir, 'init.txt'), 'x');
+    execSync('git add .', { cwd: dir, stdio: 'pipe' });
+    execSync('git commit -m "init"', { cwd: dir, stdio: 'pipe' });
+    return execSync('git rev-parse HEAD', { cwd: dir, encoding: 'utf-8' }).trim();
+  }
+
+  it('N=1 trackedRepos[0].path===cwd → raw diff without ### repo: label', () => {
+    const cwd = makeTmpDir2();
+    const base = initRepo(cwd);
+    // set up docs structure
+    fs.mkdirSync(path.join(cwd, 'docs/specs'), { recursive: true });
+    fs.mkdirSync(path.join(cwd, 'docs/plans'), { recursive: true });
+    fs.mkdirSync(path.join(cwd, 'docs/process/evals'), { recursive: true });
+    fs.writeFileSync(path.join(cwd, 'docs/specs/my-run-design.md'), '# spec\n## Complexity\nSmall');
+    fs.writeFileSync(path.join(cwd, 'docs/plans/my-run.md'), '# plan');
+    fs.writeFileSync(path.join(cwd, 'docs/process/evals/my-run-eval.md'), '# eval');
+    execSync('git add .', { cwd, stdio: 'pipe' });
+    execSync('git commit -m "docs"', { cwd, stdio: 'pipe' });
+    const implHead = execSync('git rev-parse HEAD', { cwd, encoding: 'utf-8' }).trim();
+
+    const state = makeFullEvalState({
+      baseCommit: base,
+      implCommit: implHead,
+      evalCommit: implHead,
+      trackedRepos: [{ path: cwd, baseCommit: base, implRetryBase: base, implHead }],
+    });
+
+    const prompt = assembleGatePrompt(7, state, '', cwd);
+    if (typeof prompt !== 'string') { return; }
+    expect(prompt).not.toContain('### repo:');
+  });
+
+  it('N=2 → diff sections with ### repo: label for each repo', () => {
+    const outer = makeTmpDir2();
+    const repoA = path.join(outer, 'repo-a');
+    const repoB = path.join(outer, 'repo-b');
+    fs.mkdirSync(repoA); fs.mkdirSync(repoB);
+    const baseA = initRepo(repoA);
+    const baseB = initRepo(repoB);
+
+    // Set up docs in repoA (trackedRepos[0])
+    fs.mkdirSync(path.join(repoA, 'docs/specs'), { recursive: true });
+    fs.mkdirSync(path.join(repoA, 'docs/plans'), { recursive: true });
+    fs.mkdirSync(path.join(repoA, 'docs/process/evals'), { recursive: true });
+    fs.writeFileSync(path.join(repoA, 'docs/specs/my-run-design.md'), '# spec\n## Complexity\nSmall');
+    fs.writeFileSync(path.join(repoA, 'docs/plans/my-run.md'), '# plan');
+    fs.writeFileSync(path.join(repoA, 'docs/process/evals/my-run-eval.md'), '# eval');
+    execSync('git add .', { cwd: repoA, stdio: 'pipe' });
+    execSync('git commit -m "docs"', { cwd: repoA, stdio: 'pipe' });
+    const implA = execSync('git rev-parse HEAD', { cwd: repoA, encoding: 'utf-8' }).trim();
+
+    const state = makeFullEvalState({
+      baseCommit: baseA,
+      implCommit: implA,
+      evalCommit: implA,
+      trackedRepos: [
+        { path: repoA, baseCommit: baseA, implRetryBase: baseA, implHead: implA },
+        { path: repoB, baseCommit: baseB, implRetryBase: baseB, implHead: null },
+      ],
+    });
+
+    const prompt = assembleGatePrompt(7, state, '', outer);
+    if (typeof prompt !== 'string') { return; }
+    expect(prompt).toContain('### repo: repo-a');
+    expect(prompt).toContain('### repo: repo-b');
+  });
+
+  it('N>1 metadata uses "Harness implementation ranges (per tracked repo):" block', () => {
+    const outer = makeTmpDir2();
+    const repoA = path.join(outer, 'repo-a');
+    const repoB = path.join(outer, 'repo-b');
+    fs.mkdirSync(repoA); fs.mkdirSync(repoB);
+    const baseA = initRepo(repoA);
+    const baseB = initRepo(repoB);
+
+    fs.mkdirSync(path.join(repoA, 'docs/specs'), { recursive: true });
+    fs.mkdirSync(path.join(repoA, 'docs/plans'), { recursive: true });
+    fs.mkdirSync(path.join(repoA, 'docs/process/evals'), { recursive: true });
+    fs.writeFileSync(path.join(repoA, 'docs/specs/my-run-design.md'), '# spec\n## Complexity\nSmall');
+    fs.writeFileSync(path.join(repoA, 'docs/plans/my-run.md'), '# plan');
+    fs.writeFileSync(path.join(repoA, 'docs/process/evals/my-run-eval.md'), '# eval');
+    execSync('git add .', { cwd: repoA, stdio: 'pipe' });
+    execSync('git commit -m "docs"', { cwd: repoA, stdio: 'pipe' });
+    const implA = execSync('git rev-parse HEAD', { cwd: repoA, encoding: 'utf-8' }).trim();
+
+    const state = makeFullEvalState({
+      baseCommit: baseA,
+      implCommit: implA,
+      evalCommit: implA,
+      trackedRepos: [
+        { path: repoA, baseCommit: baseA, implRetryBase: baseA, implHead: implA },
+        { path: repoB, baseCommit: baseB, implRetryBase: baseB, implHead: null },
+      ],
+    });
+
+    const prompt = assembleGatePrompt(7, state, '', outer);
+    if (typeof prompt !== 'string') { return; }
+    expect(prompt).toContain('Harness implementation ranges (per tracked repo):');
+    expect(prompt).toContain('repo-a:');
+    expect(prompt).toContain('no change');
   });
 });
 

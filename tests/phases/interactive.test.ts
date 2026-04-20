@@ -70,12 +70,23 @@ function makeState(overrides: Partial<HarnessState> = {}): HarnessState {
     'deadbeef',
     false
   );
-  return {
+  const merged = {
     ...base,
     tmuxWorkspacePane: '%1',
     tmuxControlPane: '%0',
     ...overrides,
   };
+  // Keep trackedRepos[0] in sync with top-level fields so syncLegacyMirror
+  // (called by writeState) does not overwrite them back to base values.
+  if (merged.trackedRepos?.[0]) {
+    merged.trackedRepos = [{
+      ...merged.trackedRepos[0],
+      baseCommit: merged.baseCommit,
+      implRetryBase: merged.implRetryBase,
+      implHead: merged.implCommit,
+    }];
+  }
+  return merged;
 }
 
 /** Create a minimal git repo and return its path (registered for cleanup). */
@@ -181,6 +192,8 @@ describe('preparePhase — Phase 1/3 artifact deletion', () => {
     const harnessDir = makeTmpDir();
 
     const state = makeState();
+    // Set trackedRepos[0].path so getHead(r.path) works in Phase 5 preparePhase
+    state.trackedRepos = [{ path: repoDir, baseCommit: state.baseCommit, implRetryBase: state.implRetryBase, implHead: null }];
 
     // Phase 5 should not attempt to delete spec/plan/etc.
     // Create a file that would be deleted if cleanup ran incorrectly
@@ -312,6 +325,8 @@ describe('preparePhase — Phase 5 implRetryBase', () => {
 
     const head = execSync('git rev-parse HEAD', { cwd: repoDir, encoding: 'utf-8' }).trim();
     const state = makeState({ implRetryBase: 'old-base-sha' });
+    // Set trackedRepos[0].path so getHead(r.path) works
+    state.trackedRepos = [{ path: repoDir, baseCommit: 'old-base-sha', implRetryBase: 'old-base-sha', implHead: null }];
 
     const newState = preparePhase(5, state, harnessDir, runDir, repoDir);
 
@@ -604,6 +619,7 @@ describe('validatePhaseArtifacts — Phase 5', () => {
     execSync('git add impl.txt && git commit -m "impl"', { cwd: repoDir });
 
     const state = makeState({ implRetryBase: head });
+    state.trackedRepos = [{ path: repoDir, baseCommit: head, implRetryBase: head, implHead: null }];
     const result = validatePhaseArtifacts(5, state, repoDir, repoDir);
     expect(result).toBe(true);
   });
@@ -612,14 +628,17 @@ describe('validatePhaseArtifacts — Phase 5', () => {
     const repoDir = createTestRepo();
     const head = execSync('git rev-parse HEAD', { cwd: repoDir, encoding: 'utf-8' }).trim();
     const state = makeState({ implRetryBase: head, implCommit: null });
+    state.trackedRepos = [{ path: repoDir, baseCommit: head, implRetryBase: head, implHead: null }];
     const result = validatePhaseArtifacts(5, state, repoDir, repoDir);
     expect(result).toBe(false);
   });
 
-  it('accepts zero-commit reopen when implCommit is already set', () => {
+  it('accepts zero-commit reopen when implHead is already set on trackedRepos[0]', () => {
     const repoDir = createTestRepo();
     const head = execSync('git rev-parse HEAD', { cwd: repoDir, encoding: 'utf-8' }).trim();
-    const state = makeState({ implRetryBase: head, implCommit: 'prior-impl-sha' });
+    const state = makeState({ implRetryBase: head, implCommit: null });
+    // Simulate a prior attempt that set implHead
+    state.trackedRepos = [{ path: repoDir, baseCommit: head, implRetryBase: head, implHead: 'prior-impl-sha' }];
     const result = validatePhaseArtifacts(5, state, repoDir, repoDir);
     expect(result).toBe(true);
   });
@@ -632,6 +651,7 @@ describe('validatePhaseArtifacts — Phase 5', () => {
     fs.writeFileSync(path.join(repoDir, 'dirty.txt'), 'untracked scratch');
 
     const state = makeState({ implRetryBase: head });
+    state.trackedRepos = [{ path: repoDir, baseCommit: head, implRetryBase: head, implHead: null }];
     const result = validatePhaseArtifacts(5, state, repoDir, repoDir);
     expect(result).toBe(true);
   });
@@ -829,5 +849,68 @@ describe('runInteractivePhase — codex-interactive branch invokes codex isolati
     const errorSidecar = path.join(runDir, 'codex-1-error.md');
     expect(fs.existsSync(errorSidecar)).toBe(true);
     expect(fs.readFileSync(errorSidecar, 'utf-8')).toMatch(/fake.*auth\.json missing/);
+  });
+});
+
+describe('validatePhaseArtifacts — Phase 5 multi-repo (FR-6, ADR-D4)', () => {
+  it('returns true when any repo advanced; sets implHead on advanced repos only', () => {
+    const outer = makeTmpDir();
+    const repoA = makeTmpDir('repoA-');
+    const repoB = makeTmpDir('repoB-');
+
+    // Init both repos with an initial commit
+    for (const d of [repoA, repoB]) {
+      execSync('git init', { cwd: d, stdio: 'pipe' });
+      execSync('git config user.email "t@t.com"', { cwd: d, stdio: 'pipe' });
+      execSync('git config user.name "T"', { cwd: d, stdio: 'pipe' });
+      fs.writeFileSync(path.join(d, 'a.txt'), 'x');
+      execSync('git add .', { cwd: d, stdio: 'pipe' });
+      execSync('git commit -m "init"', { cwd: d, stdio: 'pipe' });
+    }
+
+    const headA = execSync('git rev-parse HEAD', { cwd: repoA, encoding: 'utf-8' }).trim();
+    const headB = execSync('git rev-parse HEAD', { cwd: repoB, encoding: 'utf-8' }).trim();
+
+    // Advance only repoA
+    fs.writeFileSync(path.join(repoA, 'new.txt'), 'y');
+    execSync('git add .', { cwd: repoA, stdio: 'pipe' });
+    execSync('git commit -m "impl"', { cwd: repoA, stdio: 'pipe' });
+    const newHeadA = execSync('git rev-parse HEAD', { cwd: repoA, encoding: 'utf-8' }).trim();
+
+    const state = makeState({ baseCommit: headA, implRetryBase: headA });
+    state.trackedRepos = [
+      { path: repoA, baseCommit: headA, implRetryBase: headA, implHead: null },
+      { path: repoB, baseCommit: headB, implRetryBase: headB, implHead: null },
+    ];
+
+    const runDir = makeTmpDir('rundir-');
+    const result = validatePhaseArtifacts(5, state, outer, runDir);
+
+    expect(result).toBe(true);
+    expect(state.trackedRepos[0].implHead).toBe(newHeadA);
+    expect(state.trackedRepos[1].implHead).toBeNull(); // not advanced
+    expect(state.implCommit).toBe(newHeadA); // legacy mirror from trackedRepos[0]
+  });
+
+  it('returns false when no repo advanced', () => {
+    const outer = makeTmpDir();
+    const repoA = makeTmpDir('repoA2-');
+    execSync('git init', { cwd: repoA, stdio: 'pipe' });
+    execSync('git config user.email "t@t.com"', { cwd: repoA, stdio: 'pipe' });
+    execSync('git config user.name "T"', { cwd: repoA, stdio: 'pipe' });
+    fs.writeFileSync(path.join(repoA, 'a.txt'), 'x');
+    execSync('git add .', { cwd: repoA, stdio: 'pipe' });
+    execSync('git commit -m "init"', { cwd: repoA, stdio: 'pipe' });
+    const head = execSync('git rev-parse HEAD', { cwd: repoA, encoding: 'utf-8' }).trim();
+
+    const state = makeState({ baseCommit: head, implRetryBase: head });
+    state.trackedRepos = [
+      { path: repoA, baseCommit: head, implRetryBase: head, implHead: null },
+    ];
+    state.implCommit = null;
+
+    const runDir = makeTmpDir('rundir2-');
+    const result = validatePhaseArtifacts(5, state, outer, runDir);
+    expect(result).toBe(false);
   });
 });
