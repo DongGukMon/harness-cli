@@ -8,6 +8,7 @@ import { updateLockChild, clearLockChild } from '../lock.js';
 import { getProcessStartTime, killProcessGroup } from '../process.js';
 import { writeState } from '../state.js';
 import { buildGateResult, extractCodexMetadata } from '../phases/verdict.js';
+import { isInGitRepo } from '../git.js';
 
 function resolveCodexBin(): string {
   try {
@@ -189,12 +190,16 @@ async function runCodexExecRaw(input: RawExecInput): Promise<RawExecResult> {
   // `codex exec resume`의 CLI contract (spec §2): `[SESSION_ID] [PROMPT]`가 positional.
   // sessionId를 '--model' 같은 플래그 뒤에 두면 parser가 flag value로 오인할 위험이 있다.
   // 반드시 'resume' 직후 sessionId → 플래그들 → prompt placeholder(`-`) 순서.
+  const skipGitFlag = !isInGitRepo(input.cwd) ? ['--skip-git-repo-check'] : [];
+
   const args = input.mode === 'resume'
     ? ['exec', 'resume', input.sessionId!,
+       ...skipGitFlag,
        '--model', input.preset.model,
        '-c', `model_reasoning_effort="${input.preset.effort}"`,
        '-']
     : ['exec',
+       ...skipGitFlag,
        '--model', input.preset.model,
        '-c', `model_reasoning_effort="${input.preset.effort}"`,
        '-'];
@@ -281,6 +286,13 @@ function parseVerdictPresent(stdout: string): boolean {
   return /^##\s+verdict\s*$/im.test(stdout);
 }
 
+export function stderrTail(stderr: string, maxLines = 20): string {
+  // Strip ANSI escape sequences
+  const clean = stderr.replace(/\x1B\[[0-9;]*m/g, '');
+  const lines = clean.split('\n').filter(l => l.trim().length > 0);
+  return lines.slice(-maxLines).join('\n');
+}
+
 function rawToResult(
   raw: RawExecResult,
   preset: ModelPreset,
@@ -302,7 +314,12 @@ function rawToResult(
     raw.category === 'spawn_error' ? `Codex gate error: ${raw.spawnError ?? 'unknown spawn failure'}` :
     raw.category === 'success_no_verdict' ? 'Gate output missing ## Verdict header' :
     raw.category === 'session_missing' ? `Codex resume failed: session not found (stderr: ${raw.stderr.trim().slice(0, 200)})` :
-    `Gate subprocess exited with code ${raw.exitCode ?? 'null'}`;
+    (() => {
+      const tail = stderrTail(raw.stderr);
+      return tail.length > 0
+        ? `Gate subprocess exited with code ${raw.exitCode ?? 'null'}\n--- stderr (tail) ---\n${tail}\n---`
+        : `Gate subprocess exited with code ${raw.exitCode ?? 'null'}`;
+    })();
 
   return {
     type: 'error',
