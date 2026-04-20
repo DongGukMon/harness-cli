@@ -46,8 +46,8 @@ P1 design+plan → P2 pre-impl gate → P5 implement → P6 verify → P7 eval g
 | `codex-medium` | codex | `gpt-5.4` | `medium` |
 
 기본 매핑:
-- full flow: P1 `opus-1m-high`, P2 `codex-high`, P3 `sonnet-1m-high`, P4 `codex-high`, P5 `sonnet-1m-high`, P7 `codex-high`
-- light flow: P1 `opus-1m-high`, P2 `codex-high`, P5 `sonnet-1m-high`, P7 `codex-high`
+- full flow: P1 `opus-1m-high`, P2 `codex-high`, P3 `sonnet-high`, P4 `codex-high`, P5 `sonnet-high`, P7 `codex-high`
+- light flow: P1 `opus-1m-high`, P2 `codex-high`, P5 `sonnet-high`, P7 `codex-high`
 
 사용자는 `phase-harness start` / `phase-harness resume` 때 모든 non-verify phase preset을 바꿀 수 있고,
 선택값은 `state.phasePresets`에 저장됩니다.
@@ -91,9 +91,9 @@ light flow 특이사항:
 |---|---|---|---|---|
 | P1 Spec / Design+Plan | `opus-1m-high` | interactive | spec/design 문서 + decisions + checklist(light) | Gate 2 reject 시 P1 재오픈, light P7 design/mixed reject도 P1 재오픈 |
 | P2 Spec Gate | `codex-high` | gate | verdict + feedback sidecar | P1 재오픈 |
-| P3 Plan | `sonnet-1m-high` | interactive | plan + checklist | Gate 4 reject 시 P3 재오픈 |
+| P3 Plan | `sonnet-high` | interactive | plan + checklist | Gate 4 reject 시 P3 재오픈 |
 | P4 Plan Gate | `codex-high` | gate | verdict + feedback sidecar | P3 재오픈 |
-| P5 Implement | `sonnet-1m-high` | interactive | git commits | P6 fail, full-flow P7 reject, light-flow impl reject 시 P5 재오픈 |
+| P5 Implement | `sonnet-high` | interactive | git commits | P6 fail, full-flow P7 reject, light-flow impl reject 시 P5 재오픈 |
 | P6 Verify | 고정 스크립트 | 자동 셸 | eval report + verify sidecar | fail 시 P5 재오픈, retry limit 3 |
 | P7 Eval Gate | `codex-high` | gate | verdict + feedback sidecar | full은 P5, light는 scope에 따라 P5 또는 P1 |
 

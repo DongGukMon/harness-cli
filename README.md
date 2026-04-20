@@ -32,9 +32,9 @@ Current built-in presets:
 Default phase assignments:
 - Phase 1 → `opus-1m-high`
 - Phase 2 → `codex-high`
-- Phase 3 → `sonnet-1m-high`
+- Phase 3 → `sonnet-high`
 - Phase 4 → `codex-high`
-- Phase 5 → `sonnet-1m-high`
+- Phase 5 → `sonnet-high`
 - Phase 7 → `codex-high`
 
 ---

@@ -217,7 +217,7 @@ describe('createInitialState (updated)', () => {
   it('initializes phasePresets from PHASE_DEFAULTS', () => {
     const state = createInitialState('run-1', 'task', 'abc123', false);
     expect(state.phasePresets['1']).toBe('opus-1m-high');
-    expect(state.phasePresets['5']).toBe('sonnet-1m-high');
+    expect(state.phasePresets['5']).toBe('sonnet-high');
   });
 
   it('initializes phaseReopenFlags to false', () => {

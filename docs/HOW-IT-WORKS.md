@@ -46,8 +46,8 @@ Built-in presets come from `src/config.ts`:
 | `codex-medium` | codex | `gpt-5.4` | `medium` |
 
 Default assignments:
-- full flow: P1 `opus-1m-high`, P2 `codex-high`, P3 `sonnet-1m-high`, P4 `codex-high`, P5 `sonnet-1m-high`, P7 `codex-high`
-- light flow: P1 `opus-1m-high`, P2 `codex-high`, P5 `sonnet-1m-high`, P7 `codex-high`
+- full flow: P1 `opus-1m-high`, P2 `codex-high`, P3 `sonnet-high`, P4 `codex-high`, P5 `sonnet-high`, P7 `codex-high`
+- light flow: P1 `opus-1m-high`, P2 `codex-high`, P5 `sonnet-high`, P7 `codex-high`
 
 Users can change every non-verify phase preset during `phase-harness start` and `phase-harness resume`.
 Selections persist in `state.phasePresets`.
@@ -91,9 +91,9 @@ Light-flow specifics:
 |---|---|---|---|---|
 | P1 Spec / Design+Plan | `opus-1m-high` | interactive | spec/design doc + decisions + checklist (light only) | Gate 2 reject reopens P1; light-flow P7 design/mixed reject also reopens P1 |
 | P2 Spec Gate | `codex-high` | gate | verdict + optional feedback sidecars | reopen P1 |
-| P3 Plan | `sonnet-1m-high` | interactive | plan + checklist | Gate 4 reject reopens P3 |
+| P3 Plan | `sonnet-high` | interactive | plan + checklist | Gate 4 reject reopens P3 |
 | P4 Plan Gate | `codex-high` | gate | verdict + optional feedback sidecars | reopen P3 |
-| P5 Implement | `sonnet-1m-high` | interactive | git commits | P6 fail reopens P5; P7 full-flow reject reopens P5; light-flow impl reject reopens P5 |
+| P5 Implement | `sonnet-high` | interactive | git commits | P6 fail reopens P5; P7 full-flow reject reopens P5; light-flow impl reject reopens P5 |
 | P6 Verify | fixed script | automated shell | eval report + verify sidecars | fail reopens P5; retry limit 3 |
 | P7 Eval Gate | `codex-high` | gate | verdict + optional feedback sidecars | full: reopen P5; light: reopen P5 or P1 based on scope |
 
