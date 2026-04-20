@@ -85,7 +85,7 @@ describe('runClaudeInteractive — argv contract (R8)', () => {
     const ATTEMPT_ID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
     const state = makeState(5, ATTEMPT_ID);
 
-    const promise = runClaudeInteractive(5, state, PRESET, '/harness', '/rundir', '/prompt.md', true);
+    const promise = runClaudeInteractive(5, state, PRESET, '/harness', '/rundir', '/prompt.md', '/repo/root', true);
     vi.runAllTimers();
     await promise;
 
@@ -103,7 +103,7 @@ describe('runClaudeInteractive — argv contract (R8)', () => {
     const ATTEMPT_ID = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
     const state = makeState(5, ATTEMPT_ID);
 
-    const promise = runClaudeInteractive(5, state, PRESET, '/harness', '/rundir', '/prompt.md', false);
+    const promise = runClaudeInteractive(5, state, PRESET, '/harness', '/rundir', '/prompt.md', '/repo/root', false);
     vi.runAllTimers();
     await promise;
 
@@ -114,5 +114,22 @@ describe('runClaudeInteractive — argv contract (R8)', () => {
     expect(cmd).toContain(`--model ${PRESET.model}`);
     expect(cmd).toContain(`--effort ${PRESET.effort}`);
     expect(cmd).toMatch(/@.*prompt\.md/);
+  });
+
+  it('wrapper pins Claude cwd via `cd "<cwd>" &&` so artifacts land under the harness anchor', async () => {
+    const { runClaudeInteractive } = await import('../../src/runners/claude.js');
+    const ATTEMPT_ID = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
+    const state = makeState(5, ATTEMPT_ID);
+
+    const promise = runClaudeInteractive(5, state, PRESET, '/harness', '/rundir', '/prompt.md', '/repo/root', false);
+    vi.runAllTimers();
+    await promise;
+
+    const cmd = getCmdArg(vi.mocked(sendKeysToPane).mock.calls);
+    // Must cd into the harness anchor, fail-loud via `&&`, then exec claude.
+    expect(cmd).toMatch(/cd "\/repo\/root" && .* && exec claude/);
+    // The pre-fix form `echo $$ > pidfile; exec claude` is no longer acceptable:
+    // it would silently exec claude with the wrong cwd if `cd` had failed.
+    expect(cmd).not.toMatch(/;\s*exec claude/);
   });
 });

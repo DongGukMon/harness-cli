@@ -183,7 +183,7 @@ export async function resumeCommand(runId?: string, options: ResumeOptions = {})
     const controlPaneId = getDefaultPaneId(sessionName);
     sendKeys(sessionName, '0', `${innerCmd} --control-pane ${controlPaneId}`);
   } else {
-    const ctrlWindowId = createWindow(sessionName, 'harness-ctrl', '');
+    const ctrlWindowId = createWindow(sessionName, 'harness-ctrl', '', cwd);
     const controlPaneId = getDefaultPaneId(sessionName, ctrlWindowId);
     sendKeys(sessionName, ctrlWindowId, `${innerCmd} --control-pane ${controlPaneId}`);
     state.tmuxControlWindow = ctrlWindowId;

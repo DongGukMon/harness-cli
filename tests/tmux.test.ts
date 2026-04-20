@@ -39,18 +39,20 @@ describe('tmux utilities', () => {
 
   it('createWindow returns window ID', () => {
     vi.mocked(execSync).mockReturnValue('@42\n');
-    const id = createWindow('sess', 'win', 'echo hi');
+    const id = createWindow('sess', 'win', 'echo hi', '/tmp/repo');
     expect(id).toBe('@42');
   });
 
-  it('createWindow command includes window name and command', () => {
+  it('createWindow command includes window name, command, and -c cwd', () => {
     vi.mocked(execSync).mockReturnValue('@0\n');
-    createWindow('my-session', 'phase-1', 'claude --model opus');
+    createWindow('my-session', 'phase-1', 'claude --model opus', '/repo/root');
     const cmd = vi.mocked(execSync).mock.calls[0][0] as string;
     expect(cmd).toContain('new-window');
     expect(cmd).toContain('my-session');
     expect(cmd).toContain('phase-1');
     expect(cmd).toContain('claude --model opus');
+    expect(cmd).toContain('-c');
+    expect(cmd).toContain('/repo/root');
   });
 
   it('killWindow is best-effort (no throw on error)', () => {
@@ -124,26 +126,30 @@ describe('tmux utilities', () => {
 
   it('splitPane returns new pane ID', () => {
     vi.mocked(execSync).mockReturnValue('%5\n');
-    const id = splitPane('sess', '%0', 'h', 70);
+    const id = splitPane('sess', '%0', 'h', 70, '/tmp/repo');
     expect(id).toBe('%5');
   });
 
-  it('splitPane command includes -h flag for horizontal split', () => {
+  it('splitPane command includes -h flag and -c cwd for horizontal split', () => {
     vi.mocked(execSync).mockReturnValue('%1\n');
-    splitPane('my-session', '%0', 'h', 70);
+    splitPane('my-session', '%0', 'h', 70, '/repo/root');
     const cmd = vi.mocked(execSync).mock.calls[0][0] as string;
     expect(cmd).toContain('split-window');
     expect(cmd).toContain('-h');
     expect(cmd).toContain('70');
+    expect(cmd).toContain('-c');
+    expect(cmd).toContain('/repo/root');
   });
 
-  it('splitPane command includes -v flag for vertical split', () => {
+  it('splitPane command includes -v flag and -c cwd for vertical split', () => {
     vi.mocked(execSync).mockReturnValue('%2\n');
-    splitPane('my-session', '%0', 'v', 30);
+    splitPane('my-session', '%0', 'v', 30, '/another/repo');
     const cmd = vi.mocked(execSync).mock.calls[0][0] as string;
     expect(cmd).toContain('split-window');
     expect(cmd).toContain('-v');
     expect(cmd).toContain('30');
+    expect(cmd).toContain('-c');
+    expect(cmd).toContain('/another/repo');
   });
 
   it('sendKeysToPane sends C-c without Enter', () => {

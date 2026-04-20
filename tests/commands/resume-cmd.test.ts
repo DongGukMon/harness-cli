@@ -246,7 +246,12 @@ describe('resumeCommand', () => {
     // Stale cleanup path + recursion + reused Case 3
     expect(vi.mocked(tmux.killWindow)).toHaveBeenCalledWith('harness-reused', '@stale');
     expect(vi.mocked(lock.releaseLock)).toHaveBeenCalled();
-    expect(vi.mocked(tmux.createWindow)).toHaveBeenCalledWith('harness-reused', 'harness-ctrl', '');
+    expect(vi.mocked(tmux.createWindow)).toHaveBeenCalledWith(
+      'harness-reused',
+      'harness-ctrl',
+      '',
+      expect.any(String), // cwd — pins new control window to harness anchor
+    );
     expect(vi.mocked(tmux.createSession)).not.toHaveBeenCalled();
   });
 
