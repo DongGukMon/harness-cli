@@ -16,6 +16,7 @@ import { createSessionLogger } from '../logger.js';
 import { codexHomeFor } from '../runners/codex-isolation.js';
 import type { SessionLogger, HarnessState } from '../types.js';
 import { promptForTask } from '../task-prompt.js';
+import { synthesizeFailedFromInconsistentPause } from '../resume.js';
 
 export interface InnerOptions {
   root?: string;
@@ -34,6 +35,14 @@ export async function innerCommand(runId: string, options: InnerOptions = {}): P
   if (state === null) {
     process.stderr.write(`Run '${runId}' has no state.\n`);
     process.exit(1);
+  }
+
+  // D4 live path: detect inconsistent state before entering the loop.
+  // synthesize sets phase to failed + status to in_progress; the loop-top
+  // check (D3) will exit immediately, and the post-loop anyPhaseFailed
+  // classifier will route to enterFailedTerminalState (R/J/Q UI).
+  if (state.status === 'paused' && state.pendingAction === null) {
+    synthesizeFailedFromInconsistentPause(state, runDir);
   }
 
   // 2. Claim lock ownership (outer → inner handoff)

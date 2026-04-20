@@ -10,6 +10,10 @@ vi.mock('../src/phases/runner.js', () => ({
   runPhaseLoop: vi.fn().mockResolvedValue(undefined),
 }));
 
+vi.mock('../src/phases/terminal-ui.js', () => ({
+  enterFailedTerminalState: vi.fn().mockResolvedValue(undefined),
+}));
+
 function setupRun(repo: { path: string }, options: Partial<Record<string, unknown>> = {}) {
   writeFileSync(join(repo.path, '.gitignore'), '.harness/\n');
   execSync('git add .gitignore && git commit -m "gitignore"', { cwd: repo.path });
@@ -73,13 +77,18 @@ describe('resumeRun', () => {
     repo.cleanup();
   });
 
-  it('errors on paused run with null pendingAction', async () => {
+  it('routes to enterFailedTerminalState on paused run with null pendingAction', async () => {
+    const { enterFailedTerminalState } = await import('../src/phases/terminal-ui.js');
+    const enterFailedSpy = vi.mocked(enterFailedTerminalState);
+    enterFailedSpy.mockClear();
+
     const { state, harnessDir, runDir } = setupRun(repo, {
       status: 'paused',
       pendingAction: null,
     });
 
-    await expect(resumeRun(state, harnessDir, runDir, repo.path)).rejects.toThrow('__exit__');
+    await resumeRun(state, harnessDir, runDir, repo.path);
+    expect(enterFailedSpy).toHaveBeenCalledOnce();
     expect(stderrSpy.mock.calls.map((c: any) => c[0]).join('')).toContain('inconsistent');
   });
 

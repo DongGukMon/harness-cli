@@ -60,6 +60,7 @@ vi.mock('../../src/git.js', () => ({
   getFileStatus: vi.fn(),
   generateRunId: vi.fn(),
   detectExternalCommits: vi.fn(),
+  isPathGitignored: vi.fn().mockReturnValue(false),
 }));
 
 vi.mock('../../src/state.js', async (importOriginal) => {

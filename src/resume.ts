@@ -12,6 +12,7 @@ import {
   handleVerifyEscalation,
   handleVerifyError,
 } from './phases/runner.js';
+import { enterFailedTerminalState } from './phases/terminal-ui.js';
 import { InputManager } from './input.js';
 import { NoopLogger } from './logger.js';
 import { getGateRetryLimit, getPhaseArtifactFiles } from './config.js';
@@ -41,6 +42,22 @@ function createNoOpInputManager(): InputManager {
 }
 
 /**
+ * Synthesize a failed phase state from an inconsistent pause (status=paused + pendingAction=null).
+ * This can happen if the process was killed after state was written as 'paused' but before
+ * pendingAction was recorded. Exported so inner.ts can use the same logic for the live path.
+ */
+export function synthesizeFailedFromInconsistentPause(state: HarnessState, runDir: string): void {
+  process.stderr.write(
+    `⚠️  Run ${state.runId} detected inconsistent pause state (paused + pendingAction=null); ` +
+    `synthesizing failed phase ${state.currentPhase} and routing to failed terminal UI.\n`
+  );
+  state.phases[String(state.currentPhase)] = 'failed';
+  state.status = 'in_progress';
+  state.pauseReason = null;
+  writeState(runDir, state);
+}
+
+/**
  * Resume a run. Validates state, performs recovery based on pendingAction or
  * phase status, then delegates to runPhaseLoop to continue execution.
  */
@@ -65,13 +82,11 @@ export async function resumeRun(
     return;
   }
 
-  // Step 5: Paused without pendingAction → error
+  // Step 5: Paused without pendingAction → synthesize failed state + route to terminal UI
   if (state.status === 'paused' && state.pendingAction === null) {
-    process.stderr.write(
-      `Run state is inconsistent: paused run has no pendingAction.\n` +
-      `Use 'phase-harness jump N' to re-run from a specific phase or delete .harness/${state.runId}/ to discard this run.\n`
-    );
-    process.exit(1);
+    synthesizeFailedFromInconsistentPause(state, runDir);
+    await enterFailedTerminalState(state, harnessDir, runDir, cwd, createNoOpInputManager(), new NoopLogger());
+    return;
   }
 
   // Step 6: General recovery — check for fresh sentinel / verify-result BEFORE re-entering loop
