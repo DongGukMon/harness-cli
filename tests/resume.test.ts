@@ -1,9 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { execSync } from 'child_process';
-import { mkdirSync, writeFileSync, readFileSync } from 'fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync, readFileSync } from 'fs';
 import { join } from 'path';
+import { tmpdir } from 'os';
 import { createTestRepo } from './helpers/test-repo.js';
-import { resumeRun } from '../src/resume.js';
+import { resumeRun, completeInteractivePhaseFromFreshSentinel } from '../src/resume.js';
 import { createInitialState, writeState } from '../src/state.js';
 
 vi.mock('../src/phases/runner.js', () => ({
@@ -223,6 +224,26 @@ describe('resumeRun', () => {
     expect(stderrSpy.mock.calls.map((c: any) => c[0]).join('')).toContain('Spec commit');
   });
 
+  it('errors when phase 5 completed but all trackedRepos implHead are null (state anomaly)', async () => {
+    const phases = {
+      '1': 'pending', '2': 'pending', '3': 'pending',
+      '4': 'pending', '5': 'completed', '6': 'pending', '7': 'pending',
+    };
+    const baseCommit = execSync('git rev-parse HEAD', { cwd: repo.path, encoding: 'utf-8' }).trim();
+    const { state, harnessDir, runDir } = setupRun(repo, {
+      currentPhase: 6,
+      phases,
+      implCommit: baseCommit,
+      trackedRepos: [
+        { path: repo.path, baseCommit, implRetryBase: baseCommit, implHead: null },
+      ],
+    });
+
+    await expect(resumeRun(state, harnessDir, runDir, repo.path)).rejects.toThrow('__exit__');
+    const output = stderrSpy.mock.calls.map((c: any) => c[0]).join('');
+    expect(output).toContain('state anomaly');
+  });
+
   it('skip_phase Phase 6 with gitignored eval report: skips commit and leaves evalCommit null', async () => {
     // setupRun first (creates .harness/ gitignore and initial commits)
     const { state, harnessDir, runDir } = setupRun(repo, {
@@ -259,5 +280,117 @@ describe('resumeRun', () => {
     expect(updated.phases['6']).toBe('completed');
     // Warning must be emitted
     expect(stderrSpy.mock.calls.map((c: any) => c[0]).join('')).toContain('gitignored');
+  });
+});
+
+// Standalone helpers for multi-repo tests (real git, no mocks needed)
+const multiRepoTmpDirs: string[] = [];
+
+function makeMultiTmpDir(prefix = 'harness-mr-'): string {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  multiRepoTmpDirs.push(dir);
+  return dir;
+}
+
+function initRepo(repoPath: string, filename = 'init.txt'): string {
+  mkdirSync(repoPath, { recursive: true });
+  execSync('git init', { cwd: repoPath, stdio: 'pipe' });
+  execSync('git config user.email "t@t.com"', { cwd: repoPath, stdio: 'pipe' });
+  execSync('git config user.name "T"', { cwd: repoPath, stdio: 'pipe' });
+  writeFileSync(join(repoPath, filename), 'x');
+  execSync('git add .', { cwd: repoPath, stdio: 'pipe' });
+  execSync('git commit -m "init"', { cwd: repoPath, stdio: 'pipe' });
+  return execSync('git rev-parse HEAD', { cwd: repoPath, encoding: 'utf-8' }).trim();
+}
+
+afterEach(() => {
+  for (const dir of multiRepoTmpDirs) {
+    rmSync(dir, { recursive: true, force: true });
+  }
+  multiRepoTmpDirs.length = 0;
+});
+
+describe('completeInteractivePhaseFromFreshSentinel — Phase 5 multi-repo (FR-8)', () => {
+  it('returns true and sets implHead when any repo advanced', () => {
+    const outer = makeMultiTmpDir();
+    const repoA = join(outer, 'a');
+    const base = initRepo(repoA);
+
+    // Advance repoA
+    writeFileSync(join(repoA, 'impl.txt'), 'y');
+    execSync('git add .', { cwd: repoA, stdio: 'pipe' });
+    execSync('git commit -m "impl"', { cwd: repoA, stdio: 'pipe' });
+    const newHead = execSync('git rev-parse HEAD', { cwd: repoA, encoding: 'utf-8' }).trim();
+
+    const state = createInitialState('test-run', 'task', base, false);
+    state.trackedRepos = [
+      { path: repoA, baseCommit: base, implRetryBase: base, implHead: null },
+    ];
+    state.implRetryBase = base;
+
+    const runDir = makeMultiTmpDir('rundir-');
+    const result = completeInteractivePhaseFromFreshSentinel(5, state, outer, runDir);
+
+    expect(result).toBe(true);
+    expect(state.trackedRepos[0].implHead).toBe(newHead);
+    // syncLegacyMirror: state.implCommit mirrors trackedRepos[0].implHead
+    expect(state.implCommit).toBe(newHead);
+  });
+
+  it('returns false when no repo advanced (HEAD === implRetryBase)', () => {
+    const outer = makeMultiTmpDir();
+    const repoA = join(outer, 'a');
+    const head = initRepo(repoA);
+
+    const state = createInitialState('test-run', 'task', head, false);
+    state.trackedRepos = [
+      { path: repoA, baseCommit: head, implRetryBase: head, implHead: null },
+    ];
+    state.implRetryBase = head;
+
+    const runDir = makeMultiTmpDir('rundir-');
+    const result = completeInteractivePhaseFromFreshSentinel(5, state, outer, runDir);
+
+    expect(result).toBe(false);
+  });
+
+  it('skips ancestry check for repos with implHead=null (null-safe FR-8)', async () => {
+    const outer = makeMultiTmpDir();
+    const repoA = join(outer, 'a');
+    const implSha = initRepo(repoA);
+
+    // repoB doesn't need to be a real git repo — implHead=null means no ancestry check
+    const repoB = join(outer, 'b');
+    mkdirSync(repoB);
+
+    const state = createInitialState('test-run', 'task', implSha, false);
+    state.phases['5'] = 'completed';
+    state.trackedRepos = [
+      { path: repoA, baseCommit: implSha, implRetryBase: implSha, implHead: implSha },
+      { path: repoB, baseCommit: 'dummy', implRetryBase: 'dummy', implHead: null },
+    ];
+    state.implCommit = implSha;
+
+    // Set up a runDir with a fresh state.json so resumeRun can proceed
+    const harnessDir = join(outer, '.harness');
+    const runDir = join(harnessDir, 'test-run');
+    mkdirSync(runDir, { recursive: true });
+    writeState(runDir, state);
+
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((_code?: any) => {
+      throw new Error(`__exit__${_code}`);
+    });
+    const stderrSpy2 = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
+    try {
+      // Calling resumeRun will exercise validateAncestry — the null-safe path
+      // should NOT call isAncestor on repoB and should NOT exit
+      // (only repoA with a real implHead is checked)
+      // It will eventually reach runPhaseLoop which is already mocked
+      await resumeRun(state, harnessDir, runDir, outer);
+    } finally {
+      exitSpy.mockRestore();
+      stderrSpy2.mockRestore();
+    }
+    // No __exit__ thrown = test passes
   });
 });

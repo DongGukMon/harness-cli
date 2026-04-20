@@ -2,8 +2,8 @@ import { existsSync, readFileSync, statSync, unlinkSync } from 'fs';
 import { execSync } from 'child_process';
 import { isAbsolute, join } from 'path';
 import { getHead, isAncestor, detectExternalCommits, isPathGitignored } from './git.js';
-import { readState, writeState } from './state.js';
-import { commitEvalReport, normalizeArtifactCommit } from './artifact.js';
+import { readState, writeState, syncLegacyMirror } from './state.js';
+import { commitEvalReport, normalizeArtifactCommit, resolveArtifact } from './artifact.js';
 import { checkGateSidecars } from './phases/gate.js';
 import { readVerifyResult, isEvalReportValid } from './phases/verify.js';
 import {
@@ -329,32 +329,33 @@ async function applyStoredVerifyResult(
 }
 
 function validateCompletedArtifacts(state: HarnessState, cwd: string): void {
+  const docsRoot = state.trackedRepos?.[0]?.path || cwd;
   // Phase 1 completed: spec + decisionLog must exist and be non-empty
   if (state.phases['1'] === 'completed') {
-    requireNonEmpty(join(cwd, state.artifacts.spec), 'spec', state.runId);
+    requireNonEmpty(resolveArtifact(state, state.artifacts.spec, cwd), 'spec', state.runId);
     requireNonEmpty(join(cwd, state.artifacts.decisionLog), 'decision log', state.runId);
     // Check spec is not modified since committed (decisionLog is gitignored — skip)
-    requireCommittedClean(state.artifacts.spec, state.specCommit, cwd);
+    requireCommittedClean(state.artifacts.spec, state.specCommit, docsRoot);
   }
   // Phase 3 completed: plan + checklist
   if (state.phases['3'] === 'completed') {
-    requireNonEmpty(join(cwd, state.artifacts.plan), 'plan', state.runId);
+    requireNonEmpty(resolveArtifact(state, state.artifacts.plan, cwd), 'plan', state.runId);
     requireNonEmpty(join(cwd, state.artifacts.checklist), 'checklist', state.runId);
-    // Validate checklist schema
+    // Validate checklist schema (checklist is in .harness/ = outer cwd)
     requireValidChecklist(join(cwd, state.artifacts.checklist));
     // Check plan is not modified since committed (checklist is gitignored — skip)
-    requireCommittedClean(state.artifacts.plan, state.planCommit, cwd);
+    requireCommittedClean(state.artifacts.plan, state.planCommit, docsRoot);
   }
   // Phase 6 completed: eval report
   if (state.phases['6'] === 'completed') {
-    if (!isEvalReportValid(join(cwd, state.artifacts.evalReport))) {
+    if (!isEvalReportValid(resolveArtifact(state, state.artifacts.evalReport, cwd))) {
       process.stderr.write(
         `Artifact missing or invalid for completed phase 6: ${state.artifacts.evalReport}.\n` +
         `Use 'phase-harness jump 6' to re-run from that phase.\n`
       );
       process.exit(1);
     }
-    requireCommittedClean(state.artifacts.evalReport, state.evalCommit, cwd);
+    requireCommittedClean(state.artifacts.evalReport, state.evalCommit, docsRoot);
   }
 }
 
@@ -454,13 +455,28 @@ function validateAncestry(state: HarnessState, cwd: string): void {
       }
     }
     if (state.phases['5'] === 'completed') {
-      const anchor = state.implCommit ?? state.baseCommit;
-      if (!isAncestor(anchor, 'HEAD', cwd)) {
+      // Check all-null invariant (only when trackedRepos have real paths set —
+      // legacy single-repo states have path='' and null implHead is normal for skips)
+      const hasRealPaths = state.trackedRepos.some(r => r.path !== '');
+      const allNull = state.trackedRepos.every(r => r.implHead === null);
+      if (hasRealPaths && allNull) {
         process.stderr.write(
-          `Implementation commit is no longer in git history.\n` +
+          `Phase 5 completed but all trackedRepos[*].implHead are null — state anomaly.\n` +
           `Manual recovery required.\n`
         );
         process.exit(1);
+      }
+      // Per-repo ancestry check (null-safe: skip repos with no anchor)
+      for (const repo of state.trackedRepos) {
+        if (repo.implHead === null) continue;
+        if (!repo.path) continue; // legacy empty-path repo — skip git check
+        if (!isAncestor(repo.implHead, 'HEAD', repo.path)) {
+          process.stderr.write(
+            `Implementation commit is no longer in git history (repo: ${repo.path}).\n` +
+            `Manual recovery required.\n`
+          );
+          process.exit(1);
+        }
       }
     }
     if (state.phases['6'] === 'completed' && state.evalCommit) {
@@ -481,16 +497,22 @@ function validateAncestry(state: HarnessState, cwd: string): void {
 
 function updateExternalCommitsDetected(state: HarnessState, cwd: string, runDir: string): void {
   try {
-    const anchor = state.pausedAtHead ?? state.baseCommit;
-    const knownAnchors = [state.specCommit, state.planCommit, state.implCommit, state.evalCommit];
-    const implRange = state.implCommit
-      ? { from: state.baseCommit, to: state.implCommit }
-      : null;
-    const external = detectExternalCommits(anchor, knownAnchors, implRange, cwd);
-    if (external.length > 0) {
-      process.stderr.write(`⚠️  External commits detected (${external.length} commits).\n`);
-      state.externalCommitsDetected = true;
-      writeState(runDir, state);
+    for (const repo of state.trackedRepos) {
+      const repoCwd = repo.path || cwd;
+      const anchor = repo.implHead ?? repo.implRetryBase ?? repo.baseCommit;
+      const isDocsHome = repo === state.trackedRepos[0];
+      const knownAnchors = isDocsHome
+        ? [state.specCommit, state.planCommit, repo.implHead, state.evalCommit]
+        : [repo.implHead];
+      const implRange = repo.implHead
+        ? { from: repo.baseCommit, to: repo.implHead }
+        : null;
+      const external = detectExternalCommits(anchor, knownAnchors, implRange, repoCwd);
+      if (external.length > 0) {
+        process.stderr.write(`⚠️  External commits detected in ${repoCwd} (${external.length} commits).\n`);
+        state.externalCommitsDetected = true;
+        writeState(runDir, state);
+      }
     }
   } catch {
     // Non-fatal
@@ -520,10 +542,12 @@ export function completeInteractivePhaseFromFreshSentinel(
       const artifactKeys = getPhaseArtifactFiles(state.flow, phase);
       if (artifactKeys.length === 0) return false;
 
+      const docsRoot = state.trackedRepos?.[0]?.path || cwd;
+
       for (const key of artifactKeys) {
         const relPath = state.artifacts[key];
         if (!relPath) return false;
-        const absPath = isAbsolute(relPath) ? relPath : join(cwd, relPath);
+        const absPath = isAbsolute(relPath) ? relPath : resolveArtifact(state, relPath, cwd);
         if (!existsSync(absPath)) return false;
         const stat = statSync(absPath);
         if (stat.size === 0) return false;
@@ -532,9 +556,7 @@ export function completeInteractivePhaseFromFreshSentinel(
       // Phase 1 (both full + light flows): spec must contain a valid
       // `## Complexity` section (spec R5).
       if (phase === 1) {
-        const specAbs = isAbsolute(state.artifacts.spec)
-          ? state.artifacts.spec
-          : join(cwd, state.artifacts.spec);
+        const specAbs = resolveArtifact(state, state.artifacts.spec, cwd);
         try {
           const body = readFileSync(specAbs, 'utf-8');
           if (!specHasValidComplexity(body)) return false;
@@ -550,9 +572,7 @@ export function completeInteractivePhaseFromFreshSentinel(
           : join(cwd, state.artifacts.checklist);
         if (!isValidChecklistSchema(checklistAbs)) return false;
 
-        const specAbs = isAbsolute(state.artifacts.spec)
-          ? state.artifacts.spec
-          : join(cwd, state.artifacts.spec);
+        const specAbs = resolveArtifact(state, state.artifacts.spec, cwd);
         try {
           const body = readFileSync(specAbs, 'utf-8');
           if (!/^##\s+Implementation\s+Plan\s*$/m.test(body)) return false;
@@ -567,11 +587,11 @@ export function completeInteractivePhaseFromFreshSentinel(
         if (!relPath) continue;
         if (relPath.startsWith('.harness/')) continue;
         const message = `harness[${state.runId}]: Phase ${phase} — ${String(key)}`;
-        normalizeArtifactCommit(relPath, message, cwd);
+        normalizeArtifactCommit(relPath, message, docsRoot);
       }
 
-      // Update commit anchor
-      const head = getHead(cwd);
+      // Update commit anchor using docsRoot
+      const head = getHead(docsRoot);
       if (phase === 1) state.specCommit = head;
       if (phase === 3) state.planCommit = head;
       return true;
@@ -579,11 +599,18 @@ export function completeInteractivePhaseFromFreshSentinel(
 
     if (phase === 5) {
       void runDir;
-      const head = getHead(cwd);
-      if (head === state.implRetryBase) {
-        return false;
+      let anyAdvanced = false;
+      for (const r of state.trackedRepos) {
+        const h = getHead(r.path || cwd);
+        if (h !== r.implRetryBase) {
+          r.implHead = h;
+          anyAdvanced = true;
+        } else {
+          r.implHead = null;
+        }
       }
-      state.implCommit = head;
+      if (!anyAdvanced) return false;
+      syncLegacyMirror(state);
       return true;
     }
   } catch {
@@ -604,30 +631,34 @@ async function replayIncompleteSkip(
   cwd: string
 ): Promise<void> {
   const { normalizeArtifactCommit: commit } = await import('./artifact.js');
+  const docsRoot = state.trackedRepos?.[0]?.path || cwd;
   switch (phase) {
     case 1: {
-      const specPath = join(cwd, state.artifacts.spec);
+      const specPath = resolveArtifact(state, state.artifacts.spec, cwd);
       if (existsSync(specPath)) {
-        commit(state.artifacts.spec, `harness[${state.runId}]: Phase 1 — spec (skip)`, cwd);
-        state.specCommit = getHead(cwd);
+        commit(state.artifacts.spec, `harness[${state.runId}]: Phase 1 — spec (skip)`, docsRoot);
+        state.specCommit = getHead(docsRoot);
       }
       break;
     }
     case 3: {
-      const planPath = join(cwd, state.artifacts.plan);
+      const planPath = resolveArtifact(state, state.artifacts.plan, cwd);
       if (existsSync(planPath)) {
-        commit(state.artifacts.plan, `harness[${state.runId}]: Phase 3 — plan (skip)`, cwd);
-        state.planCommit = getHead(cwd);
+        commit(state.artifacts.plan, `harness[${state.runId}]: Phase 3 — plan (skip)`, docsRoot);
+        state.planCommit = getHead(docsRoot);
       }
       break;
     }
     case 5: {
-      // Phase 5 skip: implCommit stays null
-      state.implCommit = null;
+      // Phase 5 skip: implCommit stays null (per-repo implHead also null)
+      for (const r of state.trackedRepos) {
+        r.implHead = null;
+      }
+      syncLegacyMirror(state);
       break;
     }
     case 6: {
-      const evalReportPath = join(cwd, state.artifacts.evalReport);
+      const evalReportPath = resolveArtifact(state, state.artifacts.evalReport, cwd);
       if (!existsSync(evalReportPath)) {
         // Generate synthetic report if missing
         const { writeFileSync, unlinkSync: u } = await import('fs');
@@ -641,10 +672,10 @@ async function replayIncompleteSkip(
           `## Summary\n\nVERIFY SKIPPED\n`;
         writeFileSync(evalReportPath, report, 'utf-8');
       }
-      if (!isPathGitignored(state.artifacts.evalReport, cwd)) {
-        commit(state.artifacts.evalReport, `harness[${state.runId}]: Phase 6 — eval report (skip)`, cwd);
-        state.evalCommit = getHead(cwd);
-        state.verifiedAtHead = getHead(cwd);
+      if (!isPathGitignored(state.artifacts.evalReport, docsRoot)) {
+        commit(state.artifacts.evalReport, `harness[${state.runId}]: Phase 6 — eval report (skip)`, docsRoot);
+        state.evalCommit = getHead(docsRoot);
+        state.verifiedAtHead = getHead(docsRoot);
       } else {
         process.stderr.write(`⚠️  eval report path '${state.artifacts.evalReport}' is gitignored — skipping commit (evalCommit will remain null).\n`);
         state.evalCommit = null;
