@@ -213,4 +213,11 @@ describe('resolveArtifact (FR-7)', () => {
     const result = resolveArtifact(state, 'docs/specs/foo.md', '/outer');
     expect(result).toBe('/outer/docs/specs/foo.md');
   });
+
+  it('.harness/... paths are always anchored to outerCwd, not trackedRepos[0]', () => {
+    const state = createInitialState('r', 't', 'abc', false);
+    state.trackedRepos = [{ path: '/repo-a', baseCommit: 'abc', implRetryBase: 'abc', implHead: null }];
+    const result = resolveArtifact(state, '.harness/run-1/checklist.json', '/outer');
+    expect(result).toBe('/outer/.harness/run-1/checklist.json');
+  });
 });

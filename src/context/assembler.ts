@@ -374,10 +374,8 @@ function buildPhase7DiffAndMetadata(state: HarnessState, cwd: string): { diffSec
         }
         return d;
       } else {
-        // No impl anchor — diff base...HEAD (cannot separate external)
-        let d = runGit(`git diff ${repo.baseCommit}...HEAD`, repo.path);
-        d = truncateDiffPerFile(d, PER_FILE_DIFF_LIMIT_KB * 1024);
-        return d;
+        // No impl anchor — exclude from harness diff to avoid mixing unreviewed external changes
+        return `(no harness implementation anchor for this repo — diff excluded; external commits may exist)`;
       }
     } else {
       let d = runGit(`git diff ${repo.baseCommit}...HEAD`, repo.path);

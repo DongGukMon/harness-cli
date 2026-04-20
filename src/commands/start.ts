@@ -1,5 +1,5 @@
 import { execSync } from 'child_process';
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync, appendFileSync } from 'fs';
+import fs, { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync, appendFileSync } from 'fs';
 import path, { join } from 'path';
 import { getGitRoot, getHead, generateRunId, hasStagedChanges, isWorkingTreeClean, isInGitRepo } from '../git.js';
 import type { TrackedRepo } from '../types.js';
@@ -55,6 +55,13 @@ export function detectTrackedRepos(
       }
       if (!isInGitRepo(resolved)) {
         throw new Error(`--track ${raw}: not a git repo`);
+      }
+      const gitRoot = getGitRoot(resolved);
+      // Normalize both sides to resolve OS symlinks (e.g. /var → /private/var on macOS)
+      let realResolved: string;
+      try { realResolved = fs.realpathSync(resolved); } catch { realResolved = resolved; }
+      if (gitRoot !== realResolved) {
+        throw new Error(`--track ${raw}: path must be a git repo root (found root at ${gitRoot})`);
       }
       let head = '';
       try { head = getHead(resolved); } catch { /* no commits */ }

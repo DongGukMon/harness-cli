@@ -480,7 +480,8 @@ function validateAncestry(state: HarnessState, cwd: string): void {
       }
     }
     if (state.phases['6'] === 'completed' && state.evalCommit) {
-      if (!isAncestor(state.evalCommit, 'HEAD', cwd)) {
+      const evalAncestryRoot = state.trackedRepos?.[0]?.path || cwd;
+      if (!isAncestor(state.evalCommit, 'HEAD', evalAncestryRoot)) {
         process.stderr.write(
           `Eval report commit is no longer in git history.\n` +
           `Use 'phase-harness jump 6' to re-run verification.\n`

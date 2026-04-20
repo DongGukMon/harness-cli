@@ -10,6 +10,10 @@ import type { HarnessState } from './types.js';
  */
 export function resolveArtifact(state: HarnessState, relPath: string, outerCwd: string): string {
   if (isAbsolute(relPath)) return relPath;
+  // .harness/... artifacts are system files anchored to the outer cwd, not the docs-home repo
+  if (relPath.startsWith('.harness/') || relPath.startsWith('.harness\\')) {
+    return join(outerCwd, relPath);
+  }
   const docsRoot = state.trackedRepos?.[0]?.path || outerCwd;
   return join(docsRoot, relPath);
 }
