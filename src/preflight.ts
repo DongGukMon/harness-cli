@@ -97,7 +97,8 @@ function runItem(item: PreflightItem, cwd?: string): { codexPath?: string } {
       try {
         execSync('git rev-parse --show-toplevel', { cwd, stdio: 'pipe' });
       } catch {
-        throw new Error('harness requires a git repository.');
+        const suffix = cwd ? ` in: ${cwd}` : '.';
+        throw new Error(`harness requires a git repository${suffix}`);
       }
       return {};
 
@@ -105,7 +106,8 @@ function runItem(item: PreflightItem, cwd?: string): { codexPath?: string } {
       try {
         execSync('git rev-parse HEAD', { cwd, stdio: 'pipe' });
       } catch {
-        throw new Error('harness requires at least one commit.');
+        const suffix = cwd ? ` in: ${cwd}` : '.';
+        throw new Error(`harness requires at least one commit${suffix}`);
       }
       return {};
 

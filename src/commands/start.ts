@@ -1,7 +1,8 @@
 import { execSync } from 'child_process';
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync, appendFileSync } from 'fs';
-import { join } from 'path';
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync, appendFileSync } from 'fs';
+import path, { join } from 'path';
 import { getGitRoot, getHead, generateRunId, hasStagedChanges, isWorkingTreeClean, isInGitRepo } from '../git.js';
+import type { TrackedRepo } from '../types.js';
 import { acquireLock, releaseLock, setLockHandoff, pollForHandoffComplete } from '../lock.js';
 import { runPreflight } from '../preflight.js';
 import { findHarnessRoot, setCurrentRun } from '../root.js';
@@ -19,6 +20,88 @@ export interface StartOptions {
   enableLogging?: boolean;
   light?: boolean;
   codexNoIsolate?: boolean;
+  track?: string[];    // explicit tracked repos (overrides auto-detect)
+  exclude?: string[];  // paths to exclude from auto-detect
+}
+
+const SKIP_DIRS = new Set(['.harness', 'node_modules', 'dist', 'build']);
+
+export function detectTrackedRepos(
+  cwd: string,
+  track?: string[],
+  exclude?: string[],
+): TrackedRepo[] {
+  // Single-repo fast path: cwd is itself a git repo
+  if (isInGitRepo(cwd)) {
+    let head = '';
+    try { head = getHead(cwd); } catch { /* no commits */ }
+    return [{ path: cwd, baseCommit: head, implRetryBase: head, implHead: null }];
+  }
+
+  // Multi-repo path
+  if (track && track.length > 0) {
+    if (exclude && exclude.length > 0) {
+      process.stderr.write('⚠️  --exclude has no effect when --track is specified.\n');
+    }
+    const repos: TrackedRepo[] = [];
+    for (const raw of track) {
+      const resolved = path.resolve(cwd, raw);
+      const rel = path.relative(cwd, resolved);
+      if (rel.startsWith('..') || path.isAbsolute(rel)) {
+        throw new Error(`--track ${raw}: must be inside cwd (${cwd})`);
+      }
+      if (!existsSync(resolved)) {
+        throw new Error(`--track ${raw}: path not found`);
+      }
+      if (!isInGitRepo(resolved)) {
+        throw new Error(`--track ${raw}: not a git repo`);
+      }
+      let head = '';
+      try { head = getHead(resolved); } catch { /* no commits */ }
+      repos.push({ path: resolved, baseCommit: head, implRetryBase: head, implHead: null });
+    }
+    return repos;
+  }
+
+  // Auto-detect: depth=1 scan
+  const excludeSet = new Set(
+    (exclude ?? []).map(e => {
+      const resolved = path.resolve(cwd, e);
+      const rel = path.relative(cwd, resolved);
+      if (rel.startsWith('..') || path.isAbsolute(rel)) {
+        throw new Error(`--exclude ${e}: must be inside cwd (${cwd})`);
+      }
+      return resolved;
+    })
+  );
+
+  let entries: string[] = [];
+  try {
+    entries = readdirSync(cwd, { withFileTypes: true })
+      .filter(d => {
+        if (!d.isDirectory()) return false;
+        if (d.name.startsWith('.')) return false;
+        if (SKIP_DIRS.has(d.name)) return false;
+        return true;
+      })
+      .map(d => path.join(cwd, d.name))
+      .filter(p => !excludeSet.has(p) && isInGitRepo(p))
+      .sort();
+  } catch {
+    entries = [];
+  }
+
+  if (entries.length === 0) {
+    throw new Error(
+      'No tracked git repos found under cwd. Pass --track <path> or run from a git repo.'
+    );
+  }
+
+  return entries.map(p => {
+    let head = '';
+    try { head = getHead(p); } catch { /* no commits */ }
+    return { path: p, baseCommit: head, implRetryBase: head, implHead: null };
+  });
 }
 
 export async function startCommand(task: string | undefined, options: StartOptions = {}): Promise<void> {
@@ -75,6 +158,31 @@ export async function startCommand(task: string | undefined, options: StartOptio
     }
   }
 
+  // 5b. Detect tracked repos (fail-fast before any side effects)
+  let trackedRepos: TrackedRepo[];
+  try {
+    trackedRepos = detectTrackedRepos(cwd, options.track, options.exclude);
+  } catch (err) {
+    process.stderr.write(`Error: ${(err as Error).message}\n`);
+    process.exit(1);
+  }
+
+  // Print detection summary when multi-repo
+  if (trackedRepos.length > 1) {
+    const paths = trackedRepos.map(r => r.path).join(', ');
+    process.stderr.write(`Detected ${trackedRepos.length} tracked repos: [${paths}]\n`);
+  }
+
+  // Per-repo preflight (git + head checks)
+  for (const repo of trackedRepos) {
+    try {
+      runPreflight(['git', 'head'], repo.path);
+    } catch (err) {
+      process.stderr.write(`Error: ${(err as Error).message}\n`);
+      process.exit(1);
+    }
+  }
+
   // 6. Generate runId
   const runId = generateRunId(normalizedTask, harnessDir);
   const runDir = join(harnessDir, runId);
@@ -96,19 +204,25 @@ export async function startCommand(task: string | undefined, options: StartOptio
   try {
     // 9. Create directories
     mkdirSync(runDir, { recursive: true });
-    mkdirSync(join(cwd, 'docs/specs'), { recursive: true });
-    mkdirSync(join(cwd, 'docs/plans'), { recursive: true });
-    mkdirSync(join(cwd, 'docs/process/evals'), { recursive: true });
+    const docsRoot = trackedRepos[0].path;
+    mkdirSync(join(docsRoot, 'docs/specs'), { recursive: true });
+    mkdirSync(join(docsRoot, 'docs/plans'), { recursive: true });
+    mkdirSync(join(docsRoot, 'docs/process/evals'), { recursive: true });
 
     // 10. .gitignore handling (skip if not in git repo)
     if (inGitRepo) {
       await ensureGitignore(cwd);
     }
 
-    // 11. Capture baseCommit after .gitignore commit (empty string if no git)
-    let baseCommit = '';
+    // 11. Capture baseCommit from trackedRepos[0] (already captured by detectTrackedRepos)
+    // Re-read HEAD after .gitignore commit (which may have advanced HEAD)
+    let baseCommit = trackedRepos[0].baseCommit;
     if (inGitRepo) {
-      try { baseCommit = getHead(cwd); } catch { /* no commits yet */ }
+      try {
+        const updatedHead = getHead(trackedRepos[0].path);
+        baseCommit = updatedHead;
+        trackedRepos[0] = { ...trackedRepos[0], baseCommit: updatedHead, implRetryBase: updatedHead };
+      } catch { /* no commits yet */ }
     }
 
     // 12. Create initial state
@@ -121,6 +235,9 @@ export async function startCommand(task: string | undefined, options: StartOptio
       options.light ? 'light' : 'full',
       options.codexNoIsolate ?? false,
     );
+
+    // Inject detected tracked repos (overrides the placeholder set by createInitialState)
+    state.trackedRepos = trackedRepos;
 
     if (options.codexNoIsolate) {
       // BUG-C risk surface: user explicitly bypassed isolation.
