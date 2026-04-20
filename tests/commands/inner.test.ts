@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { bootstrapSessionLogger, buildConfigCancelHandler } from '../../src/commands/inner.js';
+import { bootstrapSessionLogger, buildConfigCancelHandler, innerCommand } from '../../src/commands/inner.js';
 import { computeRepoKey, FileSessionLogger } from '../../src/logger.js';
 import type { HarnessState } from '../../src/types.js';
 
@@ -31,12 +31,34 @@ vi.mock('../../src/root.js', () => ({
 vi.mock('../../src/git.js', () => ({
   getGitRoot: vi.fn(() => '/tmp'),
 }));
+vi.mock('../../src/ui.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/ui.js')>();
+  return {
+    ...actual,
+    promptModelConfig: vi.fn().mockImplementation(async (presets: any) => presets ?? {}),
+    renderWelcome: vi.fn(),
+  };
+});
+vi.mock('../../src/preflight.js', () => ({
+  runRunnerAwarePreflight: vi.fn(),
+}));
+vi.mock('../../src/commands/footer-ticker.js', () => ({
+  startFooterTicker: vi.fn().mockReturnValue({ stop: vi.fn(), forceTick: vi.fn() }),
+}));
+vi.mock('../../src/phases/terminal-ui.js', () => ({
+  anyPhaseFailed: vi.fn().mockImplementation((state: any) =>
+    Object.values(state.phases as Record<string, string>).some(s => s === 'failed' || s === 'error')
+  ),
+  enterFailedTerminalState: vi.fn().mockResolvedValue(undefined),
+  enterCompleteTerminalState: vi.fn().mockResolvedValue(undefined),
+}));
 
 import { updateLockPid, releaseLock } from '../../src/lock.js';
 import { runPhaseLoop } from '../../src/phases/runner.js';
 import { registerSignalHandlers } from '../../src/signal.js';
 import { killSession, killWindow, selectWindow, splitPane, paneExists } from '../../src/tmux.js';
 import { findHarnessRoot } from '../../src/root.js';
+import { enterFailedTerminalState } from '../../src/phases/terminal-ui.js';
 
 describe('inner.ts: consumePendingAction behavior', () => {
   let tmpDir: string;
@@ -588,5 +610,94 @@ describe('bootstrapSessionLogger — codexHome integration (Issue #13)', () => {
     const repoKey = computeRepoKey(harnessDir);
     const meta = JSON.parse(fs.readFileSync(path.join(sessionsRoot, repoKey, 'rx4', 'meta.json'), 'utf-8'));
     expect('codexHome' in meta).toBe(false);
+  });
+});
+
+describe('inner.ts: D4 live path — paused+null synthesizes failure → enterFailedTerminalState', () => {
+  let tmpDir: string;
+  let stderrSpy: any;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'inner-d4-'));
+    vi.mocked(findHarnessRoot).mockReturnValue(tmpDir);
+    vi.mocked(paneExists).mockReturnValue(true);
+    vi.mocked(enterFailedTerminalState).mockClear();
+    stderrSpy = vi.spyOn(process.stderr, 'write').mockReturnValue(true as any);
+  });
+
+  afterEach(() => {
+    stderrSpy.mockRestore();
+    vi.mocked(paneExists).mockReturnValue(false);
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('calls enterFailedTerminalState and emits inconsistent warn when state is paused+null', async () => {
+    const runId = 'd4-test-run';
+    const runDir = path.join(tmpDir, runId);
+    fs.mkdirSync(runDir, { recursive: true });
+
+    // task.md must exist so the task prompt is skipped
+    fs.writeFileSync(path.join(runDir, 'task.md'), 'test task');
+
+    // Write a paused+null state to disk
+    const state = {
+      runId,
+      flow: 'full',
+      currentPhase: 3,
+      status: 'paused',
+      pendingAction: null,
+      autoMode: false,
+      task: 'test task',
+      baseCommit: 'abc',
+      implRetryBase: 'abc',
+      codexPath: null,
+      codexNoIsolate: false,
+      externalCommitsDetected: false,
+      carryoverFeedback: null,
+      tmuxSession: 'test-sess',
+      tmuxMode: 'dedicated',
+      tmuxWindows: [],
+      tmuxControlWindow: null,
+      tmuxWorkspacePane: null,
+      tmuxOriginalWindow: null,
+      tmuxControlPane: null,
+      artifacts: {
+        spec: 'docs/specs/d4-test-design.md',
+        plan: 'docs/plans/d4-test.md',
+        decisionLog: '.harness/d4-test-run/decisions.md',
+        checklist: '.harness/d4-test-run/checklist.json',
+        evalReport: 'docs/process/evals/d4-test-run-eval.md',
+      },
+      phases: { '1': 'completed', '2': 'completed', '3': 'in_progress', '4': 'pending', '5': 'pending', '6': 'pending', '7': 'pending' },
+      phasePresets: { '1': 'opus-high', '2': 'codex-high', '3': 'sonnet-high', '4': 'codex-high', '5': 'sonnet-high', '7': 'codex-high' },
+      phaseReopenFlags: { '1': false, '3': false, '5': false },
+      phaseReopenSource: { '1': null, '3': null, '5': null },
+      gateRetries: { '2': 0, '4': 0, '7': 0 },
+      verifyRetries: 0,
+      pauseReason: null,
+      specCommit: null,
+      planCommit: null,
+      implCommit: null,
+      evalCommit: null,
+      verifiedAtHead: null,
+      pausedAtHead: null,
+      phaseOpenedAt: { '1': null, '3': null, '5': null },
+      phaseAttemptId: { '1': null, '3': null, '5': null },
+      phaseCodexSessions: { '2': null, '4': null, '7': null },
+      phaseClaudeSessions: { '1': null, '3': null, '5': null },
+      loggingEnabled: false,
+      lastWorkspacePid: null,
+      lastWorkspacePidStartTime: null,
+    };
+    fs.writeFileSync(path.join(runDir, 'state.json'), JSON.stringify(state));
+
+    await innerCommand(runId, { root: tmpDir, controlPane: '%0', resume: true });
+
+    // D4: synthesize path should have written an inconsistent-pause warning
+    const warnOutput = stderrSpy.mock.calls.map((c: any) => c[0]).join('');
+    expect(warnOutput).toContain('inconsistent');
+
+    // D4: enterFailedTerminalState must be reached via the post-loop anyPhaseFailed path
+    expect(vi.mocked(enterFailedTerminalState)).toHaveBeenCalled();
   });
 });

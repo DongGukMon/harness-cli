@@ -980,8 +980,9 @@ export async function handleVerifyPhase(
     logger.logEvent({ event: 'verify_result', passed: true, retryIndex, durationMs });
 
     // Commit the eval report artifact (spec requires committed eval report before Phase 7)
+    let evalCommitResult: 'committed' | 'skipped';
     try {
-      commitEvalReport(state, cwd);
+      evalCommitResult = commitEvalReport(state, cwd);
     } catch (err) {
       // Commit failure → phase goes to error, pendingAction for retry
       printError(`Failed to commit eval report: ${(err as Error).message}`);
@@ -999,13 +1000,15 @@ export async function handleVerifyPhase(
       return;
     }
 
-    // Update evalCommit + verifiedAtHead AFTER commit succeeds
-    try {
-      const head = getHead(cwd);
-      state.evalCommit = head;
-      state.verifiedAtHead = head;
-    } catch {
-      // leave as-is
+    // Update evalCommit + verifiedAtHead only when a real commit was created
+    if (evalCommitResult === 'committed') {
+      try {
+        const head = getHead(cwd);
+        state.evalCommit = head;
+        state.verifiedAtHead = head;
+      } catch {
+        // leave as-is
+      }
     }
     state.verifyRetries = 0;
     state.phases['6'] = 'completed';
@@ -1180,7 +1183,8 @@ export async function forcePassVerify(
 
   // Normalize the synthetic report — failure must mark phase as error (not silently skip)
   const message = `harness[${state.runId}]: Phase 6 — synthetic eval report (skip)`;
-  if (isPathGitignored(state.artifacts.evalReport, cwd)) {
+  const synthCommitted = !isPathGitignored(state.artifacts.evalReport, cwd);
+  if (!synthCommitted) {
     process.stderr.write(
       `⚠️  eval report path '${state.artifacts.evalReport}' is gitignored — skipping commit (evalCommit will remain null).\n`
     );
@@ -1197,13 +1201,15 @@ export async function forcePassVerify(
     }
   }
 
-  // Update anchors AFTER commit succeeds
-  try {
-    const head = getHead(cwd);
-    state.evalCommit = head;
-    state.verifiedAtHead = head;
-  } catch {
-    // leave as-is
+  // Update anchors only when a real commit was created
+  if (synthCommitted) {
+    try {
+      const head = getHead(cwd);
+      state.evalCommit = head;
+      state.verifiedAtHead = head;
+    } catch {
+      // leave as-is
+    }
   }
 
   state.verifyRetries = 0;

@@ -203,10 +203,12 @@ async function recoverGeneralState(
     const evalReportPath = join(cwd, state.artifacts.evalReport);
     if (isEvalReportValid(evalReportPath)) {
       try {
-        commitEvalReport(state, cwd);
-        const head = getHead(cwd);
-        state.evalCommit = head;
-        state.verifiedAtHead = head;
+        const result = commitEvalReport(state, cwd);
+        if (result === 'committed') {
+          const head = getHead(cwd);
+          state.evalCommit = head;
+          state.verifiedAtHead = head;
+        }
         state.phases['6'] = 'completed';
         state.currentPhase = 7;
         writeState(runDir, state);
@@ -246,19 +248,22 @@ async function applyStoredVerifyResult(
 
   if (result.exitCode === 0 && isEvalReportValid(evalReportPath)) {
     // PASS: commit the eval report (normalize_artifact_commit), set anchors, advance
+    let evalCommitResult: 'committed' | 'skipped';
     try {
-      commitEvalReport(state, cwd);
+      evalCommitResult = commitEvalReport(state, cwd);
     } catch {
       // Commit failed — leave as error for runner to handle
       state.phases['6'] = 'error';
       writeState(runDir, state);
       return;
     }
-    try {
-      const head = getHead(cwd);
-      state.evalCommit = head;
-      state.verifiedAtHead = head;
-    } catch { /* leave as-is */ }
+    if (evalCommitResult === 'committed') {
+      try {
+        const head = getHead(cwd);
+        state.evalCommit = head;
+        state.verifiedAtHead = head;
+      } catch { /* leave as-is */ }
+    }
     state.verifyRetries = 0;
     state.phases['6'] = 'completed';
     state.currentPhase = 7;

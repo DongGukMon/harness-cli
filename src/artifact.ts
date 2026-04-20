@@ -131,15 +131,16 @@ export function runPhase6Preconditions(evalReportPath: string, runId: string, cw
   void runId;
 }
 
-export function commitEvalReport(state: HarnessState, cwd: string): void {
+export function commitEvalReport(state: HarnessState, cwd: string): 'committed' | 'skipped' {
   const filePath = state.artifacts.evalReport;
   if (isPathGitignored(filePath, cwd)) {
     process.stderr.write(
       `⚠️  eval report path '${filePath}' is gitignored — skipping commit (evalCommit will remain null).\n`
     );
-    return;
+    return 'skipped';
   }
   const k = state.verifyRetries + 1;
   const message = `harness[${state.runId}]: Phase 6 — rev ${k} eval report`;
   normalizeArtifactCommit(filePath, message, cwd);
+  return 'committed';
 }

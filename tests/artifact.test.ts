@@ -234,9 +234,10 @@ describe('commitEvalReport', () => {
     writeFileSync(join(repo.path, state.artifacts.evalReport), '# Eval\n## Summary\nAll checks passed.\n');
 
     const headBefore = getHead(repo.path);
-    commitEvalReport(state, repo.path);
+    const result = commitEvalReport(state, repo.path);
     const headAfter = getHead(repo.path);
 
+    expect(result).toBe('skipped');
     // evalCommit not updated (still null), no new commit created
     expect(headAfter).toBe(headBefore);
     expect(state.evalCommit).toBeNull();
@@ -253,9 +254,10 @@ describe('commitEvalReport', () => {
     writeFileSync(join(repo.path, state.artifacts.evalReport), '# Eval\n## Summary\nAll checks passed.\n');
 
     const headBefore = getHead(repo.path);
-    commitEvalReport(state, repo.path);
+    const result = commitEvalReport(state, repo.path);
     const headAfter = getHead(repo.path);
 
+    expect(result).toBe('committed');
     expect(headAfter).not.toBe(headBefore);
   });
 });
