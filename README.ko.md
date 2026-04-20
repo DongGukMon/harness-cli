@@ -139,7 +139,7 @@ pnpm run build
 전역 링크 제거:
 
 ```bash
-pnpm remove --global phase-harness harness-cli
+pnpm remove --global phase-harness
 ```
 
 > **참고:** `pnpm unlink --global`은 링크된 패키지에 아무 작동도 하지 않습니다 — 대신 `pnpm remove --global`을 사용하세요.
