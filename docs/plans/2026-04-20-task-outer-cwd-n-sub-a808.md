@@ -235,11 +235,11 @@ Expected: All tests pass including the new `trackedRepos` + `syncLegacyMirror` d
 Run: `pnpm tsc --noEmit`
 Expected: Zero errors (or only pre-existing errors unrelated to Task 1).
 
-- [ ] **Step 1.7: Update `readState` callers to pass `cwd` (optional — improves legacy migration accuracy)**
+- [ ] **Step 1.7: Update `readState` callers to pass `cwd` (mandatory — ensures correct legacy migration)**
 
 In `src/commands/inner.ts`, `src/commands/resume.ts`, `src/commands/jump.ts`, `src/commands/skip.ts`, and `src/commands/status.ts`, find each call to `readState(runDir)` and update to `readState(runDir, cwd)` where `cwd` is the outer cwd already determined in those functions. This ensures legacy state migration synthesizes `trackedRepos[0].path = cwd` instead of the `''` fallback.
 
-This step is forward-compatible: `resolveArtifact` already handles the `''` fallback case, so skipping this step doesn't break behavior.
+This step is **mandatory**: spec Invariants require every `trackedRepos[i].path` to be a non-empty cwd-descendant path. The `''` fallback is a compatibility sentinel for in-flight serialized states only; it must not persist as an accepted end state.
 
 - [ ] **Step 1.8: Commit**
 
@@ -641,8 +641,7 @@ Also apply cwd-descendant check for `--exclude` paths (FR-10):
       const resolved = path.resolve(cwd, e);
       const rel = path.relative(cwd, resolved);
       if (rel.startsWith('..') || path.isAbsolute(rel)) {
-        process.stderr.write(`⚠️  --exclude ${e}: path is outside cwd, ignored.\n`);
-        return ''; // won't match anything
+        throw new Error(`--exclude ${e}: must be inside cwd (${cwd})`);
       }
       return resolved;
     }).filter(Boolean)
@@ -778,10 +777,7 @@ Replace the Phase 5 block in `validatePhaseArtifacts` (currently lines ~187-198)
           r.implHead = null;
         }
       }
-      if (!anyAdvanced) {
-        // Fallback: verify-failure reopen path where implCommit already set
-        return state.implCommit !== null;
-      }
+      if (!anyAdvanced) return false;
       syncLegacyMirror(state); // sets state.implCommit = trackedRepos[0].implHead
       return true;
     } catch {
@@ -1024,7 +1020,8 @@ function buildPhase7DiffAndMetadata(state: HarnessState, cwd: string): {
         // Per-repo pre-truncation (ADR-D1)
         d = truncateDiffPerFile(d, PER_FILE_DIFF_LIMIT_KB * 1024);
         const evalCommit = state.evalCommit;
-        if (evalCommit !== null) {
+        if (evalCommit !== null && repo === repos[0]) {
+          // evalCommit exists only in the docs-home repo (trackedRepos[0])
           d += '\n' + runGit(`git diff ${evalCommit}^..${evalCommit}`, repo.path);
         }
         return d;
