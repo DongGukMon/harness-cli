@@ -85,6 +85,43 @@ Light-flow specifics:
 
 ---
 
+## Multi-worktree flow
+
+`phase-harness start` and `phase-harness run` support running from an **outer (non-git) directory** that contains N git sub-repos at depth 1.
+
+### How repos are discovered
+
+1. **Single-repo (legacy)**: if the outer cwd is itself a git repo, that repo becomes the sole tracked repo. Behavior is identical to pre-multi-worktree.
+2. **Multi-repo auto-detect**: if the outer cwd is not a git repo, harness scans depth-1 subdirectories, filters out hidden dirs and common non-repo dirs (`node_modules`, `dist`, `build`, `.harness`), and tracks all git repos found — alphabetically sorted.
+3. **`--track <path>`**: override auto-detection with explicit repo paths. Paths must be inside the outer cwd.
+4. **`--exclude <dir>`**: skip a directory during auto-detect (repeatable).
+
+### State: `trackedRepos[]`
+
+`state.json` stores `trackedRepos: TrackedRepo[]` — one entry per tracked repo:
+- `path`: absolute path to the repo
+- `baseCommit`, `implRetryBase`: per-repo commit anchors
+- `implHead`: the HEAD after a successful Phase 5 (null before completion)
+
+The first element (`trackedRepos[0]`) is the **docs home** — spec, plan, and eval artifacts are committed there.
+
+A legacy mirror (`state.baseCommit`, `state.implRetryBase`, `state.implCommit`) keeps single-repo consumers working unchanged and is auto-synced from `trackedRepos[0]` on every state write (`syncLegacyMirror`).
+
+### Phase 5 success criterion
+
+Phase 5 succeeds when **at least one** tracked repo has advanced past its `implRetryBase`. Repos that were not modified are left with `implHead = null`.
+
+### Gate diff (Phase 2/4/7)
+
+- **N=1 and `trackedRepos[0].path === cwd`**: diff output is byte-identical to the pre-multi-worktree format (no label).
+- **N>1 or non-cwd single repo**: each repo's diff is emitted under a `### repo: <relPath>` heading. Per-file truncation runs before the markdown wrapper; a global size cap applies after concat.
+
+### Codex (outer-cwd gate)
+
+When the outer cwd is not a git repo, `--skip-git-repo-check` is automatically added to the Codex invocation so the gate can still run.
+
+---
+
 ## Phase-by-phase summary
 
 | Phase | Default preset | Runner type | Main outputs | On reject/fail |
