@@ -138,7 +138,7 @@ function runItem(item: PreflightItem, cwd?: string): { codexPath?: string } {
         writeFileSync(tmpFile, '', 'utf-8');
         const result = spawnSync(
           'claude',
-          ['--model', 'claude-sonnet-4-6[1m]', `@${tmpFile}`, '--print', ''],
+          ['--model', 'claude-sonnet-4-6', `@${tmpFile}`, '--print', ''],
           {
             stdio: 'pipe',
             encoding: 'utf-8',

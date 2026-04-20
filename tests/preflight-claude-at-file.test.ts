@@ -36,7 +36,7 @@ describe('claude @file preflight', () => {
 
     expect(vi.mocked(spawnSync)).toHaveBeenCalledWith(
       'claude',
-      ['--model', 'claude-sonnet-4-6[1m]', expect.stringMatching(/^@/), '--print', ''],
+      ['--model', 'claude-sonnet-4-6', expect.stringMatching(/^@/), '--print', ''],
       expect.objectContaining({ timeout: 10_000, killSignal: 'SIGKILL' }),
     );
 

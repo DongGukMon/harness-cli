@@ -37,9 +37,9 @@ export const MODEL_PRESETS: ModelPreset[] = [
 export const PHASE_DEFAULTS: PhasePresetMap = {
   1: 'opus-1m-high',
   2: 'codex-high',
-  3: 'sonnet-1m-high',
+  3: 'sonnet-high',
   4: 'codex-high',
-  5: 'sonnet-1m-high',
+  5: 'sonnet-high',
   7: 'codex-high',
 };
 
@@ -98,7 +98,7 @@ export const LIGHT_REQUIRED_PHASE_KEYS = ['1', '2', '5', '7'] as const;
 export const LIGHT_PHASE_DEFAULTS: PhasePresetMap = {
   1: 'opus-1m-high',
   2: 'codex-high',
-  5: 'sonnet-1m-high',
+  5: 'sonnet-high',
   7: 'codex-high',
 };
 

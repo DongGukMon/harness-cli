@@ -129,7 +129,7 @@ function makeReopenState(phase: 1 | 3 | 5, withPrevSession = true): HarnessState
   if (withPrevSession) {
     s.phaseClaudeSessions[String(phase) as '1' | '3' | '5'] = {
       runner: 'claude',
-      model: 'claude-sonnet-4-6[1m]',
+      model: 'claude-sonnet-4-6',
       effort: 'high',
     };
   }
@@ -380,7 +380,7 @@ describe('handleInteractivePhase — lineage atomicity regression (R7)', () => {
     const sentinelPath = path.join(runDir, 'phase-5.done');
     fs.writeFileSync(sentinelPath, 'stale-content');
 
-    const PREV_SESSION = { runner: 'claude' as const, model: 'claude-sonnet-4-6[1m]', effort: 'high' };
+    const PREV_SESSION = { runner: 'claude' as const, model: 'claude-sonnet-4-6', effort: 'high' };
     const state = makeReopenState(5);
     state.phaseClaudeSessions['5'] = PREV_SESSION;
 
