@@ -242,13 +242,17 @@ export async function runPhaseLoop(
       continue;
     }
 
+    // D3: If the phase is already failed/error (set by a prior handler or synthesized),
+    // exit immediately so inner.ts post-loop classifier can route to terminal UI.
+    const phaseStatusAtLoopTop = state.phases[String(phase)];
+    if (phaseStatusAtLoopTop === 'failed' || phaseStatusAtLoopTop === 'error') return;
+
     renderControlPanel(state, logger, 'loop-top');
 
     if (isInteractivePhase(phase)) {
       await handleInteractivePhase(phase, state, harnessDir, runDir, cwd, logger);
-      // If state changed to paused or phase failed, check if we should stop
       if (state.status === 'paused') return;
-      if (state.phases[String(phase)] === 'failed') return;
+      if (state.phases[String(phase)] === 'failed' || state.phases[String(phase)] === 'error') return;
     } else if (isGatePhase(phase)) {
       await handleGatePhase(phase as GatePhase, state, harnessDir, runDir, cwd, inputManager, logger, sidecarReplayAllowed);
       if (state.status === 'paused') return;
@@ -258,9 +262,11 @@ export async function runPhaseLoop(
         writeState(runDir, state);
         return;
       }
+      if (state.phases[String(phase)] === 'error' || state.phases[String(phase)] === 'failed') return;
     } else if (isVerifyPhase(phase)) {
       await handleVerifyPhase(state, harnessDir, runDir, cwd, inputManager, logger);
       if (state.status === 'paused') return;
+      if (state.phases[String(phase)] === 'error' || state.phases[String(phase)] === 'failed') return;
     }
 
     logger.finalizeSummary(state);
