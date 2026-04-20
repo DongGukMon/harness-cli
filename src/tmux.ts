@@ -58,7 +58,7 @@ export function killWindow(session: string, windowTarget: string): void {
 }
 
 /**
- * Kill an entire tmux session.
+ * Kill an entire tmux session. Best-effort — ignores errors (session may already be gone).
  */
 export function killSession(name: string): void {
   try {
@@ -66,6 +66,13 @@ export function killSession(name: string): void {
   } catch {
     // Session may already be gone
   }
+}
+
+/**
+ * Kill an entire tmux session. Throws on failure so callers can detect success.
+ */
+export function killSessionOrThrow(name: string): void {
+  execSync(`tmux kill-session -t ${esc(name)}`, { stdio: 'pipe' });
 }
 
 /**

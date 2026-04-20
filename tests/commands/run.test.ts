@@ -71,14 +71,14 @@ describe('startCommand', () => {
     await startCommand('', { root: repo.path });
     const harnessDir = join(repo.path, '.harness');
     const currentRun = readFileSync(join(harnessDir, 'current-run'), 'utf-8').trim();
-    expect(currentRun).toMatch(/^\d{4}-\d{2}-\d{2}-untitled$/);
+    expect(currentRun).toMatch(/^\d{4}-\d{2}-\d{2}-untitled-[0-9a-f]{4}$/);
   });
 
   it('accepts whitespace-only task as untitled', async () => {
     await startCommand('   ', { root: repo.path });
     const harnessDir = join(repo.path, '.harness');
     const currentRun = readFileSync(join(harnessDir, 'current-run'), 'utf-8').trim();
-    expect(currentRun).toMatch(/^\d{4}-\d{2}-\d{2}-untitled$/);
+    expect(currentRun).toMatch(/^\d{4}-\d{2}-\d{2}-untitled-[0-9a-f]{4}$/);
   });
 
   it('creates run directory with state.json + task.md', async () => {
@@ -88,7 +88,7 @@ describe('startCommand', () => {
     expect(existsSync(harnessDir)).toBe(true);
 
     const currentRun = readFileSync(join(harnessDir, 'current-run'), 'utf-8').trim();
-    expect(currentRun).toMatch(/^\d{4}-\d{2}-\d{2}-test-task$/);
+    expect(currentRun).toMatch(/^\d{4}-\d{2}-\d{2}-test-task-[0-9a-f]{4}$/);
 
     const runDir = join(harnessDir, currentRun);
     expect(existsSync(join(runDir, 'state.json'))).toBe(true);

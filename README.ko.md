@@ -301,9 +301,25 @@ phase-harness uninstall-skills
 phase-harness uninstall-skills --project
 ```
 
+### `phase-harness cleanup`
+
+현재 `.harness/` 디렉토리에 속하는 `harness-*` tmux 세션을 분류하고 고아 세션을 종료합니다.
+run 디렉토리가 로컬에 존재하지만 lock 상태가 stale이거나 없거나 다른 run을 가리키면 orphan으로 분류됩니다.
+run 디렉토리가 현재 `.harness/` 아래에 없는 세션은 `unknown`으로 분류되며 건드리지 않습니다.
+
+```bash
+phase-harness cleanup            # 대화형: 표 출력 후 종료 여부 확인
+phase-harness cleanup --dry-run  # 분류만 출력, 종료 없음
+phase-harness cleanup --yes      # 확인 프롬프트 없이 즉시 종료
+```
+
+`start` 명령은 새 세션 생성 전에 조용히 자동 sweep을 실행하여 고아 세션을 정리합니다.
+
 ---
 
 ## Artifact와 상태 파일
+
+Run ID는 `YYYY-MM-DD-<slug>-<rrrr>` 형식입니다. `<rrrr>`은 4자리 16진 랜덤 토큰입니다(예: `2026-04-20-my-task-a3f1`). 랜덤 suffix 덕분에 task 없이 반복 시작해도 카운터 ladder 없이 고유한 ID가 생성됩니다.
 
 Harness는 run 상태를 `.harness/<runId>/` 아래에 저장합니다.
 

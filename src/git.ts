@@ -1,6 +1,7 @@
 import { execSync } from 'child_process';
 import { existsSync } from 'fs';
 import { normalize } from 'path';
+import crypto from 'crypto';
 
 function exec(cmd: string, cwd?: string): string {
   return execSync(cmd, { cwd, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] }).trim();
@@ -103,7 +104,7 @@ export function isStagedDeletion(filePath: string, cwd?: string): boolean {
 // 5. Trim leading/trailing -
 // 6. Max 25 chars (cut at word boundary = last -)
 // 7. Empty → "untitled"
-// Format: YYYY-MM-DD-<slug>[-N] (N if directory exists)
+// Format: YYYY-MM-DD-<slug>-<rrrr> where rrrr is 4 hex random chars
 export function generateRunId(task: string, harnessDir: string): string {
   // Build date prefix
   const now = new Date();
@@ -139,13 +140,20 @@ export function generateRunId(task: string, harnessDir: string): string {
 
   const base = `${datePrefix}-${slug}`;
 
-  // Dedup: if directory exists, append -2, -3, etc.
-  if (!existsSync(`${harnessDir}/${base}`)) {
-    return base;
+  // Append 4-hex random token; redraw up to 5 times on collision (vanishingly rare).
+  let lastRand = '';
+  for (let attempt = 0; attempt < 6; attempt++) {
+    lastRand = crypto.randomBytes(2).toString('hex');
+    const candidate = `${base}-${lastRand}`;
+    if (!existsSync(`${harnessDir}/${candidate}`)) {
+      return candidate;
+    }
   }
 
+  // Fallback: legacy -N counter on the last drawn randomized base (guarantees termination).
+  const randBase = `${base}-${lastRand}`;
   for (let n = 2; ; n++) {
-    const candidate = `${base}-${n}`;
+    const candidate = `${randBase}-${n}`;
     if (!existsSync(`${harnessDir}/${candidate}`)) {
       return candidate;
     }
