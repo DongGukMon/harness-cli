@@ -9,6 +9,7 @@ import { jumpCommand } from '../src/commands/jump.js';
 import { innerCommand } from '../src/commands/inner.js';
 import { installSkillsCommand } from '../src/commands/install-skills.js';
 import { uninstallSkillsCommand } from '../src/commands/uninstall-skills.js';
+import { cleanupCommand } from '../src/commands/cleanup.js';
 
 const program = new Command();
 
@@ -114,6 +115,16 @@ program
   .option('--project-dir <path>', 'uninstall from <path>/.claude/skills/ (implies --project)')
   .action(async (opts: { user?: boolean; project?: boolean; projectDir?: string }) => {
     await uninstallSkillsCommand(opts);
+  });
+
+program
+  .command('cleanup')
+  .description('list and kill orphaned harness tmux sessions in the current repo')
+  .option('--dry-run', 'classify and print sessions without killing any')
+  .option('--yes', 'skip confirmation prompt and kill orphans automatically')
+  .action(async (opts: { dryRun?: boolean; yes?: boolean }) => {
+    const globalOpts = program.opts();
+    await cleanupCommand({ ...opts, root: globalOpts.root });
   });
 
 program.parseAsync(process.argv).catch((err) => {

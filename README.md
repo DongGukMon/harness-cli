@@ -301,9 +301,25 @@ phase-harness uninstall-skills
 phase-harness uninstall-skills --project
 ```
 
+### `phase-harness cleanup`
+
+Lists and kills orphaned `harness-*` tmux sessions scoped to the current `.harness/` directory.
+A session is an orphan if its run directory exists locally but the lock state is stale, missing, or belongs to a different run.
+Sessions whose run directory is not found under the current `.harness/` are classified as `unknown` and left alone.
+
+```bash
+phase-harness cleanup            # interactive: show table, prompt before killing
+phase-harness cleanup --dry-run  # classify and print only, no kills
+phase-harness cleanup --yes      # skip confirmation prompt
+```
+
+`start` also runs an automatic quiet sweep before creating a new session, cleaning up orphans without prompting.
+
 ---
 
 ## Artifacts and state
+
+Run IDs have the shape `YYYY-MM-DD-<slug>-<rrrr>` where `<rrrr>` is a 4-hex random token (e.g. `2026-04-20-my-task-a3f1`). The random suffix makes each run ID unique without a counter ladder even for repeated no-task starts.
 
 Harness stores run state under `.harness/<runId>/`.
 
