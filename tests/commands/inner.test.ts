@@ -697,7 +697,7 @@ describe('inner.ts: D4 live path — paused+null synthesizes failure → enterFa
     const warnOutput = stderrSpy.mock.calls.map((c: any) => c[0]).join('');
     expect(warnOutput).toContain('inconsistent');
 
-    // D4: enterFailedTerminalState must be reached via the post-loop anyPhaseFailed path
+    // D4: enterFailedTerminalState must be reached via the short-circuit path (before promptModelConfig)
     expect(vi.mocked(enterFailedTerminalState)).toHaveBeenCalled();
   });
 });

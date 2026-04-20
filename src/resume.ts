@@ -12,7 +12,6 @@ import {
   handleVerifyEscalation,
   handleVerifyError,
 } from './phases/runner.js';
-import { enterFailedTerminalState } from './phases/terminal-ui.js';
 import { InputManager } from './input.js';
 import { NoopLogger } from './logger.js';
 import { getGateRetryLimit, getPhaseArtifactFiles } from './config.js';
@@ -82,10 +81,10 @@ export async function resumeRun(
     return;
   }
 
-  // Step 5: Paused without pendingAction → synthesize failed state + route to terminal UI
+  // Step 5: Paused without pendingAction → synthesize failed state and return.
+  // No live InputManager here; inner.ts D4 short-circuit will show R/J/Q on next resume.
   if (state.status === 'paused' && state.pendingAction === null) {
     synthesizeFailedFromInconsistentPause(state, runDir);
-    await enterFailedTerminalState(state, harnessDir, runDir, cwd, createNoOpInputManager(), new NoopLogger());
     return;
   }
 

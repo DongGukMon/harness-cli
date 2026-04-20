@@ -38,11 +38,10 @@ export async function innerCommand(runId: string, options: InnerOptions = {}): P
   }
 
   // D4 live path: detect inconsistent state before entering the loop.
-  // synthesize sets phase to failed + status to in_progress; the loop-top
-  // check (D3) will exit immediately, and the post-loop anyPhaseFailed
-  // classifier will route to enterFailedTerminalState (R/J/Q UI).
+  let inconsistentPauseDetected = false;
   if (state.status === 'paused' && state.pendingAction === null) {
     synthesizeFailedFromInconsistentPause(state, runDir);
+    inconsistentPauseDetected = true;
   }
 
   // 2. Claim lock ownership (outer → inner handoff)
@@ -158,6 +157,32 @@ export async function innerCommand(runId: string, options: InnerOptions = {}): P
   const inputManager = new InputManager();
   inputManager.onConfigCancel = buildConfigCancelHandler({ state, runDir, harnessDir, runId, isResume, logger, inputManager });
   inputManager.start('configuring');
+
+  // D4 short-circuit: skip model config and preflight, route directly to failed terminal UI.
+  if (inconsistentPauseDetected) {
+    try {
+      const { enterFailedTerminalState: failedUI } = await import('../phases/terminal-ui.js');
+      await failedUI(state, harnessDir, runDir, cwd, inputManager, logger);
+      sessionEndStatus = state.status === 'completed' ? 'completed' : state.status === 'paused' ? 'paused' : 'interrupted';
+    } finally {
+      logger.logEvent({ event: 'session_end', status: sessionEndStatus, totalWallMs: Date.now() - logger.getStartedAt() });
+      logger.finalizeSummary(state);
+      logger.close();
+      inputManager.stop();
+      releaseLock(harnessDir, runId);
+    }
+    if (state.tmuxMode === 'dedicated') {
+      killSession(state.tmuxSession);
+    } else {
+      for (const windowId of state.tmuxWindows) {
+        killWindow(state.tmuxSession, windowId);
+      }
+      if (state.tmuxOriginalWindow) {
+        selectWindow(state.tmuxSession, state.tmuxOriginalWindow);
+      }
+    }
+    return;
+  }
 
   // Step 5.7: Compute remaining phases (including pendingAction reopen target).
   // Light flow skips 2/3/4 so the key set is narrowed at source (getRequiredPhaseKeys).

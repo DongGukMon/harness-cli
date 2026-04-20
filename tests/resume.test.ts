@@ -77,7 +77,7 @@ describe('resumeRun', () => {
     repo.cleanup();
   });
 
-  it('routes to enterFailedTerminalState on paused run with null pendingAction', async () => {
+  it('synthesizes failed state but does NOT call enterFailedTerminalState on paused run with null pendingAction', async () => {
     const { enterFailedTerminalState } = await import('../src/phases/terminal-ui.js');
     const enterFailedSpy = vi.mocked(enterFailedTerminalState);
     enterFailedSpy.mockClear();
@@ -88,7 +88,17 @@ describe('resumeRun', () => {
     });
 
     await resumeRun(state, harnessDir, runDir, repo.path);
-    expect(enterFailedSpy).toHaveBeenCalledOnce();
+
+    // No live InputManager in resumeRun — enterFailedTerminalState must NOT be called
+    expect(enterFailedSpy).not.toHaveBeenCalled();
+
+    // State on disk must show synthesized failure so inner.ts D4 short-circuit routes to R/J/Q
+    const diskState = JSON.parse(readFileSync(join(runDir, 'state.json'), 'utf-8'));
+    expect(diskState.phases[String(diskState.currentPhase)]).toBe('failed');
+    expect(diskState.status).toBe('in_progress');
+    expect(diskState.pendingAction).toBeNull();
+
+    // Warning about inconsistent state must have been emitted
     expect(stderrSpy.mock.calls.map((c: any) => c[0]).join('')).toContain('inconsistent');
   });
 
