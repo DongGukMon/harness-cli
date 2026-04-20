@@ -121,8 +121,12 @@ export async function innerCommand(runId: string, options: InnerOptions = {}): P
     const pendingPath = join(runDir, 'pending-action.json');
     try { fs.unlinkSync(pendingPath); } catch { /* ignore */ }
   } else {
-    // Resume or task-provided start: consume pending actions normally
-    consumePendingAction(runDir, state);
+    if (inconsistentPauseDetected) {
+      // D4a: delete stale file-based actions — the failed terminal UI must be unconditional.
+      try { fs.unlinkSync(join(runDir, 'pending-action.json')); } catch { /* best-effort */ }
+    } else {
+      consumePendingAction(runDir, state);
+    }
   }
 
   // 5. Register signal handlers (ADR-7: after task capture)

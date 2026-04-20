@@ -693,11 +693,17 @@ describe('inner.ts: D4 live path — paused+null synthesizes failure → enterFa
     };
     fs.writeFileSync(path.join(runDir, 'state.json'), JSON.stringify(state));
 
+    // Stale skip action that would advance the phase if consumed — must be deleted, not replayed
+    fs.writeFileSync(path.join(runDir, 'pending-action.json'), JSON.stringify({ action: 'skip' }));
+
     await innerCommand(runId, { root: tmpDir, controlPane: '%0', resume: true });
 
     // D4: synthesize path should have written an inconsistent-pause warning
     const warnOutput = stderrSpy.mock.calls.map((c: any) => c[0]).join('');
     expect(warnOutput).toContain('inconsistent');
+
+    // D4a: stale pending-action.json must be deleted (not consumed — would bypass R/J/Q)
+    expect(fs.existsSync(path.join(runDir, 'pending-action.json'))).toBe(false);
 
     // D4a: promptModelConfig and preflight must be skipped
     expect(vi.mocked(promptModelConfig)).not.toHaveBeenCalled();

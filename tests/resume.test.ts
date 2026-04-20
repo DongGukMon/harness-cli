@@ -222,4 +222,42 @@ describe('resumeRun', () => {
     await expect(resumeRun(state, harnessDir, runDir, repo.path)).rejects.toThrow('__exit__');
     expect(stderrSpy.mock.calls.map((c: any) => c[0]).join('')).toContain('Spec commit');
   });
+
+  it('skip_phase Phase 6 with gitignored eval report: skips commit and leaves evalCommit null', async () => {
+    // setupRun first (creates .harness/ gitignore and initial commits)
+    const { state, harnessDir, runDir } = setupRun(repo, {
+      currentPhase: 6,
+      phases: {
+        '1': 'pending', '2': 'pending', '3': 'pending',
+        '4': 'pending', '5': 'pending', '6': 'in_progress', '7': 'pending',
+      },
+      pendingAction: {
+        type: 'skip_phase',
+        targetPhase: 6,
+        sourcePhase: null,
+        feedbackPaths: [],
+      },
+    });
+
+    // Add docs/ to gitignore AFTER setupRun (so it is not overwritten)
+    writeFileSync(join(repo.path, '.gitignore'), '.harness/\ndocs/\n');
+    execSync('git add .gitignore && git commit -m "gitignore docs"', { cwd: repo.path });
+
+    // Create the eval report file (gitignored — exists on disk but not tracked)
+    mkdirSync(join(repo.path, 'docs/process/evals'), { recursive: true });
+    writeFileSync(
+      join(repo.path, state.artifacts.evalReport),
+      '# Verification Report (SKIPPED)\n\n## Summary\n\nVERIFY SKIPPED\n'
+    );
+
+    await resumeRun(state, harnessDir, runDir, repo.path);
+
+    const updated = JSON.parse(readFileSync(join(runDir, 'state.json'), 'utf-8'));
+    // evalCommit and verifiedAtHead must remain null — commit was skipped due to gitignore
+    expect(updated.evalCommit).toBeNull();
+    expect(updated.verifiedAtHead).toBeNull();
+    expect(updated.phases['6']).toBe('completed');
+    // Warning must be emitted
+    expect(stderrSpy.mock.calls.map((c: any) => c[0]).join('')).toContain('gitignored');
+  });
 });

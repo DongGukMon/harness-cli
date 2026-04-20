@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, statSync, unlinkSync } from 'fs';
 import { execSync } from 'child_process';
 import { isAbsolute, join } from 'path';
-import { getHead, isAncestor, detectExternalCommits } from './git.js';
+import { getHead, isAncestor, detectExternalCommits, isPathGitignored } from './git.js';
 import { readState, writeState } from './state.js';
 import { commitEvalReport, normalizeArtifactCommit } from './artifact.js';
 import { checkGateSidecars } from './phases/gate.js';
@@ -650,9 +650,13 @@ async function replayIncompleteSkip(
           `## Summary\n\nVERIFY SKIPPED\n`;
         writeFileSync(evalReportPath, report, 'utf-8');
       }
-      commit(state.artifacts.evalReport, `harness[${state.runId}]: Phase 6 — eval report (skip)`, cwd);
-      state.evalCommit = getHead(cwd);
-      state.verifiedAtHead = getHead(cwd);
+      if (!isPathGitignored(state.artifacts.evalReport, cwd)) {
+        commit(state.artifacts.evalReport, `harness[${state.runId}]: Phase 6 — eval report (skip)`, cwd);
+        state.evalCommit = getHead(cwd);
+        state.verifiedAtHead = getHead(cwd);
+      } else {
+        process.stderr.write(`⚠️  eval report path '${state.artifacts.evalReport}' is gitignored — skipping commit (evalCommit will remain null).\n`);
+      }
       break;
     }
     case 2:
