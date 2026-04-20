@@ -5,6 +5,7 @@ import { getGitRoot, getHead, generateRunId, hasStagedChanges, isWorkingTreeClea
 import { acquireLock, releaseLock, setLockHandoff, pollForHandoffComplete } from '../lock.js';
 import { runPreflight } from '../preflight.js';
 import { findHarnessRoot, setCurrentRun } from '../root.js';
+import { cleanupOrphans } from '../orphan-cleanup.js';
 import { createInitialState, writeState } from '../state.js';
 import { isInsideTmux, getCurrentSessionName, getActiveWindowId, createSession, createWindow, sendKeys, killSession, selectWindow, getDefaultPaneId } from '../tmux.js';
 import { openTerminalWindow } from '../terminal.js';
@@ -43,6 +44,13 @@ export async function startCommand(task: string | undefined, options: StartOptio
   // 3. Run common preflight (node, tmux, tty, platform, verifyScript, jq)
   // Runner-specific preflight (claude, codex) is deferred to inner.ts after model selection
   runPreflight(['node', 'tmux', 'tty', 'platform', 'verifyScript', 'jq'], cwd);
+
+  // 4. Opportunistic orphan cleanup — best-effort, never aborts start
+  try {
+    await cleanupOrphans(harnessDir, { quiet: true, yes: true });
+  } catch {
+    process.stderr.write('Warning: orphan cleanup failed (non-fatal).\n');
+  }
 
   // 5. Working tree checks (skip if not in a git repo)
   const inGitRepo = isInGitRepo(cwd);

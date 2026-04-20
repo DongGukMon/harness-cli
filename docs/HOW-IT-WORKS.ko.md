@@ -170,6 +170,32 @@ verify PASS면 eval report를 auto-commit합니다. 단, eval report 경로가 `
 
 ---
 
+## 세션 라이프사이클과 고아 정리
+
+### Run ID 형식
+
+모든 run ID는 `YYYY-MM-DD-<slug>-<rrrr>` 형식입니다. `<rrrr>`은 `crypto.randomBytes(2)`에서 생성한 4자리 16진 랜덤 토큰입니다(예: `2026-04-20-my-task-a3f1`).
+랜덤 suffix 덕분에 기존 `untitled-2`, `untitled-3`… 카운터 ladder 없이 반복 시작에도 고유한 ID가 생성되고, 동시 시작 레이스 윈도우도 줄어듭니다.
+첫 번째 랜덤 후보가 이미 존재하는 경우(극히 드문 충돌) 최대 5회 재시도 후 마지막으로 뽑힌 base에 `-N` 카운터를 붙여 종료를 보장합니다.
+
+### 고아 tmux 세션
+
+비정상 종료(창 닫기, kill -9, SIGHUP) 시 `harness-<runId>` tmux 세션이 남을 수 있습니다. inner 프로세스의 정상 종료 경로에서만 정리가 실행되기 때문입니다.
+
+**`phase-harness cleanup`**은 `harness-*` tmux 세션을 열거하고 현재 `.harness/` 기준으로 각각을 분류한 뒤 고아 세션을 선택적으로 종료합니다.
+
+| 분류 | 조건 | 동작 |
+|---|---|---|
+| `active` | run 디렉토리 존재 + `run.lock` 존재 + `repo.lock` active + `lock.runId === runId` | 종료 안 함 |
+| `orphan` | run 디렉토리 존재 + 다음 중 하나: `run.lock` 없음, `repo.lock` 없음, `repo.lock` stale, `repo.lock`이 다른 run 가리킴 | 확인 후 종료 |
+| `unknown` | 현재 `.harness/` 아래에 run 디렉토리 없음 — 다른 repo/worktree 세션일 수 있음 | 종료 안 함 |
+
+플래그: `--dry-run` (출력만, 종료 없음), `--yes` (확인 프롬프트 생략).
+
+**`start`**는 새 tmux 세션 생성 전에 자동으로 조용한 sweep을 실행합니다(`cleanup --yes --quiet`와 동일). sweep 실패는 치명적이지 않은 경고입니다.
+
+---
+
 ## 상태와 아티팩트
 
 권위 있는 run 상태는 `.harness/<runId>/state.json`입니다.

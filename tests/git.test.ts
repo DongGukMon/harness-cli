@@ -1,8 +1,9 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, writeFileSync, rmSync, mkdirSync, realpathSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { execSync } from 'child_process';
+import crypto from 'crypto';
 import { createTestRepo } from './helpers/test-repo.js';
 import {
   getGitRoot,
@@ -165,42 +166,62 @@ describe('generateRunId', () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     cleanup();
   });
 
-  it('produces a basic slug', () => {
+  it('format: produces a slug with 4-hex random suffix', () => {
     const id = generateRunId('Hello World Task', harnessDir);
-    // Should start with date and contain slug
-    expect(id).toMatch(/^\d{4}-\d{2}-\d{2}-hello-world-task$/);
+    expect(id).toMatch(/^\d{4}-\d{2}-\d{2}-hello-world-task-[0-9a-f]{4}$/);
   });
 
   it('handles Unicode by removing non-ASCII after NFD normalize', () => {
-    // "café" NFD-normalizes so the accent becomes a combining char that gets stripped
     const id = generateRunId('café au lait', harnessDir);
-    expect(id).toMatch(/^\d{4}-\d{2}-\d{2}-cafe-au-lait$/);
+    expect(id).toMatch(/^\d{4}-\d{2}-\d{2}-cafe-au-lait-[0-9a-f]{4}$/);
   });
 
-  it('truncates slug to 25 chars at word boundary', () => {
-    // Create a task that produces a slug longer than 25 chars
+  it('truncates slug to 25 chars at word boundary (suffix excluded from slug length)', () => {
     const task = 'implement the full authentication and authorization system for users';
     const id = generateRunId(task, harnessDir);
-    const slug = id.slice('YYYY-MM-DD-'.length);
+    // Strip date prefix and 4-hex suffix to isolate the slug
+    const withoutDate = id.slice('YYYY-MM-DD-'.length);
+    const slug = withoutDate.slice(0, withoutDate.lastIndexOf('-'));
     expect(slug.length).toBeLessThanOrEqual(25);
-    // Should not end with a partial word (no trailing -)
     expect(slug).not.toMatch(/-$/);
   });
 
-  it('returns "untitled" for empty/non-ASCII-only input', () => {
+  it('returns "untitled-<rand>" for empty/non-ASCII-only input', () => {
     const id = generateRunId('', harnessDir);
-    expect(id).toMatch(/^\d{4}-\d{2}-\d{2}-untitled$/);
+    expect(id).toMatch(/^\d{4}-\d{2}-\d{2}-untitled-[0-9a-f]{4}$/);
   });
 
-  it('appends dedup suffix when directory already exists', () => {
-    const first = generateRunId('my task', harnessDir);
-    // Simulate the directory being created
-    mkdirSync(join(harnessDir, first));
-    const second = generateRunId('my task', harnessDir);
-    expect(second).toBe(`${first}-2`);
+  it('redraw on collision: redraws when first random suffix collides', () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const spy = vi.spyOn(crypto, 'randomBytes') as any;
+    spy.mockReturnValueOnce(Buffer.from([0xaa, 0xaa]))
+       .mockReturnValueOnce(Buffer.from([0xbb, 0xbb]));
+
+    const datePrefix = new Date().toISOString().slice(0, 10);
+    // Pre-create the first candidate directory to force a redraw
+    mkdirSync(join(harnessDir, `${datePrefix}-my-task-aaaa`));
+
+    const id = generateRunId('my task', harnessDir);
+    expect(id).toMatch(/-bbbb$/);
+    spy.mockRestore();
+  });
+
+  it('fallback counter: uses -N counter when random space is exhausted', () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const spy = vi.spyOn(crypto, 'randomBytes') as any;
+    spy.mockReturnValue(Buffer.from([0xca, 0xfe]));
+
+    const datePrefix = new Date().toISOString().slice(0, 10);
+    // Pre-create the randomized candidate to exhaust all 6 draw attempts
+    mkdirSync(join(harnessDir, `${datePrefix}-my-task-cafe`));
+
+    const id = generateRunId('my task', harnessDir);
+    expect(id).toBe(`${datePrefix}-my-task-cafe-2`);
+    spy.mockRestore();
   });
 });
 

@@ -188,6 +188,32 @@ A verify fail copies the eval report to `verify-feedback.md` and reopens P5.
 
 ---
 
+## Session lifecycle and orphan cleanup
+
+### Run ID shape
+
+Every run ID has the format `YYYY-MM-DD-<slug>-<rrrr>` where `<rrrr>` is a 4-hex random token from `crypto.randomBytes(2)` (e.g. `2026-04-20-my-task-a3f1`).
+The random suffix eliminates the old `untitled-2`, `untitled-3`… counter ladder and narrows the race window for concurrent starts.
+If the first random draw collides with an existing directory (vanishingly rare), the generator redraws up to 5 times, then falls back to a `-N` counter on the last drawn base to guarantee termination.
+
+### Orphan tmux sessions
+
+When a harness session exits abnormally (window closed, kill -9, SIGHUP), the `harness-<runId>` tmux session may be left running because cleanup runs inside the inner process's normal shutdown path.
+
+**`phase-harness cleanup`** enumerates `harness-*` tmux sessions, classifies each relative to the current `.harness/` directory, and optionally kills confirmed orphans:
+
+| Classification | Condition | Action |
+|---|---|---|
+| `active` | run dir exists + `run.lock` exists + `repo.lock` is active + `lock.runId === runId` | never killed |
+| `orphan` | run dir exists + one of: `run.lock` missing, `repo.lock` missing, `repo.lock` stale, or `repo.lock` points to a different run | killed on confirm |
+| `unknown` | run dir not found under current `.harness/` — may belong to another repo/worktree | never killed |
+
+Flags: `--dry-run` (print only, no kills), `--yes` (skip confirmation).
+
+**`start`** automatically runs a quiet orphan sweep (equivalent to `cleanup --yes --quiet`) before creating a new tmux session. Sweep failures are non-fatal warnings.
+
+---
+
 ## State and artifacts
 
 The authoritative run state lives in `.harness/<runId>/state.json`.
