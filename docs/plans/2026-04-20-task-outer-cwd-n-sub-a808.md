@@ -1359,7 +1359,10 @@ function updateExternalCommitsDetected(state: HarnessState, cwd: string, runDir:
   try {
     for (const repo of state.trackedRepos) {
       const anchor = repo.implHead ?? repo.implRetryBase ?? repo.baseCommit;
-      const knownAnchors = [state.specCommit, state.planCommit, repo.implHead, state.evalCommit];
+      const isDocsHome = repo === state.trackedRepos[0];
+      const knownAnchors = isDocsHome
+        ? [state.specCommit, state.planCommit, repo.implHead, state.evalCommit]
+        : [repo.implHead];
       const implRange = repo.implHead
         ? { from: repo.baseCommit, to: repo.implHead }
         : null;
@@ -1790,3 +1793,7 @@ See `.harness/2026-04-20-task-outer-cwd-n-sub-a808/checklist.json` for the machi
 | 2 | tests | `pnpm vitest run` |
 | 3 | build | `pnpm build` |
 | 4 | multi-worktree tests | `pnpm vitest run tests/multi-worktree.test.ts` |
+
+## Deferred
+
+- **gate-4 retry-1 P2 (Task 4/8 Phase 7 N>1 metadata assertions)**: Explicit test assertions for `"Harness implementation ranges (per tracked repo):"` block and per-repo `<base>..<implHead>` / `no change (baseCommit=...)` shapes not yet added to Task 4 (Step 4.1) or Task 8 (Step 8.1). Needs integration test fixture expansion; deferred to implementation phase.
