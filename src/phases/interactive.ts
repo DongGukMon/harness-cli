@@ -80,11 +80,13 @@ export function preparePhase(
     [String(phase)]: Math.floor(Date.now() / 1000) * 1000,
   };
 
-  // Phase 5: update implRetryBase for each tracked repo to current HEAD
+  // Phase 5: update implRetryBase for each tracked repo to current HEAD.
+  // implHead is intentionally preserved so the symmetric-reopen path (ADR-13,
+  // phase-5 prompt invariant: "reopen 시 artifact를 변경하지 않아도 phase는 valid")
+  // can actually fire in validatePhaseArtifacts. Wiping it here killed that path.
   if (phase === 5) {
     for (const r of state.trackedRepos) {
       try { r.implRetryBase = getHead(r.path); } catch { /* no git */ }
-      r.implHead = null;
     }
     syncLegacyMirror(state);
   }
@@ -182,22 +184,27 @@ export function validatePhaseArtifacts(
 
   if (phase === 5) {
     void runDir;
-    // Zero-commit reopen: if a prior attempt already set implHead on some repo, accept.
-    if (state.trackedRepos.some(r => r.implHead !== null)) return true;
     try {
+      // Refresh implHead to current HEAD for any repo that advanced this phase.
+      // Repos that did not advance keep their prior implHead value (preserved by
+      // preparePhase), so a successful fresh phase 5 followed by a rev-invariant
+      // reopen continues to validate.
       let anyAdvanced = false;
       for (const r of state.trackedRepos) {
         const h = getHead(r.path);
         if (h !== r.implRetryBase) {
           r.implHead = h;
           anyAdvanced = true;
-        } else {
-          r.implHead = null;
         }
       }
-      if (!anyAdvanced) return false;
       syncLegacyMirror(state); // sets state.implCommit = trackedRepos[0].implHead
-      return true;
+
+      // Accept when:
+      //   (a) at least one repo advanced past implRetryBase this phase, OR
+      //   (b) a prior attempt already set implHead on some repo
+      //       (symmetric reopen — reviewer feedback was rev-invariant so no
+      //        new commits were required).
+      return anyAdvanced || state.trackedRepos.some(r => r.implHead !== null);
     } catch {
       return false;
     }

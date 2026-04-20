@@ -55,6 +55,7 @@ superpowers가 커버하지 않는 두 원칙을 지킨다:
 - sentinel 이후 추가 작업 금지.
 - Content Filter로 subagent dispatch 실패 시 fallback → 직접 구현 + 로그 남김 (plan의 각 task 하단에 `fallback: direct` 메모).
 - Reopen 시 artifact를 변경하지 않아도 phase는 valid — sentinel attemptId 매칭이 freshness의 근거다. Claude가 gate 피드백이 rev-invariant(현 산출물로 반박 가능)하다고 판단하면 **건드리지 않는 것이 옳다**. (대응: ADR-13 symmetric reopen + T1 mtime drop.)
+- **예외**: 현 round feedback이 **"still unresolved"**, **"still persists"**, **"fix was insufficient"** 등으로 이전 round 의 수정이 부족하다고 명시하면 rev-invariant 판단을 해서는 안 된다. 직전 reopen 이 해당 이슈에 대해 커밋을 생성했더라도, 현재 feedback 이 그것을 불충분으로 지목한 이상 **추가 수정 또는 `plan-bug:`/`spec-bug:` escalation** 중 하나를 반드시 수행한다. "이미 이전 세션에서 처리했다"는 판단으로 zero-commit 종료하지 말 것.
 
 **HARNESS FLOW CONSTRAINT**: 이 세션은 orchestrated harness 라이프사이클 내부에서 실행된다. 다음 phase에서 Codex 기반 독립 reviewer가 산출물을 검토한다(gate). 따라서:
 - `advisor()` 툴을 호출하지 말 것. 외부 리뷰가 이미 예약되어 있다.

@@ -355,6 +355,33 @@ describe('preparePhase — Phase 5 implRetryBase', () => {
 
     expect(newState.implRetryBase).toBe('base-from-start');
   });
+
+  it('preserves trackedRepos[].implHead across phase 5 entries (symmetric reopen)', () => {
+    // Prior Phase 5 succeeded and recorded implHead. Phase 6 then advanced HEAD.
+    // On gate-7 REJECT reopen, preparePhase must NOT wipe implHead — otherwise
+    // a rev-invariant reopen (zero new commits) can never validate, contradicting
+    // the Phase 5 prompt invariant.
+    const repoDir = createTestRepo();
+    const runDir = makeTmpDir();
+    const harnessDir = makeTmpDir();
+    const headBeforeReopen = execSync('git rev-parse HEAD', { cwd: repoDir, encoding: 'utf-8' }).trim();
+
+    const state = makeState();
+    state.trackedRepos = [{
+      path: repoDir,
+      baseCommit: headBeforeReopen,
+      implRetryBase: 'old-base-before-verify',
+      implHead: 'sha-from-prior-impl-phase',
+    }];
+
+    preparePhase(5, state, harnessDir, runDir, repoDir);
+
+    // implRetryBase rebased to current HEAD (existing behavior) …
+    expect(state.trackedRepos[0].implRetryBase).toBe(headBeforeReopen);
+    // … but implHead must survive, so validatePhaseArtifacts' zero-commit
+    // reopen branch can still accept a rev-invariant reopen.
+    expect(state.trackedRepos[0].implHead).toBe('sha-from-prior-impl-phase');
+  });
 });
 
 // ─── checkSentinelFreshness ──────────────────────────────────────────────────
@@ -654,6 +681,57 @@ describe('validatePhaseArtifacts — Phase 5', () => {
     state.trackedRepos = [{ path: repoDir, baseCommit: head, implRetryBase: head, implHead: null }];
     const result = validatePhaseArtifacts(5, state, repoDir, repoDir);
     expect(result).toBe(true);
+  });
+
+  it('symmetric reopen: HEAD unchanged from implRetryBase, but prior implHead preserved → accept', () => {
+    // This is the whole point of the fix: a gate-7 REJECT reopen in which Claude
+    // judges the feedback rev-invariant and writes only the sentinel must validate.
+    // preparePhase would have rebased implRetryBase to the current HEAD and
+    // preserved implHead from the prior successful phase-5.
+    const repoDir = createTestRepo();
+    const head = execSync('git rev-parse HEAD', { cwd: repoDir, encoding: 'utf-8' }).trim();
+    const state = makeState({ implRetryBase: head, implCommit: 'sha-from-prior-impl' });
+    state.trackedRepos = [{
+      path: repoDir,
+      baseCommit: head,
+      implRetryBase: head,          // rebased to current HEAD by preparePhase
+      implHead: 'sha-from-prior-impl', // preserved by preparePhase
+    }];
+    const result = validatePhaseArtifacts(5, state, repoDir, repoDir);
+    expect(result).toBe(true);
+  });
+
+  it('fresh phase 5 (implHead null) with zero commits still returns false', () => {
+    // Guardrail check: first-ever Phase 5 must actually produce commits. The
+    // symmetric-reopen escape hatch applies only when a prior attempt set implHead.
+    const repoDir = createTestRepo();
+    const head = execSync('git rev-parse HEAD', { cwd: repoDir, encoding: 'utf-8' }).trim();
+    const state = makeState({ implRetryBase: head, implCommit: null });
+    state.trackedRepos = [{ path: repoDir, baseCommit: head, implRetryBase: head, implHead: null }];
+    const result = validatePhaseArtifacts(5, state, repoDir, repoDir);
+    expect(result).toBe(false);
+  });
+
+  it('reopen with new commits refreshes implHead to current HEAD (no stale value)', () => {
+    // Claude addressed feedback with new commits on reopen. implHead must now
+    // reflect current HEAD, not the pre-reopen value.
+    const repoDir = createTestRepo();
+    const headBeforeReopen = execSync('git rev-parse HEAD', { cwd: repoDir, encoding: 'utf-8' }).trim();
+    fs.writeFileSync(path.join(repoDir, 'fix.txt'), 'reopen fix');
+    execSync('git add fix.txt && git commit -m "reopen fix"', { cwd: repoDir });
+    const newHead = execSync('git rev-parse HEAD', { cwd: repoDir, encoding: 'utf-8' }).trim();
+
+    const state = makeState({ implRetryBase: headBeforeReopen, implCommit: 'sha-from-prior-impl' });
+    state.trackedRepos = [{
+      path: repoDir,
+      baseCommit: headBeforeReopen,
+      implRetryBase: headBeforeReopen,
+      implHead: 'sha-from-prior-impl',
+    }];
+
+    const result = validatePhaseArtifacts(5, state, repoDir, repoDir);
+    expect(result).toBe(true);
+    expect(state.trackedRepos[0].implHead).toBe(newHead);
   });
 });
 
