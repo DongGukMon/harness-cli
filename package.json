@@ -1,9 +1,11 @@
 {
   "name": "phase-harness",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "AI agent harness orchestrator — multi-phase brainstorm/spec/plan/implement/verify lifecycle with gate reviews",
   "type": "module",
-  "bin": { "phase-harness": "./dist/bin/harness.js" },
+  "bin": {
+    "phase-harness": "./dist/bin/harness.js"
+  },
   "files": [
     "dist",
     "scripts/harness-verify.sh",
@@ -16,8 +18,12 @@
     "url": "git+https://github.com/DongGukMon/harness-cli.git"
   },
   "homepage": "https://github.com/DongGukMon/harness-cli#readme",
-  "bugs": { "url": "https://github.com/DongGukMon/harness-cli/issues" },
-  "publishConfig": { "access": "public" },
+  "bugs": {
+    "url": "https://github.com/DongGukMon/harness-cli/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "engines": {
     "node": ">=18.0.0"
   },
