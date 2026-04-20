@@ -175,7 +175,7 @@ If your Claude Code environment does not support 1M context, keep using the lega
 ## Verify behavior (Phase 6)
 
 Phase 6 always runs the bundled `harness-verify.sh` script.
-The script path is resolved from the installed package first, with legacy fallback to `~/.claude/scripts/harness-verify.sh`.
+The script is resolved from `dist/scripts/harness-verify.sh` inside the installed package. If npm stripped the executable bit on install, it is restored automatically at runtime.
 
 Inputs and outputs:
 - input: `.harness/<runId>/checklist.json`

@@ -1,5 +1,5 @@
 import { execSync, spawnSync } from 'child_process';
-import { existsSync, accessSync, readdirSync, writeFileSync, unlinkSync, constants } from 'fs';
+import { existsSync, accessSync, chmodSync, readdirSync, writeFileSync, unlinkSync, constants } from 'fs';
 import os from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -11,10 +11,9 @@ const _defaultPackageLocalRoot = path.dirname(fileURLToPath(import.meta.url));
 
 /**
  * Resolve the harness-verify.sh path.
- * Lookup order:
- *  1. Package-local: <packageLocalRoot>/../scripts/harness-verify.sh (after build → dist/scripts/...)
- *  2. Legacy fallback: ~/.claude/scripts/harness-verify.sh
- * Returns null if neither is present + executable.
+ * Looks for: <packageLocalRoot>/../scripts/harness-verify.sh (after build → dist/scripts/...)
+ * If the file exists but is not executable (npm strips +x on install), attempts chmod +x.
+ * Returns null if the file is absent or cannot be made executable.
  *
  * @param packageLocalRoot - override the package-local search root (defaults to this module's __dirname).
  *                           Tests may pass a temp dir to deterministically exercise the package-local branch.
@@ -22,29 +21,23 @@ const _defaultPackageLocalRoot = path.dirname(fileURLToPath(import.meta.url));
 export function resolveVerifyScriptPath(
   packageLocalRoot: string = _defaultPackageLocalRoot
 ): string | null {
-  // 1. Package-local path
   const packageLocal = path.join(packageLocalRoot, '..', 'scripts', 'harness-verify.sh');
-  if (existsSync(packageLocal)) {
-    try {
-      accessSync(packageLocal, constants.R_OK | constants.X_OK);
-      return packageLocal;
-    } catch {
-      // not accessible — fall through to legacy
-    }
+  if (!existsSync(packageLocal)) {
+    return null;
   }
-
-  // 2. Legacy fallback: ~/.claude/scripts/harness-verify.sh
-  const legacy = path.join(os.homedir(), '.claude', 'scripts', 'harness-verify.sh');
-  if (existsSync(legacy)) {
-    try {
-      accessSync(legacy, constants.R_OK | constants.X_OK);
-      return legacy;
-    } catch {
-      // not accessible
-    }
+  try {
+    accessSync(packageLocal, constants.R_OK);
+  } catch {
+    return null; // unreadable
   }
-
-  return null;
+  // npm strips the executable bit on install — restore it
+  try { chmodSync(packageLocal, 0o755); } catch { /* best-effort */ }
+  try {
+    accessSync(packageLocal, constants.X_OK);
+    return packageLocal;
+  } catch {
+    return null;
+  }
 }
 
 // Map phase type → required preflight items.
