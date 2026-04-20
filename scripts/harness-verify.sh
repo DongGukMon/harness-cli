@@ -69,7 +69,9 @@ for i in $(seq 0 $((CHECK_COUNT - 1))); do
   STDERR_FILE=$(mktemp)
 
   set +e
-  eval "$COMMAND" > "$STDOUT_FILE" 2> "$STDERR_FILE"
+  # Subshell isolates per-check cwd/env mutations (e.g. `cd subdir && pnpm test`)
+  # so a preceding check cannot break `>> "$OUTPUT_FILE"` via a stale cwd.
+  ( eval "$COMMAND" ) > "$STDOUT_FILE" 2> "$STDERR_FILE"
   EXIT_CODE=$?
   set -e
 
