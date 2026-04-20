@@ -101,7 +101,7 @@ Install these first:
 
 Notes:
 - Supported platforms are **macOS and Linux**.
-- The verify script is resolved from the installed package first, with legacy fallback to `~/.claude/scripts/harness-verify.sh`.
+- The verify script (`harness-verify.sh`) is bundled in the package and resolved automatically at runtime.
 - If you switch an interactive phase to a Codex preset, harness will use the Codex CLI for that phase too.
 - By default, Codex phases run through the real `codex` CLI inside an isolated `<runDir>/codex-home`; use `--codex-no-isolate` only when you intentionally want inherited `CODEX_HOME` behavior.
 - New runs now default Claude phases to the explicit `*-1m-*` presets. If your Claude Code environment does not support 1M context, pick one of the legacy non-1M presets during the model-selection step (or change the defaults in `src/config.ts` in your own fork).

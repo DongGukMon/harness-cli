@@ -101,7 +101,7 @@ Harness는 git working tree를 기준으로 동작하며, phase 경계에서 art
 
 참고:
 - 지원 플랫폼은 **macOS와 Linux**입니다.
-- verify script는 먼저 설치된 패키지 내부 경로에서 찾고, 없으면 `~/.claude/scripts/harness-verify.sh`를 레거시 fallback으로 사용합니다.
+- verify 스크립트(`harness-verify.sh`)는 패키지에 번들되어 있으며 런타임에 자동으로 경로를 찾습니다.
 - interactive phase를 Codex preset으로 바꾸면, 해당 phase도 Codex CLI로 실행됩니다.
 - 기본적으로 Codex phase는 실제 `codex` CLI를 사용하고, `<runDir>/codex-home` 격리 환경에서 실행됩니다. 사용자 전역 `CODEX_HOME` 동작이 필요할 때만 `--codex-no-isolate`를 사용하세요.
 - 새 run은 이제 Claude phase 기본값으로 `*-1m-*` preset을 사용합니다. Claude Code 환경에서 1M context를 쓸 수 없다면, 모델 선택 단계에서 기존 non-1M preset으로 직접 바꾸거나 자체 포크의 `src/config.ts` 기본값을 수정하세요.

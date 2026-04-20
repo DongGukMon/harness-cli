@@ -1,7 +1,7 @@
 import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
 import os from 'os';
 import path from 'path';
-import { existsSync, mkdtempSync, mkdirSync, writeFileSync, chmodSync, rmSync } from 'fs';
+import { existsSync, mkdtempSync, mkdirSync, writeFileSync, chmodSync, accessSync, rmSync, constants } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 
@@ -235,82 +235,19 @@ describe('resolveVerifyScriptPath — package-local branch (deterministic via ov
     expect(result).toBe(target);
   });
 
-  it('returns legacy path when package-local is absent and legacy is present + executable', () => {
-    const homeBackup = process.env.HOME;
-    const fakeHome = mkdtempSync(join(tmpdir(), 'harness-fake-home-'));
-    const legacyDir = join(fakeHome, '.claude', 'scripts');
-    mkdirSync(legacyDir, { recursive: true });
-    const legacyTarget = join(legacyDir, 'harness-verify.sh');
-    writeFileSync(legacyTarget, '#!/bin/sh\necho ok\n');
-    chmodSync(legacyTarget, 0o755);
-    process.env.HOME = fakeHome;
-
-    try {
-      const result = resolveVerifyScriptPath(join(tmp, 'lib'));
-      expect(result).toBe(legacyTarget);
-    } finally {
-      process.env.HOME = homeBackup;
-      rmSync(fakeHome, { recursive: true, force: true });
-    }
+  it('auto-chmodss and returns package-local path when file exists but not executable (npm install strips +x)', () => {
+    const target = join(tmp, 'scripts', 'harness-verify.sh');
+    writeFileSync(target, '#!/bin/sh\necho ok\n');
+    chmodSync(target, 0o644); // simulate npm install stripping +x
+    const result = resolveVerifyScriptPath(join(tmp, 'lib'));
+    expect(result).toBe(target);
+    // verify the file is now executable
+    accessSync(target, constants.X_OK);
   });
 
-  it('falls through to legacy when package-local exists but is not executable', () => {
-    const pkgTarget = join(tmp, 'scripts', 'harness-verify.sh');
-    writeFileSync(pkgTarget, '#!/bin/sh\necho ok\n');
-    chmodSync(pkgTarget, 0o644); // not executable
-
-    const homeBackup = process.env.HOME;
-    const fakeHome = mkdtempSync(join(tmpdir(), 'harness-fake-home-'));
-    const legacyDir = join(fakeHome, '.claude', 'scripts');
-    mkdirSync(legacyDir, { recursive: true });
-    const legacyTarget = join(legacyDir, 'harness-verify.sh');
-    writeFileSync(legacyTarget, '#!/bin/sh\necho ok\n');
-    chmodSync(legacyTarget, 0o755);
-    process.env.HOME = fakeHome;
-
-    try {
-      const result = resolveVerifyScriptPath(join(tmp, 'lib'));
-      expect(result).toBe(legacyTarget);
-    } finally {
-      process.env.HOME = homeBackup;
-      rmSync(fakeHome, { recursive: true, force: true });
-    }
-  });
-
-  it('returns null when package-local is missing and legacy is missing', () => {
-    const homeBackup = process.env.HOME;
-    const fakeHome = mkdtempSync(join(tmpdir(), 'harness-fake-home-'));
-    process.env.HOME = fakeHome;
-    try {
-      const result = resolveVerifyScriptPath(join(tmp, 'lib'));
-      expect(result).toBeNull();
-    } finally {
-      process.env.HOME = homeBackup;
-      rmSync(fakeHome, { recursive: true, force: true });
-    }
-  });
-
-  it('returns null when both package-local and legacy exist but neither is executable', () => {
-    const pkgTarget = join(tmp, 'scripts', 'harness-verify.sh');
-    writeFileSync(pkgTarget, '#!/bin/sh\necho ok\n');
-    chmodSync(pkgTarget, 0o644);
-
-    const homeBackup = process.env.HOME;
-    const fakeHome = mkdtempSync(join(tmpdir(), 'harness-fake-home-'));
-    const legacyDir = join(fakeHome, '.claude', 'scripts');
-    mkdirSync(legacyDir, { recursive: true });
-    const legacyTarget = join(legacyDir, 'harness-verify.sh');
-    writeFileSync(legacyTarget, '#!/bin/sh\necho ok\n');
-    chmodSync(legacyTarget, 0o644);
-    process.env.HOME = fakeHome;
-
-    try {
-      const result = resolveVerifyScriptPath(join(tmp, 'lib'));
-      expect(result).toBeNull();
-    } finally {
-      process.env.HOME = homeBackup;
-      rmSync(fakeHome, { recursive: true, force: true });
-    }
+  it('returns null when package-local is missing', () => {
+    const result = resolveVerifyScriptPath(join(tmp, 'lib'));
+    expect(result).toBeNull();
   });
 });
 

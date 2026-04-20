@@ -157,7 +157,7 @@ Claude Code 환경에서 1M context를 사용할 수 없다면, 모델 선택기
 ## Verify 동작 (Phase 6)
 
 Phase 6은 항상 번들된 `harness-verify.sh` 스크립트를 실행합니다.
-스크립트 경로는 설치된 패키지 내부를 우선 사용하고, 없으면 레거시 fallback으로 `~/.claude/scripts/harness-verify.sh`를 사용합니다.
+스크립트는 설치된 패키지 내부의 `dist/scripts/harness-verify.sh`를 사용합니다. npm 설치 시 실행 권한이 제거된 경우, 런타임에 자동으로 복원합니다.
 
 입출력:
 - 입력: `.harness/<runId>/checklist.json`
