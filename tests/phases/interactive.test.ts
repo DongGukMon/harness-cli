@@ -70,12 +70,23 @@ function makeState(overrides: Partial<HarnessState> = {}): HarnessState {
     'deadbeef',
     false
   );
-  return {
+  const merged = {
     ...base,
     tmuxWorkspacePane: '%1',
     tmuxControlPane: '%0',
     ...overrides,
   };
+  // Keep trackedRepos[0] in sync with top-level fields so syncLegacyMirror
+  // (called by writeState) does not overwrite them back to base values.
+  if (merged.trackedRepos?.[0]) {
+    merged.trackedRepos = [{
+      ...merged.trackedRepos[0],
+      baseCommit: merged.baseCommit,
+      implRetryBase: merged.implRetryBase,
+      implHead: merged.implCommit,
+    }];
+  }
+  return merged;
 }
 
 /** Create a minimal git repo and return its path (registered for cleanup). */

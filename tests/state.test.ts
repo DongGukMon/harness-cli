@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { writeState, readState, createInitialState, migrateState } from '../src/state.js';
+import { writeState, readState, createInitialState, migrateState, syncLegacyMirror } from '../src/state.js';
 import type { HarnessState } from '../src/types.js';
 import { PHASE_DEFAULTS, getPhaseArtifactFiles, getReopenTarget, getRequiredPhaseKeys } from '../src/config.js';
 
@@ -434,5 +434,55 @@ describe('getReopenTarget (ADR-4)', () => {
   });
   it('light + gate 7 → phase 1 (design combined doc is re-authored)', () => {
     expect(getReopenTarget('light', 7)).toBe(1);
+  });
+});
+
+describe('trackedRepos — migration (FR-2, ADR-N3)', () => {
+  it('migrateState synthesizes trackedRepos[0] from top-level fields when absent', () => {
+    const legacy = JSON.parse(JSON.stringify(makeState()));
+    delete (legacy as any).trackedRepos;
+    legacy.baseCommit = 'abc123';
+    legacy.implRetryBase = 'abc123';
+    legacy.implCommit = null;
+    const migrated = migrateState(legacy, '/outer/cwd');
+    expect(migrated.trackedRepos).toHaveLength(1);
+    expect(migrated.trackedRepos[0]).toEqual({
+      path: '/outer/cwd',
+      baseCommit: 'abc123',
+      implRetryBase: 'abc123',
+      implHead: null,
+    });
+  });
+
+  it('migrateState uses empty string for path when no cwd provided', () => {
+    const legacy = JSON.parse(JSON.stringify(makeState()));
+    delete (legacy as any).trackedRepos;
+    const migrated = migrateState(legacy);
+    expect(migrated.trackedRepos[0].path).toBe('');
+  });
+
+  it('migrateState preserves existing trackedRepos', () => {
+    const state = makeState();
+    (state as any).trackedRepos = [{ path: '/repo', baseCommit: 'abc', implRetryBase: 'abc', implHead: null }];
+    const migrated = migrateState(state as any);
+    expect(migrated.trackedRepos[0].path).toBe('/repo');
+  });
+});
+
+describe('syncLegacyMirror (ADR-N3 mirror invariant)', () => {
+  it('syncLegacyMirror keeps baseCommit in sync with trackedRepos[0]', () => {
+    const state = makeState();
+    state.trackedRepos = [{ path: '/r', baseCommit: 'newbase', implRetryBase: 'newbase', implHead: null }];
+    syncLegacyMirror(state);
+    expect(state.baseCommit).toBe('newbase');
+    expect(state.implRetryBase).toBe('newbase');
+    expect(state.implCommit).toBeNull();
+  });
+
+  it('syncLegacyMirror sets implCommit from trackedRepos[0].implHead', () => {
+    const state = makeState();
+    state.trackedRepos = [{ path: '/r', baseCommit: 'b', implRetryBase: 'b', implHead: 'impl-sha' }];
+    syncLegacyMirror(state);
+    expect(state.implCommit).toBe('impl-sha');
   });
 });

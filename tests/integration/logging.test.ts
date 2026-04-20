@@ -14,7 +14,9 @@ function buildState(overrides: Partial<HarnessState> = {}): HarnessState {
   const base: HarnessState = {
     runId: 'r', flow: 'full', carryoverFeedback: null,
     currentPhase: 1, status: 'in_progress', autoMode: false,
-    task: 'test', baseCommit: '', implRetryBase: '', codexPath: null,
+    task: 'test', baseCommit: '', implRetryBase: '',
+    trackedRepos: [{ path: '', baseCommit: '', implRetryBase: '', implHead: null }],
+    codexPath: null,
     externalCommitsDetected: false,
     artifacts: { spec: 's', plan: 'p', decisionLog: 'd', checklist: 'c', evalReport: 'e' },
     phases: { '1': 'pending', '2': 'pending', '3': 'pending', '4': 'pending', '5': 'pending', '6': 'pending', '7': 'pending' },

@@ -32,6 +32,7 @@ function makeState(overrides: Partial<HarnessState> = {}): HarnessState {
     task: 't',
     baseCommit: 'base',
     implRetryBase: 'base',
+    trackedRepos: [{ path: '', baseCommit: 'base', implRetryBase: 'base', implHead: null }],
     codexPath: null,
     externalCommitsDetected: false,
     artifacts: {

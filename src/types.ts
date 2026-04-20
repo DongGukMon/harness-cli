@@ -10,6 +10,14 @@ export interface CarryoverFeedback {
   paths: string[];
   deliverToPhase: 5;
 }
+
+export interface TrackedRepo {
+  path: string;          // absolute path; '' for legacy-migrated states
+  baseCommit: string;
+  implRetryBase: string;
+  implHead: string | null;
+}
+
 export type RunStatus = 'in_progress' | 'completed' | 'paused';
 export type PauseReason = 'gate-escalation' | 'verify-escalation' | 'gate-error' | 'verify-error' | 'config-cancel';
 export type PendingActionType = 'reopen_phase' | 'rerun_gate' | 'rerun_verify' | 'show_escalation' | 'show_verify_error' | 'skip_phase' | 'reopen_config';
@@ -54,6 +62,7 @@ export interface HarnessState {
   task: string;
   baseCommit: string;
   implRetryBase: string;
+  trackedRepos: TrackedRepo[];
   codexPath: string | null;
   externalCommitsDetected: boolean;
   artifacts: Artifacts;

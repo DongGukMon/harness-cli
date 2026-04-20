@@ -29,7 +29,9 @@ export async function jumpCommand(phaseArg: string, options: JumpOptions = {}): 
   }
 
   const runDir = join(harnessDir, runId);
-  const state = readState(runDir);
+  let cwd: string;
+  try { cwd = options.root ?? getGitRoot(); } catch { cwd = options.root ?? process.cwd(); }
+  const state = readState(runDir, cwd);
   if (state === null) {
     process.stderr.write(`Run '${runId}' has no state. Manual recovery required.\n`);
     process.exit(1);
@@ -51,9 +53,6 @@ export async function jumpCommand(phaseArg: string, options: JumpOptions = {}): 
     );
     process.exit(1);
   }
-
-  let cwd: string;
-  try { cwd = options.root ?? getGitRoot(); } catch { cwd = options.root ?? process.cwd(); }
 
   // Check if inner process is running (tmux architecture)
   const lock = readLock(harnessDir);

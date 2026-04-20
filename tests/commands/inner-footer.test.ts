@@ -114,6 +114,7 @@ function makeHarnessState(runId: string): HarnessState {
     task: 'existing task',
     baseCommit: 'abc123',
     implRetryBase: 'abc123',
+    trackedRepos: [{ path: '', baseCommit: 'abc123', implRetryBase: 'abc123', implHead: null }],
     codexPath: '/tmp/codex',
     externalCommitsDetected: false,
     artifacts: { spec: 'spec.md', plan: 'plan.md', decisionLog: 'decision-log.md', checklist: 'checklist.md', evalReport: 'eval-report.md' },

@@ -20,7 +20,9 @@ export async function skipCommand(options: SkipOptions = {}): Promise<void> {
   }
 
   const runDir = join(harnessDir, runId);
-  const state = readState(runDir);
+  let cwd: string;
+  try { cwd = options.root ?? getGitRoot(); } catch { cwd = options.root ?? process.cwd(); }
+  const state = readState(runDir, cwd);
   if (state === null) {
     process.stderr.write(`Run '${runId}' has no state. Manual recovery required.\n`);
     process.exit(1);
@@ -35,8 +37,6 @@ export async function skipCommand(options: SkipOptions = {}): Promise<void> {
     process.stderr.write(`Cannot skip: run is completed. Use 'harness jump N' to re-run a phase.\n`);
     process.exit(1);
   }
-
-  const cwd = options.root ?? getGitRoot();
 
   // Check if inner process is running (tmux architecture)
   const lock = readLock(harnessDir);

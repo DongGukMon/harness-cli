@@ -82,7 +82,13 @@ export function preparePhase(
 
   // Phase 5: update implRetryBase to current HEAD
   if (phase === 5) {
-    try { state.implRetryBase = getHead(cwd); } catch { /* no git */ }
+    try {
+      const head = getHead(cwd);
+      state.implRetryBase = head;
+      if (state.trackedRepos?.[0]) {
+        state.trackedRepos[0].implRetryBase = head;
+      }
+    } catch { /* no git */ }
   }
 
   // Clear the reopen flag after using it

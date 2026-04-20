@@ -265,7 +265,9 @@ describe('bootstrapSessionLogger', () => {
     const base: HarnessState = {
       runId: 'r1', flow: 'full', carryoverFeedback: null,
       currentPhase: 1, status: 'in_progress', autoMode: false,
-      task: 'test task', baseCommit: '', implRetryBase: '', codexPath: null,
+      task: 'test task', baseCommit: '', implRetryBase: '',
+      trackedRepos: [{ path: '', baseCommit: '', implRetryBase: '', implHead: null }],
+      codexPath: null,
       externalCommitsDetected: false,
       artifacts: { spec: 's', plan: 'p', decisionLog: 'd', checklist: 'c', evalReport: 'e' },
       phases: { '1': 'pending', '2': 'pending', '3': 'pending', '4': 'pending', '5': 'pending', '6': 'pending', '7': 'pending' },
@@ -347,7 +349,9 @@ describe('buildConfigCancelHandler — lazy bootstrap', () => {
     const base: HarnessState = {
       runId: 'cc1', flow: 'full', carryoverFeedback: null,
       currentPhase: 1, status: 'in_progress', autoMode: false,
-      task: 'test task', baseCommit: 'abc', implRetryBase: 'abc', codexPath: null,
+      task: 'test task', baseCommit: 'abc', implRetryBase: 'abc',
+      trackedRepos: [{ path: '', baseCommit: 'abc', implRetryBase: 'abc', implHead: null }],
+      codexPath: null,
       externalCommitsDetected: false,
       artifacts: { spec: 's', plan: 'p', decisionLog: 'd', checklist: 'c', evalReport: 'e' },
       phases: { '1': 'pending', '2': 'pending', '3': 'pending', '4': 'pending', '5': 'pending', '6': 'pending', '7': 'pending' },
@@ -547,7 +551,9 @@ describe('bootstrapSessionLogger — codexHome integration (Issue #13)', () => {
     const base: HarnessState = {
       runId: 'rx', flow: 'full', carryoverFeedback: null,
       currentPhase: 1, status: 'in_progress', autoMode: false,
-      task: 'test task', baseCommit: '', implRetryBase: '', codexPath: null,
+      task: 'test task', baseCommit: '', implRetryBase: '',
+      trackedRepos: [{ path: '', baseCommit: '', implRetryBase: '', implHead: null }],
+      codexPath: null,
       externalCommitsDetected: false,
       artifacts: { spec: 's', plan: 'p', decisionLog: 'd', checklist: 'c', evalReport: 'e' },
       phases: { '1': 'pending', '2': 'pending', '3': 'pending', '4': 'pending', '5': 'pending', '6': 'pending', '7': 'pending' },

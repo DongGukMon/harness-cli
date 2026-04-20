@@ -16,7 +16,9 @@ function makeState(): HarnessState {
   return {
     runId: 'r1', flow: 'full', carryoverFeedback: null,
     currentPhase: 2, status: 'in_progress', autoMode: false,
-    task: 't', baseCommit: '', implRetryBase: '', codexPath: null,
+    task: 't', baseCommit: '', implRetryBase: '',
+    trackedRepos: [{ path: '', baseCommit: '', implRetryBase: '', implHead: null }],
+    codexPath: null,
     externalCommitsDetected: false,
     artifacts: { spec: 's', plan: 'p', decisionLog: 'd', checklist: 'c', evalReport: 'e' },
     phases: { '1': 'pending', '2': 'pending', '3': 'pending', '4': 'pending', '5': 'pending', '6': 'pending', '7': 'pending' },
