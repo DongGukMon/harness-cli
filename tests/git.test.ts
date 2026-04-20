@@ -12,6 +12,7 @@ import {
   hasStagedChanges,
   getStagedFiles,
   generateRunId,
+  isPathGitignored,
 } from '../src/git.js';
 
 describe('getGitRoot', () => {
@@ -200,5 +201,38 @@ describe('generateRunId', () => {
     mkdirSync(join(harnessDir, first));
     const second = generateRunId('my task', harnessDir);
     expect(second).toBe(`${first}-2`);
+  });
+});
+
+describe('isPathGitignored', () => {
+  let repo: { path: string; cleanup: () => void };
+
+  beforeEach(() => {
+    repo = createTestRepo();
+  });
+
+  afterEach(() => {
+    repo.cleanup();
+  });
+
+  it('returns true for a path covered by .gitignore', () => {
+    writeFileSync(join(repo.path, '.gitignore'), 'docs/\n');
+    execSync('git add .gitignore && git commit -m "gitignore"', { cwd: repo.path });
+    expect(isPathGitignored('docs/report.md', repo.path)).toBe(true);
+  });
+
+  it('returns false for a path not covered by .gitignore', () => {
+    writeFileSync(join(repo.path, '.gitignore'), 'docs/\n');
+    execSync('git add .gitignore && git commit -m "gitignore"', { cwd: repo.path });
+    expect(isPathGitignored('src/index.ts', repo.path)).toBe(false);
+  });
+
+  it('returns false in a non-git directory', () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), 'no-git-'));
+    try {
+      expect(isPathGitignored('anything.md', tmpDir)).toBe(false);
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
   });
 });

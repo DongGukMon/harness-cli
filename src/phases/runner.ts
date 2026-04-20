@@ -13,7 +13,7 @@ import {
   getReopenTarget,
 } from '../config.js';
 import { writeState } from '../state.js';
-import { getHead } from '../git.js';
+import { getHead, isPathGitignored } from '../git.js';
 import { commitEvalReport, normalizeArtifactCommit } from '../artifact.js';
 import { runInteractivePhase } from './interactive.js';
 import { runGatePhase } from './gate.js';
@@ -1174,15 +1174,21 @@ export async function forcePassVerify(
 
   // Normalize the synthetic report — failure must mark phase as error (not silently skip)
   const message = `harness[${state.runId}]: Phase 6 — synthetic eval report (skip)`;
-  try {
-    normalizeArtifactCommit(state.artifacts.evalReport, message, cwd);
-  } catch (err) {
-    printError(`Failed to commit synthetic eval report: ${(err as Error).message}`);
-    state.phases['6'] = 'error';
-    state.pendingAction = null;
-    savePausedAtHead(state, cwd);
-    writeState(runDir, state);
-    return;
+  if (isPathGitignored(state.artifacts.evalReport, cwd)) {
+    process.stderr.write(
+      `⚠️  eval report path '${state.artifacts.evalReport}' is gitignored — skipping commit (evalCommit will remain null).\n`
+    );
+  } else {
+    try {
+      normalizeArtifactCommit(state.artifacts.evalReport, message, cwd);
+    } catch (err) {
+      printError(`Failed to commit synthetic eval report: ${(err as Error).message}`);
+      state.phases['6'] = 'error';
+      state.pendingAction = null;
+      savePausedAtHead(state, cwd);
+      writeState(runDir, state);
+      return;
+    }
   }
 
   // Update anchors AFTER commit succeeds

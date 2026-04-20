@@ -1,9 +1,10 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { writeFileSync, existsSync, mkdirSync } from 'fs';
 import { join } from 'path';
 import { execSync } from 'child_process';
 import { createTestRepo } from './helpers/test-repo.js';
-import { normalizeArtifactCommit, runPhase6Preconditions } from '../src/artifact.js';
+import { normalizeArtifactCommit, runPhase6Preconditions, commitEvalReport } from '../src/artifact.js';
+import { createInitialState } from '../src/state.js';
 
 // Helper: get current HEAD SHA
 function getHead(cwd: string): string {
@@ -203,5 +204,58 @@ describe('runPhase6Preconditions', () => {
 
     const status = execSync('git status --porcelain', { cwd: repo.path, encoding: 'utf-8' }).trim();
     expect(status).toBe('');
+  });
+});
+
+describe('commitEvalReport', () => {
+  let repo: { path: string; cleanup: () => void };
+  let stderrSpy: any;
+
+  beforeEach(() => {
+    repo = createTestRepo();
+    stderrSpy = vi.spyOn(process.stderr, 'write').mockReturnValue(true as any);
+  });
+
+  afterEach(() => {
+    stderrSpy.mockRestore();
+    repo.cleanup();
+  });
+
+  it('skips commit and warns when eval report path is gitignored', () => {
+    writeFileSync(join(repo.path, '.gitignore'), 'docs/\n');
+    execSync('git add .gitignore && git commit -m "gitignore"', { cwd: repo.path });
+
+    const baseCommit = getHead(repo.path);
+    const runId = 'test-run';
+    const state = createInitialState(runId, 'task', baseCommit, false);
+    state.artifacts.evalReport = 'docs/process/evals/test-run-eval.md';
+
+    mkdirSync(join(repo.path, 'docs/process/evals'), { recursive: true });
+    writeFileSync(join(repo.path, state.artifacts.evalReport), '# Eval\n## Summary\nAll checks passed.\n');
+
+    const headBefore = getHead(repo.path);
+    commitEvalReport(state, repo.path);
+    const headAfter = getHead(repo.path);
+
+    // evalCommit not updated (still null), no new commit created
+    expect(headAfter).toBe(headBefore);
+    expect(state.evalCommit).toBeNull();
+    const warnMessages = stderrSpy.mock.calls.map((c: any) => c[0]).join('');
+    expect(warnMessages).toContain('gitignored');
+  });
+
+  it('commits normally when eval report path is not gitignored', () => {
+    const baseCommit = getHead(repo.path);
+    const runId = 'test-run';
+    const state = createInitialState(runId, 'task', baseCommit, false);
+    state.artifacts.evalReport = 'eval-report.md';
+
+    writeFileSync(join(repo.path, state.artifacts.evalReport), '# Eval\n## Summary\nAll checks passed.\n');
+
+    const headBefore = getHead(repo.path);
+    commitEvalReport(state, repo.path);
+    const headAfter = getHead(repo.path);
+
+    expect(headAfter).not.toBe(headBefore);
   });
 });
