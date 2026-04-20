@@ -17,8 +17,16 @@ Separately, when a harness session exits abnormally (window closed, kill -9, SIG
 Key decisions:
 
 - **D1 — Uniform random suffix.** Every runId gets a 4-hex token: `YYYY-MM-DD-<slug>-<rrrr>`. Applies uniformly (not only to `untitled`) to eliminate the dedup ladder and narrow race windows. 4 hex ≈ 65k — essentially zero daily-collision probability. Numeric `-N` dedup loop is kept only as an extra belt-and-suspenders fallback if filesystem shows the exact random-suffixed path already exists.
-- **D2 — `cleanup` command + opportunistic sweep on `start`.** A new `phase-harness cleanup` command enumerates `harness-*` tmux sessions and, scoped to the current `harnessDir`, classifies each as orphan vs active based on whether a matching run directory + active lock exists. `start` calls the same logic before creating a new session (quiet-mode, kill-only). Scoping to current harnessDir prevents cross-repo false positives.
-- **D3 — Orphan detection heuristic.** A `harness-<runId>` tmux session is classified as orphan when **either** (a) `.harness/<runId>/` does not exist in the current harnessDir, **or** (b) `.harness/<runId>/run.lock` is absent, **or** (c) `repo.lock` liveness is `stale` (reuses existing `assessLiveness` / `checkLockStatus`) AND the stored `lock.runId` matches that session. Sessions unrelated to the current harnessDir (their runId dir lives elsewhere) are reported as "unknown — skipped" rather than killed.
+- **D2 — `cleanup` command + opportunistic sweep on `start`.** A new `phase-harness cleanup` command enumerates `harness-*` tmux sessions and, scoped to the current `harnessDir`, classifies each as `active` / `orphan` / `unknown` based on local `.harness/<runId>/` metadata. `start` calls the same function with `{ quiet: true, yes: true }` before creating a new session. Scoping to the current harnessDir prevents cross-repo false positives.
+- **D3 — Orphan detection rule (deterministic, local-metadata-proven).** A `harness-<runId>` tmux session is classified strictly by whether local metadata in the **current** `harnessDir` proves ownership:
+  - **`unknown` (always skipped — never killed).** `.harness/<runId>/` does not exist under the current `harnessDir`. The session may belong to another repo/worktree; we cannot prove it is ours, so we report and leave it alone. This is the single source of the `unknown` classification — the earlier wording that also listed "run dir missing" under `orphan` is removed.
+  - **`active` (never killed).** `.harness/<runId>/` exists AND `.harness/<runId>/run.lock` exists AND `checkLockStatus(harnessDir)` returns `active` AND `lock.runId === runId`.
+  - **`orphan` (killed).** `.harness/<runId>/` exists AND **one of**:
+    - (i) `run.lock` is missing, OR
+    - (ii) `repo.lock` is missing, OR
+    - (iii) `repo.lock` liveness is `stale` (regardless of which runId it stores), OR
+    - (iv) `repo.lock` liveness is `active` but `lock.runId !== runId` — this tmux session is a leftover from a prior run in the same harnessDir; the currently-active run is a different one, so the session is provably abandoned.
+  This closes the previously-undefined case where `run.lock` exists locally but `repo.lock` is absent or points to a different runId.
 - **D4 — Random token encoding.** 4 hex chars from `crypto.randomBytes(2).toString('hex')`. Kept hex (not base36) to preserve the slug character class `[a-z0-9-]` already assumed throughout the codebase (e.g. tmux session names, path joins). No userland-visible change in character set.
 - **D5 — Backward compatibility.** Existing runs under `.harness/` keep their current runIds (no migration needed — runIds are opaque strings downstream). `generateRunId` signature unchanged. `list` / `resume` / `status` continue to read any runId format. Only the generator shape changes; tests are updated accordingly.
 
@@ -26,7 +34,7 @@ Key decisions:
 
 In scope:
 1. `generateRunId` always appends a 4-hex random token. Existing dedup loop preserved as fallback only.
-2. New module `src/orphan-cleanup.ts` (or a function inside `src/tmux.ts`) exposing: `listHarnessSessions()`, `classifyOrphans(harnessDir, sessions)`, `cleanupOrphans(harnessDir, { dryRun?, yes? })`.
+2. New module `src/orphan-cleanup.ts` (or a function inside `src/tmux.ts`) exposing: `listHarnessSessions()`, `classifyOrphans(harnessDir, sessions)`, `cleanupOrphans(harnessDir, { dryRun?, yes?, quiet? })`. The same function serves both the explicit `cleanup` command and the start-time sweep — no separate helper. Scoping is implicit and fixed at current-`harnessDir`-only (see D3).
 3. New CLI: `phase-harness cleanup [--dry-run] [--yes]` that prints a classification table and kills confirmed orphans (interactive by default; `--yes` skips prompt).
 4. `startCommand` invokes the cleanup logic in quiet/auto mode before creating a new tmux session, scoped to current `harnessDir`.
 5. Unit tests: updated `generateRunId` tests (accept random suffix), new tests for orphan classification (mock `tmux ls` + filesystem state).
@@ -47,16 +55,17 @@ Out of scope:
 ### Orphan cleanup
 
 - `listHarnessSessions()`: runs `tmux ls -F '#{session_name}'`, filters by `^harness-.+$`, returns the trailing runId for each.
-- `classifyOrphans(harnessDir, sessions)`: for each runId, attempts to read `.harness/<runId>/run.lock` and `.harness/repo.lock`. Returns `{ runId, sessionName, status: 'active' | 'orphan' | 'unknown', reason }`.
-  - `active`: run.lock present AND repo.lock liveness === 'active' AND `lock.runId === runId`.
-  - `orphan`: run dir missing, run.lock missing, or liveness === 'stale'.
-  - `unknown`: run dir missing entirely (could be another repo's session) — reported but **not** killed by default.
-- `cleanupOrphans(harnessDir, opts)`:
-  - Prints a formatted table (sessionName / runId / status / reason).
-  - In interactive mode, prompts `[y/N]` for the orphan set. `--yes` bypasses.
-  - For each `orphan`, calls `killSession(sessionName)` (already exists in `src/tmux.ts`). Silently continues on errors.
-  - Does **not** touch `unknown` unless a future flag (e.g. `--aggressive`) is added — deliberately omitted for this iteration.
-- Opportunistic sweep in `startCommand`: calls `cleanupOrphans(harnessDir, { quiet: true, yes: true, scope: 'current-dir-only' })` after `runPreflight` and before `generateRunId`. Failure here is logged as a warning but never aborts `start`.
+- `classifyOrphans(harnessDir, sessions)`: for each runId, probes `.harness/<runId>/` (existence), `.harness/<runId>/run.lock` (existence), and `checkLockStatus(harnessDir)` (liveness + stored runId). Returns `{ runId, sessionName, status: 'active' | 'orphan' | 'unknown', reason }` per the deterministic rule in D3. **Single source of `unknown`**: run dir missing under current `harnessDir`. **`orphan` sub-reasons** (for the printed table): `no-run-lock`, `no-repo-lock`, `repo-lock-stale`, `repo-lock-different-run`.
+- `cleanupOrphans(harnessDir, opts)` — one function used by both the `cleanup` command and the start-time sweep. Options:
+  - `dryRun?: boolean` — classify + print, no kills.
+  - `yes?: boolean` — skip the interactive `[y/N]` prompt.
+  - `quiet?: boolean` — suppress the classification table and "nothing to clean" messages; errors still go to stderr. Used by the start-time sweep.
+  Behavior:
+  - Builds the classification table. Unless `quiet`, prints it (sessionName / runId / status / reason).
+  - In interactive mode (no `yes`, no `dryRun`), prompts `[y/N]` for the orphan set.
+  - For each `orphan`, calls `killSession(sessionName)` (from `src/tmux.ts`). Silently continues on per-session errors.
+  - Does **not** touch `unknown` — no flag in this iteration. Even aggressive cleanup would require cross-repo registry data not yet modeled.
+- Opportunistic sweep in `startCommand`: calls `cleanupOrphans(harnessDir, { quiet: true, yes: true })` after `runPreflight` and before `generateRunId`. No `scope` parameter exists; scoping is built into `classifyOrphans`. Failure here is logged as a warning but never aborts `start`.
 
 ### CLI wiring (`bin/harness.ts`)
 
