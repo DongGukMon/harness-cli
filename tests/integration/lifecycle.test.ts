@@ -6,6 +6,9 @@ import { createTestRepo } from '../helpers/test-repo.js';
 
 // Use the built CLI
 const CLI_PATH = resolve(process.cwd(), 'dist/bin/harness.js');
+const PKG_VERSION = (JSON.parse(
+  readFileSync(resolve(process.cwd(), 'package.json'), 'utf-8')
+) as { version: string }).version;
 
 function runCli(args: string[], options: { cwd?: string; env?: Record<string, string> } = {}) {
   return spawnSync('node', [CLI_PATH, ...args], {
@@ -40,7 +43,7 @@ describe('CLI lifecycle integration', () => {
   it('harness --version outputs version', () => {
     const result = runCli(['--version']);
     expect(result.status).toBe(0);
-    expect(result.stdout.trim()).toBe('0.1.0');
+    expect(result.stdout.trim()).toBe(PKG_VERSION);
   });
 
   it('harness list shows empty in fresh repo', () => {

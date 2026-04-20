@@ -13,6 +13,7 @@ import { InputManager } from '../input.js';
 import { runRunnerAwarePreflight } from '../preflight.js';
 import { REQUIRED_PHASE_KEYS, getEffectiveReopenTarget, getRequiredPhaseKeys } from '../config.js';
 import { createSessionLogger } from '../logger.js';
+import { HARNESS_VERSION } from '../version.js';
 import { codexHomeFor } from '../runners/codex-isolation.js';
 import type { SessionLogger, HarnessState } from '../types.js';
 import { promptForTask } from '../task-prompt.js';
@@ -315,7 +316,7 @@ export function buildConfigCancelHandler(args: ConfigCancelHandlerArgs): () => v
         logger.logEvent({ event: 'session_resumed', fromPhase: state.currentPhase, stateStatus: 'paused' });
       } else {
         logger.writeMeta({ task: state.task, codexHome });
-        logger.logEvent({ event: 'session_start', task: state.task, autoMode: state.autoMode, baseCommit: state.baseCommit, harnessVersion: '0.1.0' });
+        logger.logEvent({ event: 'session_start', task: state.task, autoMode: state.autoMode, baseCommit: state.baseCommit, harnessVersion: HARNESS_VERSION });
       }
     }
     logger.logEvent({ event: 'session_end', status: 'paused', totalWallMs: Date.now() - logger.getStartedAt() });
@@ -352,7 +353,7 @@ export async function bootstrapSessionLogger(
     logger.logEvent({ event: 'session_resumed', fromPhase: state.currentPhase, stateStatus: state.status });
   } else {
     logger.writeMeta({ task: state.task, codexHome });
-    logger.logEvent({ event: 'session_start', task: state.task, autoMode: state.autoMode, baseCommit: state.baseCommit, harnessVersion: '0.1.0' });
+    logger.logEvent({ event: 'session_start', task: state.task, autoMode: state.autoMode, baseCommit: state.baseCommit, harnessVersion: HARNESS_VERSION });
   }
   return logger;
 }

@@ -10,13 +10,14 @@ import { innerCommand } from '../src/commands/inner.js';
 import { installSkillsCommand } from '../src/commands/install-skills.js';
 import { uninstallSkillsCommand } from '../src/commands/uninstall-skills.js';
 import { cleanupCommand } from '../src/commands/cleanup.js';
+import { HARNESS_VERSION } from '../src/version.js';
 
 const program = new Command();
 
 program
   .name('phase-harness')
   .description('AI agent harness orchestrator')
-  .version('0.1.0')
+  .version(HARNESS_VERSION)
   .option('--root <dir>', 'explicit .harness/ parent directory');
 
 program

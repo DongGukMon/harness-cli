@@ -3,6 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import type { SessionLogger, LogEvent, SessionMeta, HarnessState, DistributiveOmit } from './types.js';
+import { HARNESS_VERSION } from './version.js';
 
 export function computeRepoKey(harnessDir: string): string {
   return createHash('sha1').update(harnessDir).digest('hex').slice(0, 12);
@@ -90,7 +91,7 @@ export class FileSessionLogger implements SessionLogger {
         task: partial.task,
         startedAt: partial.startedAt ?? now,
         autoMode: partial.autoMode ?? this.options.autoMode ?? false,
-        harnessVersion: partial.harnessVersion ?? this.options.harnessVersion ?? '0.1.0',
+        harnessVersion: partial.harnessVersion ?? this.options.harnessVersion ?? HARNESS_VERSION,
         resumedAt: partial.resumedAt ?? [],
         ...(partial.bootstrapOnResume ? { bootstrapOnResume: true } : {}),
         ...(partial.codexHome !== undefined ? { codexHome: partial.codexHome } : {}),
@@ -123,7 +124,7 @@ export class FileSessionLogger implements SessionLogger {
           task: update.task ?? '',
           startedAt: now,
           autoMode: this.options.autoMode ?? false,
-          harnessVersion: this.options.harnessVersion ?? '0.1.0',
+          harnessVersion: this.options.harnessVersion ?? HARNESS_VERSION,
           resumedAt: [],
           bootstrapOnResume: true,
           ...(update.codexHome !== undefined ? { codexHome: update.codexHome } : {}),
