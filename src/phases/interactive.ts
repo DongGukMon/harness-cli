@@ -1,16 +1,16 @@
 import fs from 'fs';
 import path from 'path';
 import { randomUUID } from 'crypto';
-import { execSync } from 'child_process';
 import chokidar from 'chokidar';
 import type { HarnessState, InteractivePhase, Artifacts } from '../types.js';
 import { getPhaseArtifactFiles, getPresetById } from '../config.js';
-import { writeState } from '../state.js';
+import { writeState, syncLegacyMirror } from '../state.js';
 import { getHead } from '../git.js';
 import { isPidAlive } from '../process.js';
 import { assembleInteractivePrompt } from '../context/assembler.js';
 import { runClaudeInteractive } from '../runners/claude.js';
 import { isValidChecklistSchema } from './checklist.js';
+import { resolveArtifact } from '../artifact.js';
 
 /**
  * Inline Complexity-section check (spec R5). Kept here instead of importing
@@ -67,7 +67,7 @@ export function preparePhase(
     for (const key of artifactKeys) {
       const relPath = state.artifacts[key];
       if (!relPath) continue;
-      const absPath = path.isAbsolute(relPath) ? relPath : path.join(cwd, relPath);
+      const absPath = resolveArtifact(state, relPath, cwd);
       try { fs.unlinkSync(absPath); } catch { /* ignore */ }
     }
   }
@@ -80,15 +80,13 @@ export function preparePhase(
     [String(phase)]: Math.floor(Date.now() / 1000) * 1000,
   };
 
-  // Phase 5: update implRetryBase to current HEAD
+  // Phase 5: update implRetryBase for each tracked repo to current HEAD
   if (phase === 5) {
-    try {
-      const head = getHead(cwd);
-      state.implRetryBase = head;
-      if (state.trackedRepos?.[0]) {
-        state.trackedRepos[0].implRetryBase = head;
-      }
-    } catch { /* no git */ }
+    for (const r of state.trackedRepos) {
+      try { r.implRetryBase = getHead(r.path); } catch { /* no git */ }
+      r.implHead = null;
+    }
+    syncLegacyMirror(state);
   }
 
   // Clear the reopen flag after using it
@@ -135,7 +133,7 @@ export function validatePhaseArtifacts(
 
     for (const key of artifactKeys) {
       const relPath = state.artifacts[key];
-      const absPath = path.isAbsolute(relPath) ? relPath : path.join(cwd, relPath);
+      const absPath = resolveArtifact(state, relPath, cwd);
       try {
         const stat = fs.statSync(absPath);
         // Must be non-empty. Freshness is proven by sentinel attemptId, not mtime:
@@ -149,18 +147,14 @@ export function validatePhaseArtifacts(
 
     // Phase 3: validate checklist.json schema
     if (phase === 3) {
-      const checklistPath = path.isAbsolute(state.artifacts.checklist)
-        ? state.artifacts.checklist
-        : path.join(cwd, state.artifacts.checklist);
+      const checklistPath = resolveArtifact(state, state.artifacts.checklist, cwd);
       if (!isValidChecklistSchema(checklistPath)) return false;
     }
 
     // Phase 1 (both full + light flows): spec must contain a valid
     // `## Complexity` section with one of Small/Medium/Large (spec R5).
     if (phase === 1) {
-      const specPath = path.isAbsolute(state.artifacts.spec)
-        ? state.artifacts.spec
-        : path.join(cwd, state.artifacts.spec);
+      const specPath = resolveArtifact(state, state.artifacts.spec, cwd);
       try {
         const body = fs.readFileSync(specPath, 'utf-8');
         if (!specHasValidComplexity(body)) return false;
@@ -171,14 +165,10 @@ export function validatePhaseArtifacts(
 
     // Light + phase 1: checklist schema + '## Implementation Plan' header
     if (state.flow === 'light' && phase === 1) {
-      const checklistPath = path.isAbsolute(state.artifacts.checklist)
-        ? state.artifacts.checklist
-        : path.join(cwd, state.artifacts.checklist);
+      const checklistPath = resolveArtifact(state, state.artifacts.checklist, cwd);
       if (!isValidChecklistSchema(checklistPath)) return false;
 
-      const specPath = path.isAbsolute(state.artifacts.spec)
-        ? state.artifacts.spec
-        : path.join(cwd, state.artifacts.spec);
+      const specPath = resolveArtifact(state, state.artifacts.spec, cwd);
       try {
         const body = fs.readFileSync(specPath, 'utf-8');
         if (!/^##\s+Implementation\s+Plan\s*$/m.test(body)) return false;
@@ -192,10 +182,22 @@ export function validatePhaseArtifacts(
 
   if (phase === 5) {
     void runDir;
+    // Zero-commit reopen: if a prior attempt already set implHead on some repo, accept.
+    if (state.trackedRepos.some(r => r.implHead !== null)) return true;
     try {
-      const head = execSync('git rev-parse HEAD', { cwd, encoding: 'utf-8' }).trim();
-      if (head !== state.implRetryBase) return true;
-      return state.implCommit !== null;
+      let anyAdvanced = false;
+      for (const r of state.trackedRepos) {
+        const h = getHead(r.path);
+        if (h !== r.implRetryBase) {
+          r.implHead = h;
+          anyAdvanced = true;
+        } else {
+          r.implHead = null;
+        }
+      }
+      if (!anyAdvanced) return false;
+      syncLegacyMirror(state); // sets state.implCommit = trackedRepos[0].implHead
+      return true;
     } catch {
       return false;
     }

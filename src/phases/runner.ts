@@ -12,9 +12,9 @@ import {
   getPresetById,
   getReopenTarget,
 } from '../config.js';
-import { writeState } from '../state.js';
+import { writeState, syncLegacyMirror } from '../state.js';
 import { getHead, isPathGitignored } from '../git.js';
-import { commitEvalReport, normalizeArtifactCommit } from '../artifact.js';
+import { commitEvalReport, normalizeArtifactCommit, resolveArtifact } from '../artifact.js';
 import { runInteractivePhase } from './interactive.js';
 import { runGatePhase } from './gate.js';
 import { runVerifyPhase } from './verify.js';
@@ -176,6 +176,8 @@ function normalizeInteractiveArtifacts(
   const artifactKeys = getPhaseArtifactFiles(state.flow, phase);
   if (artifactKeys.length === 0) return;
 
+  const docsRoot = state.trackedRepos?.[0]?.path || cwd;
+
   for (const key of artifactKeys) {
     const relPath = state.artifacts[key];
     if (!relPath) continue;
@@ -183,7 +185,7 @@ function normalizeInteractiveArtifacts(
     if (relPath.startsWith('.harness/')) continue;
 
     const message = `harness[${state.runId}]: Phase ${phase} — ${String(key)}`;
-    normalizeArtifactCommit(relPath, message, cwd);
+    normalizeArtifactCommit(relPath, message, docsRoot);
   }
 }
 
@@ -210,7 +212,8 @@ function writeSyntheticEvalReport(
 
 function savePausedAtHead(state: HarnessState, cwd: string): void {
   try {
-    state.pausedAtHead = getHead(cwd);
+    const docsRoot = state.trackedRepos?.[0]?.path || cwd;
+    state.pausedAtHead = getHead(docsRoot);
   } catch {
     // git not available — leave as null
   }
@@ -446,10 +449,11 @@ export async function handleInteractivePhase(
 
       // Update commit anchors (only AFTER commit succeeds)
       try {
-        const head = getHead(cwd);
+        const docsRoot = state.trackedRepos?.[0]?.path || cwd;
+        const head = getHead(docsRoot);
         if (phase === 1) state.specCommit = head;
         if (phase === 3) state.planCommit = head;
-        if (phase === 5) state.implCommit = head;
+        if (phase === 5) syncLegacyMirror(state); // implHead already set by validatePhaseArtifacts
       } catch {
         // getHead unavailable — leave anchor as-is
       }
@@ -979,10 +983,12 @@ export async function handleVerifyPhase(
     // Emit verify_result before commit attempt (runVerifyPhase did pass)
     logger.logEvent({ event: 'verify_result', passed: true, retryIndex, durationMs });
 
+    const docsRoot = state.trackedRepos?.[0]?.path || cwd;
+
     // Commit the eval report artifact (spec requires committed eval report before Phase 7)
     let evalCommitResult: 'committed' | 'skipped';
     try {
-      evalCommitResult = commitEvalReport(state, cwd);
+      evalCommitResult = commitEvalReport(state, docsRoot);
     } catch (err) {
       // Commit failure → phase goes to error, pendingAction for retry
       printError(`Failed to commit eval report: ${(err as Error).message}`);
@@ -1004,7 +1010,7 @@ export async function handleVerifyPhase(
     // Clear any stale anchors when the commit was skipped (gitignored path).
     if (evalCommitResult === 'committed') {
       try {
-        const head = getHead(cwd);
+        const head = getHead(docsRoot);
         state.evalCommit = head;
         state.verifiedAtHead = head;
       } catch {
@@ -1182,19 +1188,21 @@ export async function forcePassVerify(
   // Emit force_pass as the sole terminal event for this path
   logger.logEvent({ event: 'force_pass', phase: 6, by });
 
+  const docsRoot = state.trackedRepos?.[0]?.path || cwd;
+
   // Write synthetic eval report
-  writeSyntheticEvalReport(state.artifacts.evalReport, state.runId, cwd);
+  writeSyntheticEvalReport(state.artifacts.evalReport, state.runId, docsRoot);
 
   // Normalize the synthetic report — failure must mark phase as error (not silently skip)
   const message = `harness[${state.runId}]: Phase 6 — synthetic eval report (skip)`;
-  const synthCommitted = !isPathGitignored(state.artifacts.evalReport, cwd);
+  const synthCommitted = !isPathGitignored(state.artifacts.evalReport, docsRoot);
   if (!synthCommitted) {
     process.stderr.write(
       `⚠️  eval report path '${state.artifacts.evalReport}' is gitignored — skipping commit (evalCommit will remain null).\n`
     );
   } else {
     try {
-      normalizeArtifactCommit(state.artifacts.evalReport, message, cwd);
+      normalizeArtifactCommit(state.artifacts.evalReport, message, docsRoot);
     } catch (err) {
       printError(`Failed to commit synthetic eval report: ${(err as Error).message}`);
       state.phases['6'] = 'error';
@@ -1209,7 +1217,7 @@ export async function forcePassVerify(
   // Clear any stale anchors when skipped (gitignored path).
   if (synthCommitted) {
     try {
-      const head = getHead(cwd);
+      const head = getHead(docsRoot);
       state.evalCommit = head;
       state.verifiedAtHead = head;
     } catch {
