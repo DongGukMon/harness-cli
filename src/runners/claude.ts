@@ -21,6 +21,7 @@ export async function runClaudeInteractive(
   harnessDir: string,
   runDir: string,
   promptFile: string,
+  cwd: string,
   resume: boolean = false,
 ): Promise<ClaudeInteractiveResult> {
   const sessionName = state.tmuxSession;
@@ -67,7 +68,11 @@ export async function runClaudeInteractive(
     ? (attemptId ? `--resume ${attemptId} ` : '')
     : (attemptId ? `--session-id ${attemptId} ` : '');
   const claudeArgs = `--dangerously-skip-permissions ${sessionFlag}--model ${preset.model} --effort ${preset.effort} @${path.resolve(promptFile)}`;
-  const wrappedCmd = `sh -c 'echo $$ > ${pidFile}; exec claude ${claudeArgs}'`;
+  // `cd "<cwd>" &&` pins Claude's process cwd to the harness anchor; without it Claude
+  // inherits the tmux pane's shell cwd (wrong in reused-tmux mode) and relative artifact
+  // paths land outside the tree that `validatePhaseArtifacts` scans. `&&` chaining makes
+  // a failed cd abort instead of silently exec'ing claude in the wrong directory.
+  const wrappedCmd = `sh -c 'cd "${cwd}" && echo $$ > ${pidFile} && exec claude ${claudeArgs}'`;
   sendKeysToPane(sessionName, workspacePane, wrappedCmd);
 
   // Capture Claude PID

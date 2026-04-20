@@ -234,7 +234,7 @@ export async function runInteractivePhase(
   // Dispatch to runner
   if (preset.runner === 'claude') {
     const { pid: claudePid } = await runClaudeInteractive(
-      phase, updatedState, preset, harnessDir, runDir, promptFile, resume,
+      phase, updatedState, preset, harnessDir, runDir, promptFile, cwd, resume,
     );
     const sentinelPath = path.join(runDir, `phase-${phase}.done`);
     const resolvedAttemptId = updatedState.phaseAttemptId[String(phase)] ?? attemptId;

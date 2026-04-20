@@ -179,7 +179,7 @@ export async function startCommand(task: string | undefined, options: StartOptio
       const innerCmdWithPane = `${innerCmd} --control-pane ${controlPaneId}`;
       sendKeys(sessionName, '0', innerCmdWithPane);
     } else {
-      const ctrlWindowId = createWindow(sessionName, 'harness-ctrl', '');
+      const ctrlWindowId = createWindow(sessionName, 'harness-ctrl', '', cwd);
       const controlPaneId = getDefaultPaneId(sessionName, ctrlWindowId);
       sendKeys(sessionName, ctrlWindowId, `${innerCmd} --control-pane ${controlPaneId}`);
       state.tmuxControlWindow = ctrlWindowId;

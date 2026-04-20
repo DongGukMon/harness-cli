@@ -25,11 +25,13 @@ export function sessionExists(name: string): boolean {
 /**
  * Create a new window in an existing session with a command.
  * Returns the tmux window ID (e.g., "@1").
+ * `cwd` pins the window's working directory with `-c` so reused-tmux mode
+ * doesn't inherit the user's shell cwd (which breaks relative artifact paths).
  */
-export function createWindow(session: string, windowName: string, command: string): string {
+export function createWindow(session: string, windowName: string, command: string, cwd: string): string {
   const cmdPart = command ? ` ${esc(command)}` : '';
   const output = execSync(
-    `tmux new-window -t ${esc(session)} -n ${esc(windowName)} -P -F '#{window_id}'${cmdPart}`,
+    `tmux new-window -t ${esc(session)} -n ${esc(windowName)} -c ${esc(cwd)} -P -F '#{window_id}'${cmdPart}`,
     { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] }
   );
   return output.trim();
@@ -86,17 +88,21 @@ export function sendKeys(session: string, windowTarget: string, keys: string): v
 
 /**
  * Split a pane horizontally or vertically. Returns the new pane ID (e.g., "%5").
+ * `cwd` pins the new pane's working directory with `-c`; without it the split
+ * inherits the target pane's cwd, which in reused-tmux mode is the user's shell
+ * — breaking relative artifact paths Claude writes.
  */
 export function splitPane(
   _session: string,
   targetPane: string,
   direction: 'h' | 'v',
-  percent: number
+  percent: number,
+  cwd: string,
 ): string {
   // Pane IDs (%N) are globally unique in tmux — target directly, no session prefix needed
   const flag = direction === 'h' ? '-h' : '-v';
   const output = execSync(
-    `tmux split-window -t ${escSmart(targetPane)} ${flag} -p ${percent} -P -F '#{pane_id}'`,
+    `tmux split-window -t ${escSmart(targetPane)} ${flag} -p ${percent} -c ${esc(cwd)} -P -F '#{pane_id}'`,
     { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] }
   );
   return output.trim();
