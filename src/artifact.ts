@@ -1,7 +1,7 @@
 import { execSync } from 'child_process';
 import { existsSync, unlinkSync } from 'fs';
 import { join } from 'path';
-import { getStagedFiles, getFileStatus, isStagedDeletion } from './git.js';
+import { getStagedFiles, getFileStatus, isStagedDeletion, isPathGitignored } from './git.js';
 import type { HarnessState } from './types.js';
 
 function exec(cmd: string, cwd?: string): string {
@@ -131,9 +131,16 @@ export function runPhase6Preconditions(evalReportPath: string, runId: string, cw
   void runId;
 }
 
-export function commitEvalReport(state: HarnessState, cwd: string): void {
+export function commitEvalReport(state: HarnessState, cwd: string): 'committed' | 'skipped' {
   const filePath = state.artifacts.evalReport;
+  if (isPathGitignored(filePath, cwd)) {
+    process.stderr.write(
+      `⚠️  eval report path '${filePath}' is gitignored — skipping commit (evalCommit will remain null).\n`
+    );
+    return 'skipped';
+  }
   const k = state.verifyRetries + 1;
   const message = `harness[${state.runId}]: Phase 6 — rev ${k} eval report`;
   normalizeArtifactCommit(filePath, message, cwd);
+  return 'committed';
 }

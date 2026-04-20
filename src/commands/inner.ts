@@ -36,6 +36,13 @@ export async function innerCommand(runId: string, options: InnerOptions = {}): P
     process.exit(1);
   }
 
+  // D4 live path: detect inconsistent state and synthesize failed phase immediately.
+  let inconsistentPauseDetected = false;
+  if (state.status === 'paused' && state.pendingAction === null) {
+    synthesizeFailedFromInconsistentPause(state, runDir);
+    inconsistentPauseDetected = true;
+  }
+
   // 2. Claim lock ownership (outer → inner handoff)
   updateLockPid(harnessDir, process.pid);
 
@@ -69,7 +76,7 @@ export async function innerCommand(runId: string, options: InnerOptions = {}): P
     ? fs.readFileSync(taskMdPath, 'utf-8').trim()
     : '';
 
-  if (!existingTask) {
+  if (!existingTask && !inconsistentPauseDetected) {
     if (state.tmuxControlPane) {
       selectPane(state.tmuxSession, state.tmuxControlPane);
     }
@@ -113,8 +120,12 @@ export async function innerCommand(runId: string, options: InnerOptions = {}): P
     const pendingPath = join(runDir, 'pending-action.json');
     try { fs.unlinkSync(pendingPath); } catch { /* ignore */ }
   } else {
-    // Resume or task-provided start: consume pending actions normally
-    consumePendingAction(runDir, state);
+    if (inconsistentPauseDetected) {
+      // D4a: delete stale file-based actions — the failed terminal UI must be unconditional.
+      try { fs.unlinkSync(join(runDir, 'pending-action.json')); } catch { /* best-effort */ }
+    } else {
+      consumePendingAction(runDir, state);
+    }
   }
 
   // 5. Register signal handlers (ADR-7: after task capture)
@@ -169,26 +180,29 @@ export async function innerCommand(runId: string, options: InnerOptions = {}): P
   if (reopenTarget !== null) remainingSet.add(String(reopenTarget));
   const remainingPhases = [...remainingSet];
 
-  // Step 5.8: Prompt for model selection. Snapshot prev presets to detect changes for §4.8 invalidation.
-  const prevPresets = { ...state.phasePresets };
-  state.phasePresets = await promptModelConfig(state.phasePresets, inputManager, remainingPhases, state.flow);
-  invalidatePhaseSessionsOnPresetChange(state, prevPresets, runDir);
+  // Step 5.8 + 5.9: Skip model config and preflight on synthesized failure (D4a).
+  if (!inconsistentPauseDetected) {
+    // Step 5.8: Prompt for model selection. Snapshot prev presets to detect changes for §4.8 invalidation.
+    const prevPresets = { ...state.phasePresets };
+    state.phasePresets = await promptModelConfig(state.phasePresets, inputManager, remainingPhases, state.flow);
+    invalidatePhaseSessionsOnPresetChange(state, prevPresets, runDir);
 
-  // Clear reopen_config pendingAction (written by onConfigCancel) — model selection succeeded
-  if (state.pendingAction?.type === 'reopen_config') {
-    state.pendingAction = null;
-    state.pauseReason = null;
-    state.status = 'in_progress';
-  }
-  writeState(runDir, state);
+    // Clear reopen_config pendingAction (written by onConfigCancel) — model selection succeeded
+    if (state.pendingAction?.type === 'reopen_config') {
+      state.pendingAction = null;
+      state.pauseReason = null;
+      state.status = 'in_progress';
+    }
+    writeState(runDir, state);
 
-  // Step 5.9: Runner-aware preflight
-  try {
-    runRunnerAwarePreflight(state.phasePresets, remainingPhases);
-  } catch (err) {
-    process.stderr.write(`Preflight failed: ${(err as Error).message}\n`);
-    inputManager.onConfigCancel?.();
-    return; // onConfigCancel calls process.exit(0)
+    // Step 5.9: Runner-aware preflight
+    try {
+      runRunnerAwarePreflight(state.phasePresets, remainingPhases);
+    } catch (err) {
+      process.stderr.write(`Preflight failed: ${(err as Error).message}\n`);
+      inputManager.onConfigCancel?.();
+      return; // onConfigCancel calls process.exit(0)
+    }
   }
 
   // Step 5.10: Enter phase loop mode
@@ -203,7 +217,11 @@ export async function innerCommand(runId: string, options: InnerOptions = {}): P
 
   // 6. Run phase loop, then route to terminal-state UI based on outcome
   try {
-    await runPhaseLoop(state, harnessDir, runDir, cwd, inputManager, logger, sidecarReplayAllowed);
+    // D4a: skip runPhaseLoop on synthesized failure — state already has phases[N]='failed',
+    // so anyPhaseFailed fires and routes to enterFailedTerminalState.
+    if (!inconsistentPauseDetected) {
+      await runPhaseLoop(state, harnessDir, runDir, cwd, inputManager, logger, sidecarReplayAllowed);
+    }
 
     const { enterCompleteTerminalState, enterFailedTerminalState, anyPhaseFailed } =
       await import('../phases/terminal-ui.js');
@@ -371,4 +389,15 @@ function consumePendingAction(runDir: string, state: HarnessState): void {
     // Best-effort: corrupted pending action is skipped
     try { fs.unlinkSync(pendingPath); } catch { /* ignore */ }
   }
+}
+
+function synthesizeFailedFromInconsistentPause(state: HarnessState, runDir: string): void {
+  process.stderr.write(
+    `⚠️  Run ${state.runId} detected inconsistent pause state (paused + pendingAction=null); ` +
+    `synthesizing failed phase ${state.currentPhase} and routing to failed terminal UI.\n`
+  );
+  state.phases[String(state.currentPhase)] = 'failed';
+  state.status = 'in_progress';
+  state.pauseReason = null;
+  writeState(runDir, state);
 }

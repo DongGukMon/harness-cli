@@ -85,6 +85,17 @@ export function getFileStatus(filePath: string, cwd?: string): string {
   }
 }
 
+// Returns true if the given relative path is gitignored in the repo.
+// Conservative fallback: returns false on any error (git absent, not in repo, etc.)
+export function isPathGitignored(relPath: string, cwd?: string): boolean {
+  try {
+    exec(`git check-ignore -q -- "${relPath}"`, cwd);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // Returns true iff the file is staged for deletion in the index.
 export function isStagedDeletion(filePath: string, cwd?: string): boolean {
   try {

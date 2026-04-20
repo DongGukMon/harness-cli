@@ -183,7 +183,7 @@ Inputs and outputs:
 - sidecars: `verify-result.json`, `verify-feedback.md`, `verify-error.md`
 
 Before verify runs, harness enforces a clean tree outside the eval report path and cleans/replaces any existing eval report artifact as needed.
-A verify pass auto-commits the eval report.
+A verify pass auto-commits the eval report. If the eval report path is covered by `.gitignore`, the commit is skipped (a one-line warning is emitted to stderr; `evalCommit` stays `null`).
 A verify fail copies the eval report to `verify-feedback.md` and reopens P5.
 
 ---

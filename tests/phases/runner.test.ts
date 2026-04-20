@@ -44,7 +44,7 @@ vi.mock('../../src/artifact.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../src/artifact.js')>();
   return {
     ...actual,
-    commitEvalReport: vi.fn(),
+    commitEvalReport: vi.fn().mockReturnValue('committed'),
     normalizeArtifactCommit: vi.fn().mockReturnValue(true),
     runPhase6Preconditions: vi.fn(),
   };
@@ -60,6 +60,7 @@ vi.mock('../../src/git.js', () => ({
   getFileStatus: vi.fn(),
   generateRunId: vi.fn(),
   detectExternalCommits: vi.fn(),
+  isPathGitignored: vi.fn().mockReturnValue(false),
 }));
 
 vi.mock('../../src/state.js', async (importOriginal) => {

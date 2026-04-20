@@ -166,7 +166,7 @@ Phase 6은 항상 번들된 `harness-verify.sh` 스크립트를 실행합니다.
 
 verify 실행 전에는 eval report 경로를 제외한 working tree가 깨끗해야 하며,
 기존 eval report가 있으면 상태에 맞게 정리/교체합니다.
-verify PASS면 eval report를 auto-commit하고, FAIL이면 `verify-feedback.md`를 남기고 P5를 재오픈합니다.
+verify PASS면 eval report를 auto-commit합니다. 단, eval report 경로가 `.gitignore` 대상이면 commit을 skip하고 경고를 stderr에 한 줄 남깁니다(`evalCommit`은 `null`로 유지). FAIL이면 `verify-feedback.md`를 남기고 P5를 재오픈합니다.
 
 ---
 

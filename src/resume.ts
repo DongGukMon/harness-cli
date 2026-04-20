@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, statSync, unlinkSync } from 'fs';
 import { execSync } from 'child_process';
 import { isAbsolute, join } from 'path';
-import { getHead, isAncestor, detectExternalCommits } from './git.js';
+import { getHead, isAncestor, detectExternalCommits, isPathGitignored } from './git.js';
 import { readState, writeState } from './state.js';
 import { commitEvalReport, normalizeArtifactCommit } from './artifact.js';
 import { checkGateSidecars } from './phases/gate.js';
@@ -65,11 +65,14 @@ export async function resumeRun(
     return;
   }
 
-  // Step 5: Paused without pendingAction → error
+  // Step 5: Paused without pendingAction → non-interactive exit (D4b).
+  // State intentionally left as-is (paused+null) so the live path (inner.ts D4a)
+  // detects the inconsistency and shows the R/J/Q UI on next 'phase-harness resume'.
   if (state.status === 'paused' && state.pendingAction === null) {
     process.stderr.write(
-      `Run state is inconsistent: paused run has no pendingAction.\n` +
-      `Use 'phase-harness jump N' to re-run from a specific phase or delete .harness/${state.runId}/ to discard this run.\n`
+      `⚠️  Run ${state.runId} detected inconsistent pause state (paused + pendingAction=null); ` +
+      `non-interactive resume path — use 'phase-harness resume' (tmux live path) to get the R/J/Q recovery UI, ` +
+      `or 'phase-harness jump ${state.currentPhase}' to restart from this phase.\n`
     );
     process.exit(1);
   }
@@ -188,10 +191,15 @@ async function recoverGeneralState(
     const evalReportPath = join(cwd, state.artifacts.evalReport);
     if (isEvalReportValid(evalReportPath)) {
       try {
-        commitEvalReport(state, cwd);
-        const head = getHead(cwd);
-        state.evalCommit = head;
-        state.verifiedAtHead = head;
+        const result = commitEvalReport(state, cwd);
+        if (result === 'committed') {
+          const head = getHead(cwd);
+          state.evalCommit = head;
+          state.verifiedAtHead = head;
+        } else {
+          state.evalCommit = null;
+          state.verifiedAtHead = null;
+        }
         state.phases['6'] = 'completed';
         state.currentPhase = 7;
         writeState(runDir, state);
@@ -231,19 +239,25 @@ async function applyStoredVerifyResult(
 
   if (result.exitCode === 0 && isEvalReportValid(evalReportPath)) {
     // PASS: commit the eval report (normalize_artifact_commit), set anchors, advance
+    let evalCommitResult: 'committed' | 'skipped';
     try {
-      commitEvalReport(state, cwd);
+      evalCommitResult = commitEvalReport(state, cwd);
     } catch {
       // Commit failed — leave as error for runner to handle
       state.phases['6'] = 'error';
       writeState(runDir, state);
       return;
     }
-    try {
-      const head = getHead(cwd);
-      state.evalCommit = head;
-      state.verifiedAtHead = head;
-    } catch { /* leave as-is */ }
+    if (evalCommitResult === 'committed') {
+      try {
+        const head = getHead(cwd);
+        state.evalCommit = head;
+        state.verifiedAtHead = head;
+      } catch { /* leave as-is */ }
+    } else {
+      state.evalCommit = null;
+      state.verifiedAtHead = null;
+    }
     state.verifyRetries = 0;
     state.phases['6'] = 'completed';
     state.currentPhase = 7;
@@ -627,9 +641,15 @@ async function replayIncompleteSkip(
           `## Summary\n\nVERIFY SKIPPED\n`;
         writeFileSync(evalReportPath, report, 'utf-8');
       }
-      commit(state.artifacts.evalReport, `harness[${state.runId}]: Phase 6 — eval report (skip)`, cwd);
-      state.evalCommit = getHead(cwd);
-      state.verifiedAtHead = getHead(cwd);
+      if (!isPathGitignored(state.artifacts.evalReport, cwd)) {
+        commit(state.artifacts.evalReport, `harness[${state.runId}]: Phase 6 — eval report (skip)`, cwd);
+        state.evalCommit = getHead(cwd);
+        state.verifiedAtHead = getHead(cwd);
+      } else {
+        process.stderr.write(`⚠️  eval report path '${state.artifacts.evalReport}' is gitignored — skipping commit (evalCommit will remain null).\n`);
+        state.evalCommit = null;
+        state.verifiedAtHead = null;
+      }
       break;
     }
     case 2:

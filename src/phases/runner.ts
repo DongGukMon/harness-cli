@@ -13,7 +13,7 @@ import {
   getReopenTarget,
 } from '../config.js';
 import { writeState } from '../state.js';
-import { getHead } from '../git.js';
+import { getHead, isPathGitignored } from '../git.js';
 import { commitEvalReport, normalizeArtifactCommit } from '../artifact.js';
 import { runInteractivePhase } from './interactive.js';
 import { runGatePhase } from './gate.js';
@@ -242,13 +242,17 @@ export async function runPhaseLoop(
       continue;
     }
 
+    // D3: If the phase is already failed/error (set by a prior handler or synthesized),
+    // exit immediately so inner.ts post-loop classifier can route to terminal UI.
+    const phaseStatusAtLoopTop = state.phases[String(phase)];
+    if (phaseStatusAtLoopTop === 'failed' || phaseStatusAtLoopTop === 'error') return;
+
     renderControlPanel(state, logger, 'loop-top');
 
     if (isInteractivePhase(phase)) {
       await handleInteractivePhase(phase, state, harnessDir, runDir, cwd, logger);
-      // If state changed to paused or phase failed, check if we should stop
       if (state.status === 'paused') return;
-      if (state.phases[String(phase)] === 'failed') return;
+      if (state.phases[String(phase)] === 'failed' || state.phases[String(phase)] === 'error') return;
     } else if (isGatePhase(phase)) {
       await handleGatePhase(phase as GatePhase, state, harnessDir, runDir, cwd, inputManager, logger, sidecarReplayAllowed);
       if (state.status === 'paused') return;
@@ -258,9 +262,11 @@ export async function runPhaseLoop(
         writeState(runDir, state);
         return;
       }
+      if (state.phases[String(phase)] === 'error' || state.phases[String(phase)] === 'failed') return;
     } else if (isVerifyPhase(phase)) {
       await handleVerifyPhase(state, harnessDir, runDir, cwd, inputManager, logger);
       if (state.status === 'paused') return;
+      if (state.phases[String(phase)] === 'error' || state.phases[String(phase)] === 'failed') return;
     }
 
     logger.finalizeSummary(state);
@@ -974,8 +980,9 @@ export async function handleVerifyPhase(
     logger.logEvent({ event: 'verify_result', passed: true, retryIndex, durationMs });
 
     // Commit the eval report artifact (spec requires committed eval report before Phase 7)
+    let evalCommitResult: 'committed' | 'skipped';
     try {
-      commitEvalReport(state, cwd);
+      evalCommitResult = commitEvalReport(state, cwd);
     } catch (err) {
       // Commit failure → phase goes to error, pendingAction for retry
       printError(`Failed to commit eval report: ${(err as Error).message}`);
@@ -993,13 +1000,19 @@ export async function handleVerifyPhase(
       return;
     }
 
-    // Update evalCommit + verifiedAtHead AFTER commit succeeds
-    try {
-      const head = getHead(cwd);
-      state.evalCommit = head;
-      state.verifiedAtHead = head;
-    } catch {
-      // leave as-is
+    // Update evalCommit + verifiedAtHead only when a real commit was created.
+    // Clear any stale anchors when the commit was skipped (gitignored path).
+    if (evalCommitResult === 'committed') {
+      try {
+        const head = getHead(cwd);
+        state.evalCommit = head;
+        state.verifiedAtHead = head;
+      } catch {
+        // leave as-is
+      }
+    } else {
+      state.evalCommit = null;
+      state.verifiedAtHead = null;
     }
     state.verifyRetries = 0;
     state.phases['6'] = 'completed';
@@ -1174,24 +1187,37 @@ export async function forcePassVerify(
 
   // Normalize the synthetic report — failure must mark phase as error (not silently skip)
   const message = `harness[${state.runId}]: Phase 6 — synthetic eval report (skip)`;
-  try {
-    normalizeArtifactCommit(state.artifacts.evalReport, message, cwd);
-  } catch (err) {
-    printError(`Failed to commit synthetic eval report: ${(err as Error).message}`);
-    state.phases['6'] = 'error';
-    state.pendingAction = null;
-    savePausedAtHead(state, cwd);
-    writeState(runDir, state);
-    return;
+  const synthCommitted = !isPathGitignored(state.artifacts.evalReport, cwd);
+  if (!synthCommitted) {
+    process.stderr.write(
+      `⚠️  eval report path '${state.artifacts.evalReport}' is gitignored — skipping commit (evalCommit will remain null).\n`
+    );
+  } else {
+    try {
+      normalizeArtifactCommit(state.artifacts.evalReport, message, cwd);
+    } catch (err) {
+      printError(`Failed to commit synthetic eval report: ${(err as Error).message}`);
+      state.phases['6'] = 'error';
+      state.pendingAction = null;
+      savePausedAtHead(state, cwd);
+      writeState(runDir, state);
+      return;
+    }
   }
 
-  // Update anchors AFTER commit succeeds
-  try {
-    const head = getHead(cwd);
-    state.evalCommit = head;
-    state.verifiedAtHead = head;
-  } catch {
-    // leave as-is
+  // Update anchors only when a real commit was created.
+  // Clear any stale anchors when skipped (gitignored path).
+  if (synthCommitted) {
+    try {
+      const head = getHead(cwd);
+      state.evalCommit = head;
+      state.verifiedAtHead = head;
+    } catch {
+      // leave as-is
+    }
+  } else {
+    state.evalCommit = null;
+    state.verifiedAtHead = null;
   }
 
   state.verifyRetries = 0;
