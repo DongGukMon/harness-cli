@@ -3,7 +3,7 @@ import { existsSync } from 'fs';
 import { join } from 'path';
 import * as readline from 'readline';
 import { checkLockStatus } from './lock.js';
-import { killSession } from './tmux.js';
+import { killSessionOrThrow } from './tmux.js';
 
 export interface SessionClassification {
   runId: string;
@@ -22,8 +22,18 @@ export function listHarnessSessions(): string[] {
       .split('\n')
       .map((s) => s.trim())
       .filter((s) => /^harness-.+$/.test(s));
-  } catch {
-    return [];
+  } catch (err) {
+    // Treat "no tmux server" and "no sessions" as a legitimate empty state.
+    // Any other failure (permission error, bad socket, etc.) propagates so callers can warn.
+    const msg = String(
+      (err as { stderr?: string }).stderr ??
+      (err as Error).message ??
+      ''
+    );
+    if (/no server running|no sessions/i.test(msg)) {
+      return [];
+    }
+    throw err;
   }
 }
 
@@ -126,7 +136,7 @@ export async function cleanupOrphans(
 
   for (const orphan of orphans) {
     try {
-      killSession(orphan.sessionName);
+      killSessionOrThrow(orphan.sessionName);
       if (!opts.quiet) {
         process.stdout.write(`Killed: ${orphan.sessionName}\n`);
       }

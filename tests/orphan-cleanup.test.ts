@@ -10,6 +10,7 @@ vi.mock('child_process', async (importActual) => {
 
 vi.mock('../src/tmux.js', () => ({
   killSession: vi.fn(),
+  killSessionOrThrow: vi.fn(),
 }));
 
 vi.mock('../src/lock.js', () => ({
@@ -17,7 +18,7 @@ vi.mock('../src/lock.js', () => ({
 }));
 
 import { execSync } from 'child_process';
-import { killSession } from '../src/tmux.js';
+import { killSessionOrThrow } from '../src/tmux.js';
 import { checkLockStatus } from '../src/lock.js';
 import { listHarnessSessions, classifyOrphans, cleanupOrphans } from '../src/orphan-cleanup.js';
 
@@ -32,13 +33,27 @@ describe('listHarnessSessions', () => {
     expect(sessions).toEqual(['harness-foo', 'harness-bar']);
   });
 
-  it('returns empty array when tmux is not running', () => {
-    vi.mocked(execSync).mockImplementation(() => { throw new Error('no server running'); });
+  it('returns empty array when tmux server is not running', () => {
+    const err = Object.assign(new Error('no server running'), { stderr: 'no server running on /tmp/tmux-1000/default' });
+    vi.mocked(execSync).mockImplementation(() => { throw err; });
     const sessions = listHarnessSessions();
     expect(sessions).toEqual([]);
   });
 
-  it('returns empty array when no harness sessions exist', () => {
+  it('returns empty array when tmux has no sessions', () => {
+    const err = Object.assign(new Error('no sessions'), { stderr: 'no sessions' });
+    vi.mocked(execSync).mockImplementation(() => { throw err; });
+    const sessions = listHarnessSessions();
+    expect(sessions).toEqual([]);
+  });
+
+  it('propagates unexpected tmux errors', () => {
+    const err = Object.assign(new Error('permission denied'), { stderr: 'permission denied: /tmp/tmux-socket' });
+    vi.mocked(execSync).mockImplementation(() => { throw err; });
+    expect(() => listHarnessSessions()).toThrow('permission denied');
+  });
+
+  it('returns empty array when no harness sessions exist in output', () => {
     vi.mocked(execSync).mockReturnValue('other-session\nanother-one\n' as any);
     const sessions = listHarnessSessions();
     expect(sessions).toEqual([]);
@@ -151,7 +166,7 @@ describe('cleanupOrphans', () => {
   beforeEach(() => {
     harnessDir = mkdtempSync(join(tmpdir(), 'harness-cleanup-'));
     vi.mocked(execSync).mockReset();
-    vi.mocked(killSession).mockReset();
+    vi.mocked(killSessionOrThrow).mockReset();
     vi.mocked(checkLockStatus).mockReset();
   });
 
@@ -168,7 +183,7 @@ describe('cleanupOrphans', () => {
 
     await cleanupOrphans(harnessDir, { dryRun: true, yes: true, quiet: true });
 
-    expect(vi.mocked(killSession)).not.toHaveBeenCalled();
+    expect(vi.mocked(killSessionOrThrow)).not.toHaveBeenCalled();
   });
 
   it('quiet+yes: kills orphans without prompting', async () => {
@@ -179,15 +194,24 @@ describe('cleanupOrphans', () => {
 
     await cleanupOrphans(harnessDir, { yes: true, quiet: true });
 
-    expect(vi.mocked(killSession)).toHaveBeenCalledWith(`harness-${runId}`);
+    expect(vi.mocked(killSessionOrThrow)).toHaveBeenCalledWith(`harness-${runId}`);
   });
 
-  it('does nothing when no harness sessions exist', async () => {
-    vi.mocked(execSync).mockImplementation(() => { throw new Error('no server'); });
+  it('does nothing when tmux server is not running (no server error)', async () => {
+    const err = Object.assign(new Error('no server running'), { stderr: 'no server running on /tmp/tmux-1000/default' });
+    vi.mocked(execSync).mockImplementation(() => { throw err; });
 
     await cleanupOrphans(harnessDir, { yes: true, quiet: true });
 
-    expect(vi.mocked(killSession)).not.toHaveBeenCalled();
+    expect(vi.mocked(killSessionOrThrow)).not.toHaveBeenCalled();
+  });
+
+  it('propagates unexpected tmux errors from listHarnessSessions', async () => {
+    const err = Object.assign(new Error('permission denied'), { stderr: 'permission denied: /tmp/tmux-socket' });
+    vi.mocked(execSync).mockImplementation(() => { throw err; });
+
+    await expect(cleanupOrphans(harnessDir, { yes: true, quiet: true }))
+      .rejects.toThrow('permission denied');
   });
 
   it('does not kill unknown sessions', async () => {
@@ -196,7 +220,7 @@ describe('cleanupOrphans', () => {
 
     await cleanupOrphans(harnessDir, { yes: true, quiet: true });
 
-    expect(vi.mocked(killSession)).not.toHaveBeenCalled();
+    expect(vi.mocked(killSessionOrThrow)).not.toHaveBeenCalled();
   });
 
   it('does not kill active sessions', async () => {
@@ -211,6 +235,51 @@ describe('cleanupOrphans', () => {
 
     await cleanupOrphans(harnessDir, { yes: true, quiet: true });
 
-    expect(vi.mocked(killSession)).not.toHaveBeenCalled();
+    expect(vi.mocked(killSessionOrThrow)).not.toHaveBeenCalled();
+  });
+
+  it('prints Killed: only when killSessionOrThrow succeeds', async () => {
+    const runId = '2024-01-01-foo-abcd';
+    mkdirSync(join(harnessDir, runId));
+    // no run.lock → orphan
+    vi.mocked(execSync).mockReturnValue(`harness-${runId}\n` as any);
+    vi.mocked(killSessionOrThrow).mockImplementation(() => { /* success */ });
+
+    const stdoutLines: string[] = [];
+    const writeSpy = vi.spyOn(process.stdout, 'write').mockImplementation((s) => {
+      stdoutLines.push(String(s));
+      return true;
+    });
+
+    await cleanupOrphans(harnessDir, { yes: true });
+
+    writeSpy.mockRestore();
+    expect(stdoutLines.some((l) => l.includes(`Killed: harness-${runId}`))).toBe(true);
+  });
+
+  it('does not print Killed: when killSessionOrThrow fails', async () => {
+    const runId = '2024-01-01-foo-abcd';
+    mkdirSync(join(harnessDir, runId));
+    // no run.lock → orphan
+    vi.mocked(execSync).mockReturnValue(`harness-${runId}\n` as any);
+    vi.mocked(killSessionOrThrow).mockImplementation(() => { throw new Error('session not found'); });
+
+    const stdoutLines: string[] = [];
+    const stderrLines: string[] = [];
+    const stdoutSpy = vi.spyOn(process.stdout, 'write').mockImplementation((s) => {
+      stdoutLines.push(String(s));
+      return true;
+    });
+    const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation((s) => {
+      stderrLines.push(String(s));
+      return true;
+    });
+
+    await cleanupOrphans(harnessDir, { yes: true });
+
+    stdoutSpy.mockRestore();
+    stderrSpy.mockRestore();
+    expect(stdoutLines.some((l) => l.includes('Killed:'))).toBe(false);
+    expect(stderrLines.some((l) => l.includes('Failed to kill'))).toBe(true);
   });
 });
