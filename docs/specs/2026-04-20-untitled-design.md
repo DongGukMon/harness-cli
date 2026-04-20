@@ -16,7 +16,7 @@ Separately, when a harness session exits abnormally (window closed, kill -9, SIG
 
 Key decisions:
 
-- **D1 — Uniform random suffix.** Every runId gets a 4-hex token: `YYYY-MM-DD-<slug>-<rrrr>`. Applies uniformly (not only to `untitled`) to eliminate the dedup ladder and narrow race windows. 4 hex ≈ 65k — essentially zero daily-collision probability. Numeric `-N` dedup loop is kept only as an extra belt-and-suspenders fallback if filesystem shows the exact random-suffixed path already exists.
+- **D1 — Uniform random suffix.** Every runId gets a 4-hex token: `YYYY-MM-DD-<slug>-<rrrr>`. Applies uniformly (not only to `untitled`) to eliminate the dedup ladder and narrow race windows. 4 hex ≈ 65k values; at realistic daily session volumes (<100) the birthday collision rate is ~7.5% for 100 draws, so collision **is possible but rare** — the code handles it via redraw + counter fallback (see Design §runId generator). The 4-hex width is deliberately chosen over larger entropy to keep runIds short and human-readable; the fallback path is the correctness guarantee, not the entropy alone. Tests therefore verify the fallback behavior deterministically (mocked `crypto.randomBytes`), **not** by asserting distinctness across many real draws.
 - **D2 — `cleanup` command + opportunistic sweep on `start`.** A new `phase-harness cleanup` command enumerates `harness-*` tmux sessions and, scoped to the current `harnessDir`, classifies each as `active` / `orphan` / `unknown` based on local `.harness/<runId>/` metadata. `start` calls the same function with `{ quiet: true, yes: true }` before creating a new session. Scoping to the current harnessDir prevents cross-repo false positives.
 - **D3 — Orphan detection rule (deterministic, local-metadata-proven).** A `harness-<runId>` tmux session is classified strictly by whether local metadata in the **current** `harnessDir` proves ownership:
   - **`unknown` (always skipped — never killed).** `.harness/<runId>/` does not exist under the current `harnessDir`. The session may belong to another repo/worktree; we cannot prove it is ours, so we report and leave it alone. This is the single source of the `unknown` classification — the earlier wording that also listed "run dir missing" under `orphan` is removed.
@@ -78,7 +78,10 @@ phase-harness cleanup [--dry-run] [--yes]
 
 ### Tests
 
-- `tests/git.test.ts`: update existing `generateRunId` expectations to match `^YYYY-MM-DD-<slug>-[0-9a-f]{4}$`. Assert distinctness across ~100 consecutive calls with the same input.
+- `tests/git.test.ts`: update existing `generateRunId` expectations to match `^YYYY-MM-DD-<slug>-[0-9a-f]{4}$`. **Deterministic** suffix tests (no probabilistic distinctness assertion):
+  - **Format test** — call `generateRunId` once with a real `crypto.randomBytes` and assert the regex.
+  - **Redraw-on-collision test** — use `vi.spyOn(crypto, 'randomBytes')` to return `0xAAAA` on the first call and `0xBBBB` on the second; pre-create `.harness/<date>-<slug>-aaaa/`; assert the returned runId ends with `-bbbb`.
+  - **Fallback counter test** — make the spy return the same value (e.g. `0xCAFE`) on every call; pre-create `.harness/<date>-<slug>-cafe/`; assert the returned runId is `<date>-<slug>-cafe-2` (legacy `-N` fallback), proving termination even when random space is exhausted.
 - `tests/orphan-cleanup.test.ts` (new): mock `execSync` for `tmux ls`, build fixture `.harness/` dirs, assert classification and `killSession` side effects. Use fake tmux output + real temp harnessDir.
 - No integration-level changes required (lifecycle/light-flow tests operate on supplied runIds).
 
@@ -89,7 +92,7 @@ phase-harness cleanup [--dry-run] [--yes]
 
 ## Implementation Plan
 
-1. **Task 1 — Randomized runId.** Update `generateRunId` in `src/git.ts` to append a 4-hex random token; keep dedup-counter fallback. Update `tests/git.test.ts` regex expectations and add a distinctness test. Verify `pnpm tsc --noEmit` and `pnpm vitest run`.
+1. **Task 1 — Randomized runId.** Update `generateRunId` in `src/git.ts` to append a 4-hex random token from `crypto.randomBytes(2)`; retain the legacy `-N` counter as the terminating fallback. Update `tests/git.test.ts` regex expectations and add the three **deterministic** tests (format / redraw-on-collision / fallback counter) described in Design §Tests — no probabilistic distinctness assertion. Verify `pnpm tsc --noEmit` and `pnpm vitest run`.
 
 2. **Task 2 — Orphan cleanup module + CLI command.** Add `src/orphan-cleanup.ts` with `listHarnessSessions`, `classifyOrphans`, `cleanupOrphans`. Register `phase-harness cleanup [--dry-run] [--yes]` in `bin/harness.ts` → `src/commands/cleanup.ts`. Add `tests/orphan-cleanup.test.ts` covering active / orphan / unknown classification and `--dry-run` no-op.
 
