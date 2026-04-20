@@ -36,13 +36,10 @@ export async function innerCommand(runId: string, options: InnerOptions = {}): P
     process.exit(1);
   }
 
-  // D4 live path: detect inconsistent state before entering the loop.
-  // Do NOT write state here — keep disk as paused+null so crash re-entry re-detects the inconsistency.
+  // D4 live path: detect inconsistent state and synthesize failed phase immediately.
   let inconsistentPauseDetected = false;
   if (state.status === 'paused' && state.pendingAction === null) {
-    process.stderr.write(
-      `⚠️  Run ${state.runId} detected inconsistent pause state (paused + pendingAction=null); routing to failed terminal UI.\n`
-    );
+    synthesizeFailedFromInconsistentPause(state, runDir);
     inconsistentPauseDetected = true;
   }
 
@@ -220,15 +217,10 @@ export async function innerCommand(runId: string, options: InnerOptions = {}): P
 
   // 6. Run phase loop, then route to terminal-state UI based on outcome
   try {
-    // D4a: skip runPhaseLoop on synthesized failure.
+    // D4a: skip runPhaseLoop on synthesized failure — state already has phases[N]='failed',
+    // so anyPhaseFailed fires and routes to enterFailedTerminalState.
     if (!inconsistentPauseDetected) {
       await runPhaseLoop(state, harnessDir, runDir, cwd, inputManager, logger, sidecarReplayAllowed);
-    } else {
-      // Delay in-memory synthesis until UI is live (enterPhaseLoop already called above).
-      // No writeState here — disk stays as paused+null for crash-safe re-detection.
-      state.phases[String(state.currentPhase)] = 'failed';
-      state.status = 'in_progress';
-      state.pauseReason = null;
     }
 
     const { enterCompleteTerminalState, enterFailedTerminalState, anyPhaseFailed } =
@@ -397,4 +389,15 @@ function consumePendingAction(runDir: string, state: HarnessState): void {
     // Best-effort: corrupted pending action is skipped
     try { fs.unlinkSync(pendingPath); } catch { /* ignore */ }
   }
+}
+
+function synthesizeFailedFromInconsistentPause(state: HarnessState, runDir: string): void {
+  process.stderr.write(
+    `⚠️  Run ${state.runId} detected inconsistent pause state (paused + pendingAction=null); ` +
+    `synthesizing failed phase ${state.currentPhase} and routing to failed terminal UI.\n`
+  );
+  state.phases[String(state.currentPhase)] = 'failed';
+  state.status = 'in_progress';
+  state.pauseReason = null;
+  writeState(runDir, state);
 }

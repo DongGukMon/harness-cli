@@ -714,4 +714,72 @@ describe('inner.ts: D4 live path — paused+null synthesizes failure → enterFa
     // D4a: enterFailedTerminalState must be reached via anyPhaseFailed after enterPhaseLoop()
     expect(vi.mocked(enterFailedTerminalState)).toHaveBeenCalled();
   });
+
+  it('Phase 6 non-gitignore commit failure: runPhaseLoop exits with error → enterFailedTerminalState called', async () => {
+    const runId = 'p6-error-run';
+    const runDir = path.join(tmpDir, runId);
+    fs.mkdirSync(runDir, { recursive: true });
+    fs.writeFileSync(path.join(runDir, 'task.md'), 'test task');
+
+    const state = {
+      runId,
+      flow: 'full',
+      currentPhase: 6,
+      status: 'in_progress',
+      pendingAction: null,
+      autoMode: false,
+      task: 'test task',
+      baseCommit: 'abc',
+      implRetryBase: 'abc',
+      codexPath: null,
+      codexNoIsolate: false,
+      externalCommitsDetected: false,
+      carryoverFeedback: null,
+      tmuxSession: 'test-sess',
+      tmuxMode: 'dedicated',
+      tmuxWindows: [],
+      tmuxControlWindow: null,
+      tmuxWorkspacePane: null,
+      tmuxOriginalWindow: null,
+      tmuxControlPane: null,
+      artifacts: {
+        spec: 'docs/specs/p6-design.md',
+        plan: 'docs/plans/p6.md',
+        decisionLog: '.harness/p6-error-run/decisions.md',
+        checklist: '.harness/p6-error-run/checklist.json',
+        evalReport: 'docs/process/evals/p6-error-run-eval.md',
+      },
+      phases: { '1': 'completed', '2': 'completed', '3': 'completed', '4': 'completed', '5': 'completed', '6': 'in_progress', '7': 'pending' },
+      phasePresets: { '1': 'opus-high', '2': 'codex-high', '3': 'sonnet-high', '4': 'codex-high', '5': 'sonnet-high', '7': 'codex-high' },
+      phaseReopenFlags: { '1': false, '3': false, '5': false },
+      phaseReopenSource: { '1': null, '3': null, '5': null },
+      gateRetries: { '2': 0, '4': 0, '7': 0 },
+      verifyRetries: 0,
+      pauseReason: null,
+      specCommit: null,
+      planCommit: null,
+      implCommit: null,
+      evalCommit: null,
+      verifiedAtHead: null,
+      pausedAtHead: null,
+      phaseOpenedAt: { '1': null, '3': null, '5': null },
+      phaseAttemptId: { '1': null, '3': null, '5': null },
+      phaseCodexSessions: { '2': null, '4': null, '7': null },
+      phaseClaudeSessions: { '1': null, '3': null, '5': null },
+      loggingEnabled: false,
+      lastWorkspacePid: null,
+      lastWorkspacePidStartTime: null,
+    };
+    fs.writeFileSync(path.join(runDir, 'state.json'), JSON.stringify(state));
+
+    // Simulate handleVerifyPhase setting phase 6 to 'error' on commit failure
+    vi.mocked(runPhaseLoop).mockImplementationOnce(async (s: any) => {
+      s.phases['6'] = 'error';
+    });
+
+    await innerCommand(runId, { root: tmpDir, controlPane: '%0', resume: false });
+
+    // After loop exit with phase 6 error, anyPhaseFailed → enterFailedTerminalState
+    expect(vi.mocked(enterFailedTerminalState)).toHaveBeenCalled();
+  });
 });

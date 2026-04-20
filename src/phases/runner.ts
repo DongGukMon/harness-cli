@@ -1000,7 +1000,8 @@ export async function handleVerifyPhase(
       return;
     }
 
-    // Update evalCommit + verifiedAtHead only when a real commit was created
+    // Update evalCommit + verifiedAtHead only when a real commit was created.
+    // Clear any stale anchors when the commit was skipped (gitignored path).
     if (evalCommitResult === 'committed') {
       try {
         const head = getHead(cwd);
@@ -1009,6 +1010,9 @@ export async function handleVerifyPhase(
       } catch {
         // leave as-is
       }
+    } else {
+      state.evalCommit = null;
+      state.verifiedAtHead = null;
     }
     state.verifyRetries = 0;
     state.phases['6'] = 'completed';
@@ -1201,7 +1205,8 @@ export async function forcePassVerify(
     }
   }
 
-  // Update anchors only when a real commit was created
+  // Update anchors only when a real commit was created.
+  // Clear any stale anchors when skipped (gitignored path).
   if (synthCommitted) {
     try {
       const head = getHead(cwd);
@@ -1210,6 +1215,9 @@ export async function forcePassVerify(
     } catch {
       // leave as-is
     }
+  } else {
+    state.evalCommit = null;
+    state.verifiedAtHead = null;
   }
 
   state.verifyRetries = 0;

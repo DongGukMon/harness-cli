@@ -196,6 +196,9 @@ async function recoverGeneralState(
           const head = getHead(cwd);
           state.evalCommit = head;
           state.verifiedAtHead = head;
+        } else {
+          state.evalCommit = null;
+          state.verifiedAtHead = null;
         }
         state.phases['6'] = 'completed';
         state.currentPhase = 7;
@@ -251,6 +254,9 @@ async function applyStoredVerifyResult(
         state.evalCommit = head;
         state.verifiedAtHead = head;
       } catch { /* leave as-is */ }
+    } else {
+      state.evalCommit = null;
+      state.verifiedAtHead = null;
     }
     state.verifyRetries = 0;
     state.phases['6'] = 'completed';
@@ -641,6 +647,8 @@ async function replayIncompleteSkip(
         state.verifiedAtHead = getHead(cwd);
       } else {
         process.stderr.write(`⚠️  eval report path '${state.artifacts.evalReport}' is gitignored — skipping commit (evalCommit will remain null).\n`);
+        state.evalCommit = null;
+        state.verifiedAtHead = null;
       }
       break;
     }
