@@ -108,8 +108,28 @@ export async function performResume(
   state.pauseReason = null;
   writeState(runDir, state);
 
-  const { runPhaseLoop } = await import('./runner.js');
-  await runPhaseLoop(state, harnessDir, runDir, cwd, inputManager, logger, sidecarReplayAllowed);
+  try {
+    const { runPhaseLoop } = await import('./runner.js');
+    await runPhaseLoop(state, harnessDir, runDir, cwd, inputManager, logger, sidecarReplayAllowed);
+  } catch (err) {
+    // Rollback: restore phases[failed]='failed' so the failed-terminal-UI loop
+    // can re-enter on the next R press. Without this, phases[failed]='pending'
+    // remains on disk, findFailedPhase returns null on the next resume, and every
+    // subsequent R press throws "performResume called with no failed phase"
+    // in an unrecoverable cycle. Observed in 0.3.0/0.3.2 when runner.js lazy
+    // import fails because the installed module was removed under a long-running
+    // inner process.
+    state.phases[String(failed)] = 'failed';
+    writeState(runDir, state);
+    try {
+      logger.logEvent({
+        event: 'resume_error',
+        phase: failed,
+        message: (err as Error)?.message ?? String(err),
+      });
+    } catch { /* logger must not mask the original error */ }
+    throw err;
+  }
 }
 
 /**
