@@ -285,7 +285,8 @@ export type LogEvent =
       fromPhase: number;
       targetPhase?: number;
     })
-  | (LogEventBase & { event: 'session_end'; status: 'completed' | 'paused' | 'interrupted'; totalWallMs: number });
+  | (LogEventBase & { event: 'session_end'; status: 'completed' | 'paused' | 'interrupted'; totalWallMs: number })
+  | (LogEventBase & { event: 'resume_error'; phase: number; message: string });
 
 export interface SessionMeta {
   v: number;

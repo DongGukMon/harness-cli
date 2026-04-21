@@ -14,6 +14,7 @@ vi.mock('../../src/lock.js', () => ({
 }));
 vi.mock('../../src/phases/runner.js', () => ({
   runPhaseLoop: vi.fn().mockResolvedValue(undefined),
+  handleVerifyError: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock('../../src/signal.js', () => ({
   registerSignalHandlers: vi.fn(),
@@ -159,6 +160,30 @@ describe('inner.ts: consumePendingAction behavior', () => {
     // No pending-action.json — state unchanged
     const raw = JSON.parse(fs.readFileSync(path.join(runDir, 'state.json'), 'utf-8'));
     expect(raw.currentPhase).toBe(3);
+  });
+
+  // Regression guard for the a4f9 silent-exit bug: when state is
+  // status='paused' + pendingAction.show_verify_error (Verify ERROR Quit), the
+  // inner.ts resume path must dispatch to handleVerifyError before runPhaseLoop.
+  // Otherwise runPhaseLoop returns early (phases[6]='error'), the 'paused'
+  // short-circuit at the post-loop classifier fires, and the CLI exits without
+  // ever showing the Verify R/Q UI — the user perceives it as a crash right
+  // after model selection. Source-level guard because the full end-to-end path
+  // requires real tmux/input plumbing.
+  it('inner.ts dispatches state.pendingAction.show_verify_error to handleVerifyError before runPhaseLoop', () => {
+    const srcPath = path.resolve(__dirname, '../../src/commands/inner.ts');
+    const src = fs.readFileSync(srcPath, 'utf-8');
+
+    // Must import handleVerifyError from phases/runner.js
+    expect(src).toMatch(/handleVerifyError[^;]*from ['"]\.\.\/phases\/runner\.js['"]/);
+
+    // Must match on show_verify_error and invoke handleVerifyError before runPhaseLoop
+    const dispatchIdx = src.search(/state\.pendingAction\?\.type\s*===\s*['"]show_verify_error['"]/);
+    const invokeIdx = src.search(/await\s+handleVerifyError\(/);
+    const loopIdx = src.search(/await\s+runPhaseLoop\(/);
+    expect(dispatchIdx).toBeGreaterThan(-1);
+    expect(invokeIdx).toBeGreaterThan(dispatchIdx);
+    expect(loopIdx).toBeGreaterThan(invokeIdx);
   });
 
   // §4.8 authoritative wiring (EC-16a) — part 1: source-level regression guard.

@@ -5,7 +5,7 @@ import { updateLockPid, readLock, releaseLock } from '../lock.js';
 import { findHarnessRoot, clearCurrentRun } from '../root.js';
 import { readState, writeState, invalidatePhaseSessionsOnPresetChange, invalidatePhaseSessionsOnJump } from '../state.js';
 import { startFooterTicker } from './footer-ticker.js';
-import { runPhaseLoop } from '../phases/runner.js';
+import { runPhaseLoop, handleVerifyError } from '../phases/runner.js';
 import { registerSignalHandlers } from '../signal.js';
 import { killSession, killWindow, selectWindow, splitPane, paneExists, selectPane } from '../tmux.js';
 import { renderWelcome, promptModelConfig } from '../ui.js';
@@ -221,7 +221,25 @@ export async function innerCommand(runId: string, options: InnerOptions = {}): P
     // D4a: skip runPhaseLoop on synthesized failure — state already has phases[N]='failed',
     // so anyPhaseFailed fires and routes to enterFailedTerminalState.
     if (!inconsistentPauseDetected) {
-      await runPhaseLoop(state, harnessDir, runDir, cwd, inputManager, logger, sidecarReplayAllowed);
+      // Consume typed pendingAction that resume.ts's dispatcher would otherwise handle.
+      // §5.5 note: inner.ts skips calling resumeRun, but show_verify_error written by
+      // a prior Verify ERROR Quit must surface its R/Q UI here or the run silently
+      // exits after model selection (state.status='paused' short-circuits below).
+      if (state.pendingAction?.type === 'show_verify_error') {
+        const action = state.pendingAction;
+        state.status = 'in_progress';
+        state.pauseReason = null;
+        state.pendingAction = null;
+        writeState(runDir, state);
+        const errorPath = action.feedbackPaths[0] ?? undefined;
+        await handleVerifyError(errorPath, state, harnessDir, runDir, cwd, inputManager, logger);
+      }
+
+      // If the pendingAction dispatcher re-paused (user picked Q), skip the loop
+      // so the post-loop classifier emits session_end cleanly.
+      if ((state.status as HarnessState['status']) !== 'paused') {
+        await runPhaseLoop(state, harnessDir, runDir, cwd, inputManager, logger, sidecarReplayAllowed);
+      }
     }
 
     const { enterCompleteTerminalState, enterFailedTerminalState, anyPhaseFailed } =

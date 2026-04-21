@@ -146,6 +146,36 @@ describe('performResume (inner-side)', () => {
       performResume(state, '/h', makeTmpDir(), '/cwd', new MockInput() as unknown as InputManager, makeLogger(), { value: false })
     ).rejects.toThrow(/no failed phase/);
   });
+
+  it('rolls back phases[failed] to "failed" + logs resume_error when runPhaseLoop throws', async () => {
+    // Repro of the 0.3.0 field bug: a long-running inner process loses its
+    // installed modules, `await import('./runner.js')` throws "Cannot find module",
+    // performResume's pre-throw write leaves phases[failed]='pending' on disk.
+    // Before the fix, the NEXT R press calls findFailedPhase → null → throws
+    // "performResume called with no failed phase" in an unrecoverable cycle.
+    const { runPhaseLoop } = await import('../../src/phases/runner.js');
+    (runPhaseLoop as any).mockRejectedValueOnce(new Error("Cannot find module './runner.js'"));
+
+    const state = makeState({ phases: { '1': 'completed', '2': 'completed', '3': 'completed', '4': 'completed', '5': 'failed', '6': 'pending', '7': 'pending' } });
+    const runDir = makeTmpDir();
+    const input = new MockInput() as unknown as InputManager;
+    const logger = makeLogger();
+
+    await expect(
+      performResume(state, '/h', runDir, '/cwd', input, logger, { value: false })
+    ).rejects.toThrow(/Cannot find module/);
+
+    // Post-throw: phase status must be restored so the next R press works.
+    expect(state.phases['5']).toBe('failed');
+    // state.json on disk also reflects the rollback (atomic write).
+    const diskState = JSON.parse(fs.readFileSync(path.join(runDir, 'state.json'), 'utf-8'));
+    expect(diskState.phases['5']).toBe('failed');
+
+    // resume_error event is recorded for observability.
+    expect(logger.logEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ event: 'resume_error', phase: 5, message: expect.stringContaining('Cannot find module') }),
+    );
+  });
 });
 
 describe('performJump (inner-side)', () => {
