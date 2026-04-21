@@ -38,16 +38,15 @@ Small — three surgical fixes + focused tests, no schema migration, no prompt-t
 ### Functional
 
 - **FR-1** After fix, `assembleInteractivePrompt` emits absolute paths for `{{spec_path}}`, `{{plan_path}}`, `{{checklist_path}}`, `{{decisions_path}}`. The absolute path is computed via `resolveArtifact(state, state.artifacts.*, cwd)` (which already anchors `docs/…` to `trackedRepos[0].path` and `.harness/…` to outer cwd).
-- **FR-2** In single-repo (`trackedRepos.length === 1 && trackedRepos[0].path === cwd`), the emitted string may be absolute but must be byte-comparable to `path.join(cwd, relPath)`. No new template changes.
-- **FR-3** `runPhase6Preconditions` is invoked with `docsRoot`, not outer cwd. `src/resume.ts` Phase-6 recovery uses `docsRoot` for `commitEvalReport`, `getHead`, and eval-report path joins.
+- **FR-2** In single-repo (`trackedRepos.length === 1 && trackedRepos[0].path === cwd`), the rendered string equals `path.join(cwd, relPath)` — **semantically equivalent** to the prior relative form (Claude resolves identically against its cwd) but **textually different** (now absolute). Any golden fixture that captured the verbatim rendered prompt must be regenerated; byte-identity is explicitly not required.
+- **FR-3** `runPhase6Preconditions` is invoked with `docsRoot`, not outer cwd. Its signature and first-argument contract are **unchanged**: it still receives the repo-relative eval-report path (`state.artifacts.evalReport`) as arg 1 and resolves it against the `cwd` argument internally. Only the third argument's anchor (outer → `trackedRepos[0].path`) changes. `src/resume.ts` Phase-6 recovery uses `docsRoot` for `commitEvalReport`, `getHead`, and eval-report path joins.
 - **FR-4** Phase-1/3/5 wrapper skills (`src/context/skills/harness-phase-{1,3,5}-*.md`) no longer instruct Claude to run `git add` / `git commit`. The final sentinel-write step is unchanged.
-- **FR-5** Integration-style unit test: multi-repo fixture (`cwd` dir not git, two sub-repos as `trackedRepos`) asserts that the rendered Phase-1 prompt contains the **absolute path** of `docs/specs/<runId>-design.md` under `trackedRepos[0].path` and that `validatePhaseArtifacts` finds the spec when written at that absolute path.
+- **FR-5** Integration-style unit test: multi-repo fixture (`cwd` dir not git, two sub-repos as `trackedRepos`) asserts that the rendered Phase-1 prompt contains the **absolute path** for **all four** substituted variables (`{{spec_path}}`, `{{plan_path}}`, `{{checklist_path}}`, `{{decisions_path}}`) — each anchored per `resolveArtifact` rules (docs→`trackedRepos[0]`, `.harness/…`→outer) — and that `validatePhaseArtifacts` finds the spec when Claude writes it at the rendered absolute path.
 - **FR-6** Unit test: `runPhase6Preconditions` called from `runVerifyPhase` receives a non-git outer cwd; test asserts it runs against `trackedRepos[0].path` instead (no "not a git repository" throw, precondition passes on clean docsRoot).
 
 ### Non-functional
 
-- Regression gate: full `pnpm vitest run` green. Existing single-repo fixtures unchanged.
-- Golden prompt fixture (N=1 single-repo): **byte-identical** after substitution — tests must explicitly verify this to avoid accidental wrapper drift.
+- Regression gate: full `pnpm vitest run` green. Single-repo **behavioral** tests remain green unchanged. Any test that captured the literal rendered prompt string (golden/snapshot) gets regenerated to match the new absolute form — these are textual-not-behavioral changes and acceptable per FR-2.
 
 ### Out of scope
 
@@ -80,6 +79,8 @@ Populate `vars` with those four absolute strings in place of the current relativ
 const docsRoot = state.trackedRepos?.[0]?.path || cwd;
 runPhase6Preconditions(state.artifacts.evalReport, state.runId, docsRoot);
 ```
+
+**Contract note (addressing gate-2 P2):** `runPhase6Preconditions(evalReportPath, runId, cwd)` keeps its existing signature and arg-1 semantics — `state.artifacts.evalReport` is the repo-relative path that was already being passed at `verify.ts:97` before this change. The only substantive edit is the third argument: outer cwd → `docsRoot`. Internal resolution (`join(resolvedCwd, evalReportPath)` in `artifact.ts:107`) is unchanged; it now joins against `docsRoot` instead of outer. No new resolver behavior, no new argument.
 
 Step 5 (the verify-script spawn) keeps `cwd: cwd` — the script intentionally runs at the outer anchor so plan-written `cd <repo>` prefixes work per ADR-N8.
 
@@ -115,7 +116,7 @@ validator reads via resolveArtifact → same absolute path → passes
 
 ## Implementation Plan
 
-- **Task 1 — Prompt absolutization (RC-1, FR-1/2/5).** Add explicit `cwd` parameter to `assembleInteractivePrompt`; compute `absSpec/absPlan/absChecklist/absDecisions` via `resolveArtifact`; swap into `vars`. Update all call sites (`phases/interactive.ts`, any passing through `runInteractivePhase → assembleInteractivePrompt`) to forward `cwd`. Add a vitest fixture with non-git outer + two sub-repos that asserts (a) the rendered Phase-1 prompt contains the absolute docsRoot path, (b) single-repo fixture still renders with the same absolute (= `join(cwd, relPath)`) value.
+- **Task 1 — Prompt absolutization (RC-1, FR-1/2/5).** Add explicit `cwd` parameter to `assembleInteractivePrompt`; compute `absSpec/absPlan/absChecklist/absDecisions` via `resolveArtifact`; swap into `vars`. Update all call sites (`phases/interactive.ts`, any passing through `runInteractivePhase → assembleInteractivePrompt`) to forward `cwd`. Add a vitest fixture with non-git outer + two sub-repos that asserts the rendered Phase-1 prompt contains the expected **absolute value for all four variables** (`{{spec_path}}`, `{{plan_path}}`, `{{checklist_path}}`, `{{decisions_path}}`) — each matched against `resolveArtifact(state, state.artifacts.*, cwd)` — and a single-repo companion assertion that each of the same four rendered values equals `join(cwd, relPath)`.
 - **Task 2 — Phase 6 docsRoot (RC-2, FR-3/6).** Change `verify.ts:97` to pass `docsRoot`. Replace the five `cwd` usages in `resume.ts` Phase-6 recovery with `docsRoot`. Add a vitest that drives `runVerifyPhase` with a non-git outer + single-repo docsRoot and asserts precondition succeeds (previously threw). Existing resume tests updated to cover the docsRoot branch (at least one new case where outer ≠ docsRoot).
 - **Task 3 — Drop Claude-side git step + full-suite regression (D3, FR-4).** Strip the `git add`/`git commit` step from `src/context/skills/harness-phase-{1,3,5}-*.md`. Run `pnpm tsc --noEmit`, `pnpm vitest run`, `pnpm build` and confirm green. If a snapshot/golden fixture captures the wrapper-skill body, regenerate it and verify byte-delta matches only the removed step + renumber.
 
