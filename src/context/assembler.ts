@@ -3,6 +3,7 @@ import path from 'path';
 import { execSync } from 'child_process';
 import { fileURLToPath } from 'url';
 import type { HarnessState, FlowMode, TrackedRepo } from '../types.js';
+import { resolveArtifact } from '../artifact.js';
 import {
   MAX_FILE_SIZE_KB,
   MAX_PROMPT_SIZE_KB,
@@ -532,7 +533,8 @@ function buildGatePromptPhase7(state: HarnessState, cwd: string): string | { err
 export function assembleInteractivePrompt(
   phase: 1 | 3 | 5,
   state: HarnessState,
-  harnessDir: string
+  harnessDir: string,
+  cwd: string = path.join(harnessDir, '..')
 ): string {
   const phaseAttemptId = state.phaseAttemptId[String(phase)] ?? '';
 
@@ -575,9 +577,7 @@ export function assembleInteractivePrompt(
   // unexpected and must surface, not silently downgrade to Medium.
   let complexityDirective = '';
   if (phase === 3) {
-    const specAbs = path.isAbsolute(state.artifacts.spec)
-      ? state.artifacts.spec
-      : path.join(harnessDir, '..', state.artifacts.spec);
+    const specAbs = resolveArtifact(state, state.artifacts.spec, cwd);
     let specText: string | null = null;
     try {
       specText = fs.readFileSync(specAbs, 'utf-8');
@@ -593,12 +593,17 @@ export function assembleInteractivePrompt(
     complexityDirective = buildComplexityDirective(level);
   }
 
+  const absSpec      = resolveArtifact(state, state.artifacts.spec,        cwd);
+  const absPlan      = resolveArtifact(state, state.artifacts.plan,        cwd);
+  const absChecklist = resolveArtifact(state, state.artifacts.checklist,   cwd);
+  const absDecisions = resolveArtifact(state, state.artifacts.decisionLog, cwd);
+
   const vars: Record<string, string | undefined> = {
     task_path: taskMdPath,
-    spec_path: state.artifacts.spec,
-    decisions_path: state.artifacts.decisionLog,
-    plan_path: state.artifacts.plan,
-    checklist_path: state.artifacts.checklist,
+    spec_path: absSpec,
+    decisions_path: absDecisions,
+    plan_path: absPlan,
+    checklist_path: absChecklist,
     runId: state.runId,
     phaseAttemptId,
     feedback_path: feedbackPath,

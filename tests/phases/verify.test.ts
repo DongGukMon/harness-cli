@@ -222,3 +222,57 @@ describe('runVerifyPhase — script resolution', () => {
     spy.mockRestore();
   });
 });
+
+describe('runVerifyPhase — docsRoot (FR-3/6)', () => {
+  it('passes trackedRepos[0].path as docsRoot to runPhase6Preconditions when outer cwd differs', async () => {
+    const outerCwd = tmpDir();
+    const docsRootDir = path.join(outerCwd, 'repo-backend');
+    fs.mkdirSync(docsRootDir);
+
+    const { runPhase6Preconditions } = await import('../../src/artifact.js');
+    const mockPreconditions = vi.mocked(runPhase6Preconditions);
+    mockPreconditions.mockClear();
+
+    const state = {
+      runId: 'test-run',
+      phases: {},
+      artifacts: { checklist: 'checklist.json', evalReport: 'eval.md' },
+      trackedRepos: [{ path: docsRootDir, baseCommit: 'abc', implRetryBase: 'abc', implHead: null }],
+    } as unknown as HarnessState;
+
+    vi.spyOn(preflightModule, 'resolveVerifyScriptPath').mockReturnValue(null);
+
+    try {
+      await runVerifyPhase(state, outerCwd, outerCwd, outerCwd);
+    } catch {
+      // expected — resolveVerifyScriptPath returns null → throws after preconditions
+    }
+
+    expect(mockPreconditions).toHaveBeenCalledWith('eval.md', 'test-run', docsRootDir);
+  });
+
+  it('falls back to outer cwd when trackedRepos is empty or path is empty', async () => {
+    const outerCwd = tmpDir();
+
+    const { runPhase6Preconditions } = await import('../../src/artifact.js');
+    const mockPreconditions = vi.mocked(runPhase6Preconditions);
+    mockPreconditions.mockClear();
+
+    const state = {
+      runId: 'test-run',
+      phases: {},
+      artifacts: { checklist: 'checklist.json', evalReport: 'eval.md' },
+      trackedRepos: [{ path: '', baseCommit: 'abc', implRetryBase: 'abc', implHead: null }],
+    } as unknown as HarnessState;
+
+    vi.spyOn(preflightModule, 'resolveVerifyScriptPath').mockReturnValue(null);
+
+    try {
+      await runVerifyPhase(state, outerCwd, outerCwd, outerCwd);
+    } catch {
+      // expected
+    }
+
+    expect(mockPreconditions).toHaveBeenCalledWith('eval.md', 'test-run', outerCwd);
+  });
+});

@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { writeFileSync, existsSync, mkdirSync } from 'fs';
+import { writeFileSync, existsSync, mkdirSync, mkdtempSync, rmSync } from 'fs';
 import { join } from 'path';
+import { tmpdir } from 'os';
 import { execSync } from 'child_process';
 import { createTestRepo } from './helpers/test-repo.js';
 import { normalizeArtifactCommit, runPhase6Preconditions, commitEvalReport } from '../src/artifact.js';
@@ -204,6 +205,27 @@ describe('runPhase6Preconditions', () => {
 
     const status = execSync('git status --porcelain', { cwd: repo.path, encoding: 'utf-8' }).trim();
     expect(status).toBe('');
+  });
+
+  it('FR-3/6: succeeds with git docsRoot even when outer cwd is a non-git directory', () => {
+    // Simulates the multi-repo case: outer dir is not a git repo (e.g. a bare workspace root),
+    // but docsRoot (trackedRepos[0].path) is a valid git repo.
+    // Pre-fix: verify.ts passed outer cwd to runPhase6Preconditions → git status threw.
+    // Post-fix: verify.ts derives docsRoot = trackedRepos[0].path and passes that.
+    const outer = mkdtempSync(join(tmpdir(), 'nongit-outer-'));
+    try {
+      // outer is NOT a git repo — calling runPhase6Preconditions with it must throw
+      expect(() =>
+        runPhase6Preconditions(evalReportPath, 'my-run', outer)
+      ).toThrow();
+
+      // The fix: pass docsRoot (the real git repo) — must succeed
+      expect(() =>
+        runPhase6Preconditions(evalReportPath, 'my-run', repo.path)
+      ).not.toThrow();
+    } finally {
+      rmSync(outer, { recursive: true, force: true });
+    }
   });
 });
 

@@ -94,7 +94,8 @@ export async function runVerifyPhase(
   }
 
   // Step 2: Run preconditions while phase is still pending
-  runPhase6Preconditions(state.artifacts.evalReport, state.runId, cwd);
+  const docsRoot = state.trackedRepos?.[0]?.path || cwd;
+  runPhase6Preconditions(state.artifacts.evalReport, state.runId, docsRoot);
 
   // Step 3: Resolve verify script path BEFORE advancing phase state.
   // If the script is missing, fail fast while the phase is still pending —

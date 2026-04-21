@@ -35,9 +35,8 @@ description: Use during phase-harness Phase 1 to brainstorm and write a spec tha
    - `"Skip the 'User reviews written spec' step — Codex gate (Phase 2) replaces it"`
    - `"After spec is written, proceed immediately to step 2 (decisions log) below"`
 2. Decision log를 `{{decisions_path}}`에 작성한다. spec의 "Context & Decisions" 섹션과 **중복되지 않도록** 각 결정의 *trade-off*와 *고려된 대안*을 기록한다.
-3. 필요 시 `git add` + `git commit`. 커밋 메시지: `spec: <subject>`.
-4. **Pre-sentinel self-audit** — sentinel 쓰기 직전, 방금 작성한 spec을 다시 읽고 spec의 `## Success Criteria` / `## Invariants` 섹션과 대조한다. grep 또는 정규식 스캔 규칙이 적혀 있으면 모두 직접 확인하고, hit이 있으면 gate로 넘기지 말고 이번 pass에서 바로 수정한다. 각 gate round는 대략 40× local grep 비용이므로 여기서 먼저 정리한다. 수정이 있었다면 한 번 더 같은 검증을 반복(rerun)하고 clean 상태를 확인한 뒤에만 sentinel 단계로 이동한다.
-5. **가장 마지막에** `.harness/{{runId}}/phase-1.done`을 생성하고 내용으로 `{{phaseAttemptId}}` 한 줄만 기록한다.
+3. **Pre-sentinel self-audit** — sentinel 쓰기 직전, 방금 작성한 spec을 다시 읽고 spec의 `## Success Criteria` / `## Invariants` 섹션과 대조한다. grep 또는 정규식 스캔 규칙이 적혀 있으면 모두 직접 확인하고, hit이 있으면 gate로 넘기지 말고 이번 pass에서 바로 수정한다. 각 gate round는 대략 40× local grep 비용이므로 여기서 먼저 정리한다. 수정이 있었다면 한 번 더 같은 검증을 반복(rerun)하고 clean 상태를 확인한 뒤에만 sentinel 단계로 이동한다.
+4. **가장 마지막에** `.harness/{{runId}}/phase-1.done`을 생성하고 내용으로 `{{phaseAttemptId}}` 한 줄만 기록한다.
 
 ## Invariants
 - sentinel 파일 생성 이후 하네스가 다음 단계로 넘어간다. 추가 작업 금지.

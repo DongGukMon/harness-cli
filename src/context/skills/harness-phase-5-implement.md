@@ -38,7 +38,6 @@ superpowers가 커버하지 않는 두 원칙을 지킨다:
 ## Process
 0. **(Scaffolding only — prevention-first gitignore)** 구현을 시작하기 전에 대상 언어·프레임워크의 표준 `.gitignore` 엔트리(예: `__pycache__/`, `.pytest_cache/`, `.venv/`, `node_modules/`, `dist/`, `build/`, `.DS_Store`)를 프로젝트 루트 `.gitignore`에 보강한다. 기존 `.gitignore`가 이미 해당 엔트리를 포함하면 no-op. 이 변경은 `chore: add standard gitignore entries` 등 **독립된 scaffolding commit**으로 두고, impl 커밋과 섞지 않는다. Sentinel 직전에 `git status --porcelain`을 셀프 체크해 tracked 파일이 전부 커밋된 상태인지 확인한다. 하네스에 자동 recovery가 있어도 이 단계는 효율성과 로그 가독성 측면에서 값어치가 있다.
 1. 기본 sub-skill로 `superpowers:subagent-driven-development`를 invoke한다. 단일 세션 구현이 plan에서 적합하다고 판단되면 `superpowers:executing-plans`를 대안으로 쓸 수 있다. 어느 경우든 다음 오버라이드를 전달한다:
-   - `"After each task completes, git commit the changes. Do not defer commits to the end."`
    - `"Do NOT create .harness/{{runId}}/phase-5.done until ALL tasks in the plan are committed."`
    - `"If Content Filter rejects a subagent dispatch, fall back to direct in-session implementation and record the fallback in the task note."`
 2. 구현 중 위 Auxiliary playbooks의 원칙(원자적 커밋, 수직 슬라이스, 컨텍스트 prune)을 적용한다.
