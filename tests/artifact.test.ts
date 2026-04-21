@@ -207,6 +207,39 @@ describe('runPhase6Preconditions', () => {
     expect(status).toBe('');
   });
 
+  it('tolerates gitignored eval report: unlinks physical file without invoking git rm', () => {
+    // Repro of the field bug: user's docsRoot has `docs` (or `docs/`) in .gitignore,
+    // so the eval report at docs/process/evals/<id>-eval.md is ignored and never tracked.
+    // Pre-fix: getFileStatus → '', existsSync → true → `git rm -f` fires → exit 128
+    //   ("did not match any files") → runPhase6Preconditions throws on every resume.
+    // Post-fix: isPathGitignored short-circuits to unlinkSync; no git rm attempted.
+    const gitignoredEvalPath = 'docs/process/evals/ignored-run-eval.md';
+    writeFileSync(join(repo.path, '.gitignore'), 'docs\n');
+    execSync('git add .gitignore && git commit -m "ignore docs dir"', { cwd: repo.path });
+
+    // Physically create the file under the gitignored path
+    writeRepoFile(repo.path, gitignoredEvalPath, '# partial report\n');
+    const fullPath = join(repo.path, gitignoredEvalPath);
+    expect(existsSync(fullPath)).toBe(true);
+
+    // Sanity: git treats the file as ignored (porcelain empty, check-ignore hits)
+    const porcelain = execSync('git status --porcelain', {
+      cwd: repo.path,
+      encoding: 'utf-8',
+    }).trim();
+    expect(porcelain).toBe('');
+
+    // Must not throw — this is the regression path
+    expect(() =>
+      runPhase6Preconditions(gitignoredEvalPath, 'ignored-run', repo.path)
+    ).not.toThrow();
+
+    // File gone, tree still clean
+    expect(existsSync(fullPath)).toBe(false);
+    const after = execSync('git status --porcelain', { cwd: repo.path, encoding: 'utf-8' }).trim();
+    expect(after).toBe('');
+  });
+
   it('FR-3/6: succeeds with git docsRoot even when outer cwd is a non-git directory', () => {
     // Simulates the multi-repo case: outer dir is not a git repo (e.g. a bare workspace root),
     // but docsRoot (trackedRepos[0].path) is a valid git repo.

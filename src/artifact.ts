@@ -103,9 +103,13 @@ export function runPhase6Preconditions(evalReportPath: string, runId: string, cw
   if (isStagedDeletion(evalReportPath, cwd)) {
     // Already reset — no-op
   } else if (fileStatus === '') {
-    // Either not present or tracked and clean — check physical existence
+    // Either not present, tracked and clean, or gitignored — check physical existence
     if (!existsSync(join(resolvedCwd, evalReportPath))) {
       // Not present → no-op
+    } else if (isPathGitignored(evalReportPath, cwd)) {
+      // Gitignored file that exists physically: git never tracked it so
+      // `git rm -f` would error ("did not match any files"). Just unlink.
+      unlinkSync(join(resolvedCwd, evalReportPath));
     } else {
       // Tracked and clean → git rm
       exec(`git rm -f "${evalReportPath}"`, cwd);
