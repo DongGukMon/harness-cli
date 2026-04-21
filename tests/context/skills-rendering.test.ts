@@ -143,13 +143,15 @@ describe('wrapper contract invariants — literal (per spec §4/§5)', () => {
     expect(prompt).toMatch(/격리된 셸 환경/);
   });
 
-  it('phase 5 — commit-per-task rule + sentinel-after-all-commits + playbook absolute refs', () => {
+  it('phase 5 — no git-commit override (D3) + sentinel-after-all-commits + playbook absolute refs', () => {
     const state = stubState(tmp);
     state.runId = 'rid-5';
     const prompt = assembleInteractivePrompt(5, state, '/tmp/harness');
     expect(prompt).toMatch(/\.harness\/rid-5\/phase-5\.done/);
-    // "After each task completes, git commit" override literal
-    expect(prompt).toMatch(/After each task completes, git commit/);
+    // D3: standalone git-commit override removed — harness auto-commits
+    expect(prompt).not.toMatch(/After each task completes, git commit/);
+    // Pre-sentinel self-audit (step 3) still present
+    expect(prompt).toMatch(/git diff/);
     // "sentinel 이전에 모든 변경사항이 git에 커밋" invariant literal
     expect(prompt).toMatch(/sentinel 이전에 모든 변경사항이.*커밋/);
     // playbook @-references resolved literally (context-engineering + git-workflow)

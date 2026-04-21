@@ -12,6 +12,7 @@ import {
 } from '../../src/context/assembler.js';
 import { createInitialState } from '../../src/state.js';
 import { resolveArtifact } from '../../src/artifact.js';
+import { validatePhaseArtifacts } from '../../src/phases/interactive.js';
 import type { HarnessState } from '../../src/types.js';
 
 const tmpDirs: string[] = [];
@@ -145,13 +146,16 @@ describe('Phase 3 interactive prompt', () => {
 });
 
 describe('Phase 5 interactive prompt', () => {
-  it('includes commit instruction', () => {
+  it('includes pre-sentinel self-audit step, no standalone git-commit override (D3)', () => {
     const state = makeState({
       phaseAttemptId: { '1': null, '3': null, '5': 'attempt-phase5' },
     });
     const prompt = assembleInteractivePrompt(5, state, '/tmp/harness');
 
-    expect(prompt).toContain('git commit');
+    // D3: standalone git-commit override removed — harness auto-commits via normalizeInteractiveArtifacts
+    expect(prompt).not.toContain('After each task completes, git commit');
+    // Pre-sentinel self-audit step (step 3) remains
+    expect(prompt).toContain('git diff');
     expect(prompt).toContain('phase-5.done');
     expect(prompt).toContain('attempt-phase5');
   });
@@ -1069,5 +1073,65 @@ describe('assembleInteractivePrompt — absolute prompt vars (FR-1/2/5)', () => 
     // spec_path and decisions_path rendered in Phase 1 wrapper — both equal join(cwd, relPath) for single-repo
     expect(prompt).toContain(path.join(cwd, state.artifacts.spec));
     expect(prompt).toContain(path.join(cwd, state.artifacts.decisionLog));
+  });
+
+  it('multi-repo: Phase-3 prompt contains all four vars as absolute paths anchored correctly', () => {
+    const outer = makeTmpDir();
+    const repo0 = path.join(outer, 'repo-backend');
+    fs.mkdirSync(repo0);
+
+    const state = makeState({
+      phaseAttemptId: { '1': null, '3': 'uuid-phase3-all4', '5': null },
+      trackedRepos: [
+        { path: repo0, baseCommit: 'abc', implRetryBase: 'abc', implHead: null },
+      ],
+    });
+
+    const harnessDir = path.join(outer, '.harness');
+    const prompt = assembleInteractivePrompt(3, state, harnessDir, outer);
+
+    const expSpec      = resolveArtifact(state, state.artifacts.spec,        outer);
+    const expPlan      = resolveArtifact(state, state.artifacts.plan,        outer);
+    const expChecklist = resolveArtifact(state, state.artifacts.checklist,   outer);
+    const expDecisions = resolveArtifact(state, state.artifacts.decisionLog, outer);
+
+    expect(prompt).toContain(expSpec);
+    expect(prompt).toContain(expPlan);
+    expect(prompt).toContain(expChecklist);
+    expect(prompt).toContain(expDecisions);
+
+    // docs/* anchored to trackedRepos[0], not outer
+    expect(expSpec).toContain(repo0);
+    expect(expPlan).toContain(repo0);
+    // .harness/* anchored to outer cwd, not repo0
+    expect(expChecklist).toContain(outer);
+    expect(expDecisions).toContain(outer);
+  });
+
+  it('validatePhaseArtifacts returns true when artifacts are written to the rendered absolute paths (FR-5 end-to-end)', () => {
+    const outer = makeTmpDir();
+    const repo0 = path.join(outer, 'repo-backend');
+    fs.mkdirSync(repo0);
+
+    const state = makeState({
+      phaseAttemptId: { '1': 'uuid-validate-fr5', '3': null, '5': null },
+      trackedRepos: [
+        { path: repo0, baseCommit: 'abc', implRetryBase: 'abc', implHead: null },
+      ],
+    });
+
+    // Phase 1 (full) checks ['spec', 'decisionLog'] via getPhaseArtifactFiles.
+    // resolveArtifact anchors docs/* to trackedRepos[0] and .harness/* to outer.
+    const absSpecPath      = resolveArtifact(state, state.artifacts.spec,        outer);
+    const absDecisionsPath = resolveArtifact(state, state.artifacts.decisionLog, outer);
+
+    fs.mkdirSync(path.dirname(absSpecPath),      { recursive: true });
+    fs.mkdirSync(path.dirname(absDecisionsPath), { recursive: true });
+    fs.writeFileSync(absSpecPath,      '# Spec\n\n## Complexity\n\nSmall\n');
+    fs.writeFileSync(absDecisionsPath, '# Decisions\n');
+
+    const runDir = path.join(outer, '.harness', 'my-run');
+    const result = validatePhaseArtifacts(1, state, outer, runDir);
+    expect(result).toBe(true);
   });
 });
