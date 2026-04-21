@@ -188,12 +188,13 @@ async function recoverGeneralState(
   // Phase 6 error + eval report exists → retry normalize_artifact_commit
   // (eval report was written, normalize failed, and we should retry the commit only)
   if (phase === 6 && phaseStatus === 'error') {
-    const evalReportPath = join(cwd, state.artifacts.evalReport);
+    const docsRoot = state.trackedRepos?.[0]?.path || cwd;
+    const evalReportPath = join(docsRoot, state.artifacts.evalReport);
     if (isEvalReportValid(evalReportPath)) {
       try {
-        const result = commitEvalReport(state, cwd);
+        const result = commitEvalReport(state, docsRoot);
         if (result === 'committed') {
-          const head = getHead(cwd);
+          const head = getHead(docsRoot);
           state.evalCommit = head;
           state.verifiedAtHead = head;
         } else {
@@ -235,13 +236,14 @@ async function applyStoredVerifyResult(
   runDir: string,
   cwd: string
 ): Promise<void> {
-  const evalReportPath = join(cwd, state.artifacts.evalReport);
+  const docsRoot = state.trackedRepos?.[0]?.path || cwd;
+  const evalReportPath = join(docsRoot, state.artifacts.evalReport);
 
   if (result.exitCode === 0 && isEvalReportValid(evalReportPath)) {
     // PASS: commit the eval report (normalize_artifact_commit), set anchors, advance
     let evalCommitResult: 'committed' | 'skipped';
     try {
-      evalCommitResult = commitEvalReport(state, cwd);
+      evalCommitResult = commitEvalReport(state, docsRoot);
     } catch {
       // Commit failed — leave as error for runner to handle
       state.phases['6'] = 'error';
