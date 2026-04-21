@@ -235,7 +235,7 @@ export async function runInteractivePhase(
   }
 
   // Assemble prompt and write to file
-  const prompt = assembleInteractivePrompt(phase, updatedState, harnessDir);
+  const prompt = assembleInteractivePrompt(phase, updatedState, harnessDir, cwd);
   const promptFile = path.join(runDir, `phase-${phase}-init-prompt.md`);
   fs.writeFileSync(promptFile, prompt, 'utf-8');
 

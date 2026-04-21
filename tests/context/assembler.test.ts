@@ -11,6 +11,7 @@ import {
   __resetComplexityWarning,
 } from '../../src/context/assembler.js';
 import { createInitialState } from '../../src/state.js';
+import { resolveArtifact } from '../../src/artifact.js';
 import type { HarnessState } from '../../src/types.js';
 
 const tmpDirs: string[] = [];
@@ -988,5 +989,85 @@ describe('assembleGatePrompt(2) — light flow + full-flow regression (SC#3 / In
     expect(prompt).toContain('Phase 2 — spec gate');
     expect(prompt).not.toContain('5-phase light harness lifecycle');
     expect(prompt).not.toContain('Phase 2 — design gate, light flow');
+  });
+});
+
+// ─── FR-1/2/5: assembleInteractivePrompt emits absolute artifact paths ─────────
+
+describe('assembleInteractivePrompt — absolute prompt vars (FR-1/2/5)', () => {
+  it('multi-repo: Phase-1 prompt contains absolute paths — spec anchored to trackedRepos[0], .harness vars anchored to outer cwd', () => {
+    const outer = makeTmpDir();
+    const repo0 = path.join(outer, 'repo-backend');
+    const repo1 = path.join(outer, 'repo-frontend');
+    fs.mkdirSync(repo0);
+    fs.mkdirSync(repo1);
+
+    const state = makeState({
+      phaseAttemptId: { '1': 'uuid-multi', '3': null, '5': null },
+      trackedRepos: [
+        { path: repo0, baseCommit: 'abc', implRetryBase: 'abc', implHead: null },
+        { path: repo1, baseCommit: 'def', implRetryBase: 'def', implHead: null },
+      ],
+    });
+
+    const harnessDir = path.join(outer, '.harness');
+    const prompt = assembleInteractivePrompt(1, state, harnessDir, outer);
+
+    // Compute expected absolute values via resolveArtifact (same function used in assembler)
+    const expSpec      = resolveArtifact(state, state.artifacts.spec,        outer);
+    const expDecisions = resolveArtifact(state, state.artifacts.decisionLog, outer);
+
+    // spec_path and decisions_path are rendered in the Phase 1 wrapper
+    expect(prompt).toContain(expSpec);
+    expect(prompt).toContain(expDecisions);
+
+    // docs vars (spec) anchor to trackedRepos[0].path, not outer
+    expect(expSpec).toContain(repo0);
+    expect(expSpec).not.toContain(path.join(outer, 'docs'));
+    // .harness vars anchor to outer cwd, not repo0
+    expect(expDecisions).toContain(outer);
+    expect(expDecisions).not.toContain(repo0);
+  });
+
+  it('resolveArtifact anchors all four vars correctly for multi-repo state', () => {
+    const outer = makeTmpDir();
+    const repo0 = path.join(outer, 'repo-backend');
+    fs.mkdirSync(repo0);
+
+    const state = makeState({
+      phaseAttemptId: { '1': 'uuid-multi2', '3': null, '5': null },
+      trackedRepos: [
+        { path: repo0, baseCommit: 'abc', implRetryBase: 'abc', implHead: null },
+      ],
+    });
+
+    const expSpec      = resolveArtifact(state, state.artifacts.spec,        outer);
+    const expPlan      = resolveArtifact(state, state.artifacts.plan,        outer);
+    const expChecklist = resolveArtifact(state, state.artifacts.checklist,   outer);
+    const expDecisions = resolveArtifact(state, state.artifacts.decisionLog, outer);
+
+    // docs/* paths anchor to trackedRepos[0].path (repo0)
+    expect(expSpec).toBe(path.join(repo0, state.artifacts.spec));
+    expect(expPlan).toBe(path.join(repo0, state.artifacts.plan));
+    // .harness/* paths anchor to outer cwd
+    expect(expChecklist).toBe(path.join(outer, state.artifacts.checklist));
+    expect(expDecisions).toBe(path.join(outer, state.artifacts.decisionLog));
+  });
+
+  it('single-repo: Phase-1 prompt contains absolute paths equal to path.join(cwd, relPath)', () => {
+    const cwd = makeTmpDir();
+    const state = makeState({
+      phaseAttemptId: { '1': 'uuid-single', '3': null, '5': null },
+      trackedRepos: [
+        { path: cwd, baseCommit: 'abc', implRetryBase: 'abc', implHead: null },
+      ],
+    });
+
+    const harnessDir = path.join(cwd, '.harness');
+    const prompt = assembleInteractivePrompt(1, state, harnessDir, cwd);
+
+    // spec_path and decisions_path rendered in Phase 1 wrapper — both equal join(cwd, relPath) for single-repo
+    expect(prompt).toContain(path.join(cwd, state.artifacts.spec));
+    expect(prompt).toContain(path.join(cwd, state.artifacts.decisionLog));
   });
 });
