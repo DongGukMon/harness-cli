@@ -5,8 +5,38 @@ import { getStagedFiles, getFileStatus, isStagedDeletion, isPathGitignored } fro
 import type { HarnessState } from './types.js';
 
 /**
+ * Parse NUL-delimited `git status --porcelain -z` output into `"XY path"` strings.
+ *
+ * Using -z prevents git from C-quoting paths that contain spaces or special
+ * characters; entries are NUL-terminated rather than newline-terminated, and
+ * paths are emitted verbatim. For rename/copy entries (R/C status) the second
+ * NUL-delimited token is the old (origin) path and is skipped — only the new
+ * working-tree path matters for fingerprinting.
+ */
+function parsePorcelainZ(raw: string): string[] {
+  const tokens = raw.split('\0');
+  const lines: string[] = [];
+  let skipNext = false;
+  for (const token of tokens) {
+    if (skipNext) {
+      skipNext = false;
+      continue;
+    }
+    // Status entries: at least 4 chars, position 2 is the space between XY and path.
+    if (token.length >= 4 && token[2] === ' ') {
+      lines.push(token);
+      // Rename/copy entries have a second NUL-delimited old-path token — skip it.
+      if (token[0] === 'R' || token[0] === 'C') {
+        skipNext = true;
+      }
+    }
+  }
+  return lines;
+}
+
+/**
  * Compute a content-hashed fingerprint for every dirty path reported by
- * `git status --porcelain --untracked-files=all` in the given directory.
+ * `git status --porcelain -z --untracked-files=all` in the given directory.
  *
  * Each fingerprint is the string `"<XY>\0<path>\0<hash>"` where:
  * - XY  : the 2-char porcelain status code (e.g. " M", "??", "A ")
@@ -14,6 +44,8 @@ import type { HarnessState } from './types.js';
  * - hash: `git hash-object -- <path>` of the working-tree file, or "" when
  *         the file is absent (deletion status) or hash-object fails
  *
+ * Using `-z` prevents git from C-quoting paths that contain spaces or special
+ * characters — entries are NUL-terminated and paths are emitted verbatim.
  * Using `--untracked-files=all` ensures that every untracked file is listed
  * individually instead of collapsed into a parent `?? dir/` entry, so each
  * fingerprint binds to exactly one hashable file path.
@@ -23,16 +55,14 @@ import type { HarnessState } from './types.js';
 export function captureDirtyBaseline(cwd: string): string[] {
   let rawOutput: string;
   try {
-    rawOutput = execSync('git status --porcelain --untracked-files=all', {
+    rawOutput = execSync('git status --porcelain -z --untracked-files=all', {
       cwd,
       encoding: 'utf-8',
     });
   } catch {
     return [];
   }
-  // Split by newline and filter empty lines — do NOT .trim() the full output,
-  // as that would strip the leading space from ' M' lines and corrupt XY parsing.
-  const lines = rawOutput.split('\n').filter(Boolean);
+  const lines = parsePorcelainZ(rawOutput);
   if (lines.length === 0) return [];
 
   return lines.map((line) => {
@@ -109,18 +139,17 @@ export function normalizeArtifactCommit(filePath: string, message: string, cwd?:
 }
 
 /**
- * Read `git status --porcelain --untracked-files=all` and return individual
- * lines without trimming the full output (which would strip the leading space
- * from ' M' lines and corrupt XY parsing).
+ * Read `git status --porcelain -z --untracked-files=all` and return parsed
+ * `"XY path"` strings. Using -z ensures paths with spaces are never C-quoted.
  *
  * Errors from git (e.g. not in a git repo) propagate to the caller.
  */
 function readPorcelainLines(cwd?: string): string[] {
-  const raw = execSync('git status --porcelain --untracked-files=all', {
+  const raw = execSync('git status --porcelain -z --untracked-files=all', {
     cwd,
     encoding: 'utf-8',
   });
-  return raw.split('\n').filter(Boolean);
+  return parsePorcelainZ(raw);
 }
 
 /**

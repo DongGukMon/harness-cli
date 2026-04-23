@@ -358,6 +358,25 @@ describe('runPhase6Preconditions — dirty baseline filtering (issues #67/#68)',
     ).toThrow('Working tree must be clean before verification');
   });
 
+  it('R7: filename with spaces is fingerprinted correctly (porcelain -z fix)', () => {
+    // On porcelain v1 (without -z), filenames with spaces are C-quoted:
+    // `?? "my file.txt"` — line.slice(3) yields `"my file.txt"` (with quotes), so
+    // existsSync fails and the hash falls back to "", making the fingerprint wrong.
+    // Fix: use --porcelain -z so paths are NUL-delimited and never C-quoted.
+    writeFileSync(join(repo.path, 'my spaced file.txt'), 'content');
+
+    const baseline = captureDirtyBaseline(repo.path);
+    const fp = baseline.find((f) => f.includes('my spaced file.txt'));
+    expect(fp).toBeDefined();
+    // The hash must be non-empty — confirms existsSync succeeded on the real (unquoted) path
+    expect(fp!.split('\0')[2]).not.toBe('');
+
+    // File is in baseline → preconditions must not throw
+    expect(() =>
+      runPhase6Preconditions(evalReportPath, 'my-run', repo.path, baseline)
+    ).not.toThrow();
+  });
+
   it('R6: final clean check respects baseline (baseline entries remain after eval report cleanup)', () => {
     // Pre-existing untracked file
     writeFileSync(join(repo.path, 'preexisting.txt'), 'noise');
