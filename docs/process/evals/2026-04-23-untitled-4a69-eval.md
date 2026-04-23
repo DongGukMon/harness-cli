@@ -64,103 +64,103 @@
 
  RUN  v2.1.9 /Users/daniel/.grove/github.com/DongGukMon/harness-cli/worktrees/pretty
 
- ✓ tests/state.test.ts (50 tests) 43ms
- ✓ tests/logger.test.ts (32 tests) 85ms
- ✓ tests/phases/gate.test.ts (27 tests) 91ms
- ✓ tests/context/skills-rendering.test.ts (45 tests) 105ms
- ✓ tests/phases/runner-claude-resume.test.ts (13 tests) 47ms
- ✓ tests/runners/claude-usage.test.ts (17 tests) 27ms
- ✓ tests/phases/gate-resume.test.ts (13 tests) 158ms
- ✓ tests/signal.test.ts (16 tests) 481ms
- ✓ tests/lock.test.ts (20 tests) 217ms
- ✓ tests/phases/runner.test.ts (76 tests) 502ms
- ✓ tests/phases/terminal-ui.test.ts (18 tests) 112ms
- ✓ tests/commands/footer-ticker.test.ts (10 tests) 68ms
- ✓ tests/commands/inner.test.ts (23 tests) 227ms
- ✓ tests/metrics/footer-aggregator.test.ts (11 tests) 15ms
- ✓ tests/integration/logging.test.ts (15 tests) 278ms
- ✓ tests/runners/codex.test.ts (17 tests) 82ms
- ✓ tests/orphan-cleanup.test.ts (20 tests) 16ms
- ✓ tests/phases/verify.test.ts (14 tests) 14ms
- ✓ tests/preflight.test.ts (27 tests | 1 skipped) 193ms
- ✓ tests/integration/codex-session-resume.test.ts (6 tests) 97ms
- ✓ tests/integration/light-flow.test.ts (4 tests) 245ms
- ✓ tests/phases/runner-token-capture.test.ts (6 tests) 7ms
- ✓ tests/resume-light.test.ts (10 tests) 21ms
- ✓ tests/runners/codex-resume.test.ts (8 tests) 70ms
- ✓ tests/context/assembler.test.ts (72 tests) 1633ms
-   ✓ buildPhase7DiffAndMetadata — multi-repo (FR-5, ADR-N7, ADR-D1) > N=1 trackedRepos[0].path===cwd → raw diff without ### repo: label 404ms
-   ✓ buildPhase7DiffAndMetadata — multi-repo (FR-5, ADR-N7, ADR-D1) > N=2 → diff sections with ### repo: label for each repo 526ms
-   ✓ buildPhase7DiffAndMetadata — multi-repo (FR-5, ADR-N7, ADR-D1) > N>1 metadata uses "Harness implementation ranges (per tracked repo):" block 562ms
- ✓ tests/commands/inner-footer.test.ts (2 tests) 12ms
- ✓ tests/tmux.test.ts (33 tests) 813ms
-   ✓ pollForPidFile > returns null on timeout when file never appears 402ms
-   ✓ pollForPidFile > returns null when file contains non-numeric content 403ms
- ✓ tests/context/assembler-resume.test.ts (9 tests) 69ms
+ ✓ tests/logger.test.ts (32 tests) 43ms
+ ✓ tests/state.test.ts (50 tests) 45ms
+ ✓ tests/context/skills-rendering.test.ts (45 tests) 62ms
+ ✓ tests/phases/gate.test.ts (27 tests) 93ms
+ ✓ tests/phases/runner-claude-resume.test.ts (13 tests) 28ms
+ ✓ tests/runners/claude-usage.test.ts (17 tests) 71ms
+ ✓ tests/phases/gate-resume.test.ts (13 tests) 160ms
+ ✓ tests/signal.test.ts (16 tests) 486ms
+ ✓ tests/phases/runner.test.ts (76 tests) 475ms
+ ✓ tests/lock.test.ts (20 tests) 252ms
+ ✓ tests/phases/terminal-ui.test.ts (18 tests) 129ms
+ ✓ tests/commands/inner.test.ts (23 tests) 294ms
+ ✓ tests/commands/footer-ticker.test.ts (10 tests) 73ms
+ ✓ tests/integration/logging.test.ts (15 tests) 340ms
+ ✓ tests/metrics/footer-aggregator.test.ts (11 tests) 7ms
+ ✓ tests/runners/codex.test.ts (17 tests) 87ms
+ ✓ tests/phases/verify.test.ts (14 tests) 16ms
+ ✓ tests/orphan-cleanup.test.ts (20 tests) 36ms
+ ✓ tests/preflight.test.ts (27 tests | 1 skipped) 217ms
+ ✓ tests/integration/light-flow.test.ts (4 tests) 198ms
+ ✓ tests/integration/codex-session-resume.test.ts (6 tests) 66ms
+ ✓ tests/resume-light.test.ts (10 tests) 19ms
+ ✓ tests/phases/runner-token-capture.test.ts (6 tests) 14ms
+ ✓ tests/commands/inner-footer.test.ts (2 tests) 13ms
+ ✓ tests/runners/codex-resume.test.ts (8 tests) 58ms
+ ✓ tests/context/assembler.test.ts (72 tests) 1790ms
+   ✓ buildPhase7DiffAndMetadata — multi-repo (FR-5, ADR-N7, ADR-D1) > N=1 trackedRepos[0].path===cwd → raw diff without ### repo: label 462ms
+   ✓ buildPhase7DiffAndMetadata — multi-repo (FR-5, ADR-N7, ADR-D1) > N=2 → diff sections with ### repo: label for each repo 621ms
+   ✓ buildPhase7DiffAndMetadata — multi-repo (FR-5, ADR-N7, ADR-D1) > N>1 metadata uses "Harness implementation ranges (per tracked repo):" block 560ms
+ ✓ tests/tmux.test.ts (33 tests) 821ms
+   ✓ pollForPidFile > returns null on timeout when file never appears 406ms
+   ✓ pollForPidFile > returns null when file contains non-numeric content 405ms
+ ✓ tests/context/assembler-resume.test.ts (9 tests) 93ms
  ✓ tests/phases/interactive-watchdog.test.ts (6 tests) 8ms
- ✓ tests/phases/gate-feedback-archival.test.ts (2 tests) 50ms
- ✓ tests/state-invalidation.test.ts (5 tests) 12ms
- ✓ tests/runners/codex-isolation.test.ts (8 tests) 31ms
- ✓ tests/runners/claude.test.ts (4 tests) 4ms
- ✓ tests/phases/verdict.test.ts (16 tests) 3ms
- ✓ tests/commands/resume-cmd.test.ts (12 tests) 1883ms
- ✓ tests/resume.test.ts (11 tests) 2727ms
-   ✓ resumeRun > exits with code 1 and non-interactive message on paused run with null pendingAction (D4b) 305ms
-   ✓ resumeRun > skip_phase Phase 6 with gitignored eval report: skips commit and leaves evalCommit null 310ms
-   ✓ completeInteractivePhaseFromFreshSentinel — Phase 5 multi-repo (FR-8) > skips ancestry check for repos with implHead=null (null-safe FR-8) 316ms
- ✓ tests/commands/status-list.test.ts (7 tests) 725ms
- ✓ tests/root.test.ts (10 tests) 145ms
- ✓ tests/context/reviewer-contract.test.ts (4 tests) 55ms
- ✓ tests/phases/gate-resume-escalation.test.ts (1 test) 36ms
- ✓ tests/git.test.ts (20 tests) 1791ms
- ✓ tests/ui-footer.test.ts (9 tests) 4ms
-Installed 1 skill(s) to /var/folders/vx/1ln4rqh969s1ynxythgw3y8m0000gn/T/uninstall-skills-test-7JQBgv/.claude/skills:
+ ✓ tests/phases/gate-feedback-archival.test.ts (2 tests) 99ms
+ ✓ tests/state-invalidation.test.ts (5 tests) 14ms
+ ✓ tests/runners/codex-isolation.test.ts (8 tests) 35ms
+ ✓ tests/runners/claude.test.ts (4 tests) 14ms
+ ✓ tests/phases/verdict.test.ts (16 tests) 5ms
+ ✓ tests/commands/resume-cmd.test.ts (12 tests) 2402ms
+   ✓ resumeCommand > resumeCommand — loggingEnabled inheritance > resume defaults to false when state has loggingEnabled=false 318ms
+ ✓ tests/root.test.ts (10 tests) 191ms
+ ✓ tests/resume.test.ts (11 tests) 3234ms
+   ✓ resumeRun > exits with code 1 and non-interactive message on paused run with null pendingAction (D4b) 324ms
+   ✓ resumeRun > skip_phase Phase 6 with gitignored eval report: skips commit and leaves evalCommit null 396ms
+   ✓ completeInteractivePhaseFromFreshSentinel — Phase 5 multi-repo (FR-8) > returns true and sets implHead when any repo advanced 547ms
+ ✓ tests/context/reviewer-contract.test.ts (4 tests) 51ms
+ ✓ tests/commands/status-list.test.ts (7 tests) 647ms
+ ✓ tests/phases/gate-resume-escalation.test.ts (1 test) 38ms
+Installed 1 skill(s) to /var/folders/vx/1ln4rqh969s1ynxythgw3y8m0000gn/T/uninstall-skills-test-ZrsZFz/.claude/skills:
   phase-harness-codex-gate-review
-Uninstalled 1 skill(s) from /var/folders/vx/1ln4rqh969s1ynxythgw3y8m0000gn/T/uninstall-skills-test-7JQBgv/.claude/skills:
+Uninstalled 1 skill(s) from /var/folders/vx/1ln4rqh969s1ynxythgw3y8m0000gn/T/uninstall-skills-test-ZrsZFz/.claude/skills:
   phase-harness-codex-gate-review
-Installed 1 skill(s) to /var/folders/vx/1ln4rqh969s1ynxythgw3y8m0000gn/T/uninstall-skills-test-UOTIZe/.claude/skills:
+Installed 1 skill(s) to /var/folders/vx/1ln4rqh969s1ynxythgw3y8m0000gn/T/uninstall-skills-test-qtlbFW/.claude/skills:
   phase-harness-codex-gate-review
-Uninstalled 1 skill(s) from /var/folders/vx/1ln4rqh969s1ynxythgw3y8m0000gn/T/uninstall-skills-test-UOTIZe/.claude/skills:
+Uninstalled 1 skill(s) from /var/folders/vx/1ln4rqh969s1ynxythgw3y8m0000gn/T/uninstall-skills-test-qtlbFW/.claude/skills:
   phase-harness-codex-gate-review
-Installed 1 skill(s) to /var/folders/vx/1ln4rqh969s1ynxythgw3y8m0000gn/T/uninstall-skills-test-hbAX2X/.claude/skills:
+Installed 1 skill(s) to /var/folders/vx/1ln4rqh969s1ynxythgw3y8m0000gn/T/uninstall-skills-test-tEbWfq/.claude/skills:
   phase-harness-codex-gate-review
-Uninstalled 1 skill(s) from /var/folders/vx/1ln4rqh969s1ynxythgw3y8m0000gn/T/uninstall-skills-test-hbAX2X/.claude/skills:
+Uninstalled 1 skill(s) from /var/folders/vx/1ln4rqh969s1ynxythgw3y8m0000gn/T/uninstall-skills-test-tEbWfq/.claude/skills:
   phase-harness-codex-gate-review
-No skills directory found at /var/folders/vx/1ln4rqh969s1ynxythgw3y8m0000gn/T/uninstall-skills-test-cEINoY/.claude/skills. Nothing to uninstall.
- ✓ tests/uninstall-skills.test.ts (6 tests) 13ms
- ✓ tests/multi-worktree.test.ts (11 tests) 2431ms
-   ✓ (a) depth=1 auto-detect — non-git outer cwd > detects exactly depth=1 git repos, skips non-git dirs 464ms
-   ✓ (b) --track / --exclude flag combinations > --track replaces auto-detect 427ms
-   ✓ (b) --track / --exclude flag combinations > --exclude removes from auto-detect 419ms
-   ✓ (c) assembler diff concat for N=2 repos > includes ### repo: label for each repo in N=2 case 471ms
-   ✓ (d) Phase 5 success: one-of-N advanced > returns true when only repo-a advanced in a 2-repo setup 464ms
-Installed 1 skill(s) to /var/folders/vx/1ln4rqh969s1ynxythgw3y8m0000gn/T/install-skills-test-sPhy1O/.claude/skills:
+No skills directory found at /var/folders/vx/1ln4rqh969s1ynxythgw3y8m0000gn/T/uninstall-skills-test-j5I0Yn/.claude/skills. Nothing to uninstall.
+ ✓ tests/uninstall-skills.test.ts (6 tests) 27ms
+ ✓ tests/git.test.ts (20 tests) 2295ms
+   ✓ isAncestor > returns true when ancestor is an ancestor of descendant 323ms
+ ✓ tests/ui-footer.test.ts (9 tests) 3ms
+Installed 1 skill(s) to /var/folders/vx/1ln4rqh969s1ynxythgw3y8m0000gn/T/install-skills-test-xQTiMQ/.claude/skills:
   phase-harness-codex-gate-review
-Installed 1 skill(s) to /var/folders/vx/1ln4rqh969s1ynxythgw3y8m0000gn/T/install-skills-test-Qv9odw/.claude/skills:
+Installed 1 skill(s) to /var/folders/vx/1ln4rqh969s1ynxythgw3y8m0000gn/T/install-skills-test-UQc4DZ/.claude/skills:
   phase-harness-codex-gate-review
-Installed 1 skill(s) to /var/folders/vx/1ln4rqh969s1ynxythgw3y8m0000gn/T/install-skills-test-BVZ6xd/.claude/skills:
+Installed 1 skill(s) to /var/folders/vx/1ln4rqh969s1ynxythgw3y8m0000gn/T/install-skills-test-jbrNT4/.claude/skills:
   phase-harness-codex-gate-review
-Installed 1 skill(s) to /var/folders/vx/1ln4rqh969s1ynxythgw3y8m0000gn/T/install-skills-test-xd1HBE/.claude/skills:
+Installed 1 skill(s) to /var/folders/vx/1ln4rqh969s1ynxythgw3y8m0000gn/T/install-skills-test-b9v4ke/.claude/skills:
   phase-harness-codex-gate-review
-Installed 1 skill(s) to /var/folders/vx/1ln4rqh969s1ynxythgw3y8m0000gn/T/install-skills-test-FlaPeE/.claude/skills:
+Installed 1 skill(s) to /var/folders/vx/1ln4rqh969s1ynxythgw3y8m0000gn/T/install-skills-test-UYZCVJ/.claude/skills:
   phase-harness-codex-gate-review
-Installed 1 skill(s) to /var/folders/vx/1ln4rqh969s1ynxythgw3y8m0000gn/T/install-skills-test-FlaPeE/.claude/skills:
+Installed 1 skill(s) to /var/folders/vx/1ln4rqh969s1ynxythgw3y8m0000gn/T/install-skills-test-UYZCVJ/.claude/skills:
   phase-harness-codex-gate-review
- ✓ tests/install-skills.test.ts (7 tests) 22ms
- ✓ tests/input.test.ts (12 tests) 2ms
- ✓ tests/commands/jump.test.ts (6 tests) 686ms
-[2J[H[2J[H ✓ tests/ink/components/CurrentPhase.test.tsx (9 tests) 24ms
- ✓ tests/ui.test.ts (6 tests) 4ms
+ ✓ tests/install-skills.test.ts (7 tests) 13ms
+ ✓ tests/input.test.ts (12 tests) 4ms
+ ✓ tests/commands/jump.test.ts (6 tests) 731ms
+ ✓ tests/multi-worktree.test.ts (11 tests) 3144ms
+   ✓ (a) depth=1 auto-detect — non-git outer cwd > detects exactly depth=1 git repos, skips non-git dirs 650ms
+   ✓ (b) --track / --exclude flag combinations > --track replaces auto-detect 634ms
+   ✓ (b) --track / --exclude flag combinations > --exclude removes from auto-detect 641ms
+   ✓ (c) assembler diff concat for N=2 repos > includes ### repo: label for each repo in N=2 case 452ms
+   ✓ (d) Phase 5 success: one-of-N advanced > returns true when only repo-a advanced in a 2-repo setup 536ms
+[2J[H[2J[H ✓ tests/ui.test.ts (6 tests) 4ms
+ ✓ tests/phases/interactive.test.ts (51 tests) 4738ms
+   ✓ runInteractivePhase — Claude dispatch command shape > sendKeysToPane command includes --dangerously-skip-permissions and --effort 1586ms
+   ✓ validatePhaseArtifacts — Phase 5 multi-repo (FR-6, ADR-D4) > returns true when any repo advanced; sets implHead on advanced repos only 541ms
+ ✓ tests/ink/components/CurrentPhase.test.tsx (9 tests) 20ms
+ ✓ tests/scripts/harness-verify.test.ts (2 tests) 359ms
  ✓ tests/task-prompt.test.ts (7 tests) 2ms
- ✓ tests/terminal.test.ts (5 tests) 4ms
- ✓ tests/scripts/harness-verify.test.ts (2 tests) 337ms
- ✓ tests/ink/components/GateVerdict.test.tsx (7 tests) 22ms
- ✓ tests/ink/components/PhaseTimeline.test.tsx (6 tests) 30ms
- ✓ tests/phases/interactive.test.ts (51 tests) 4359ms
-   ✓ runInteractivePhase — Claude dispatch command shape > sendKeysToPane command includes --dangerously-skip-permissions and --effort 1598ms
-   ✓ validatePhaseArtifacts — Phase 5 multi-repo (FR-6, ADR-D4) > returns true when any repo advanced; sets implHead on advanced repos only 479ms
- ✓ tests/commands/skip.test.ts (4 tests) 444ms
- ✓ tests/ink/store.test.ts (4 tests) 11ms
+ ✓ tests/ink/components/PhaseTimeline.test.tsx (6 tests) 25ms
+ ✓ tests/terminal.test.ts (5 tests) 2ms
+ ✓ tests/ink/store.test.ts (4 tests) 10ms
 ```
 
 </details>
@@ -171,16 +171,16 @@ Installed 1 skill(s) to /var/folders/vx/1ln4rqh969s1ynxythgw3y8m0000gn/T/install
 ```
 ⚠️  Complexity signal missing or invalid in spec; defaulting to Medium.
 ⚠️  Complexity signal missing or invalid in spec; defaulting to Medium.
+⚠️  carryover feedback path not found on disk, skipping: /var/folders/vx/1ln4rqh969s1ynxythgw3y8m0000gn/T/sk-LO1Es1/phase-5-carryover-missing.md
 ⚠️  claude session resume fallback: no prior attempt id
 ⚠️  claude session resume fallback: no prior attempt id
 ⚠️  claude session resume fallback: no prior attempt id
-⚠️  carryover feedback path not found on disk, skipping: /var/folders/vx/1ln4rqh969s1ynxythgw3y8m0000gn/T/sk-ePPa70/phase-5-carryover-missing.md
-⚠️  claude session resume fallback: jsonl missing
 ⚠️  claude session resume fallback: jsonl missing
 ⚠️  claude session resume fallback: jsonl missing
 ⚠️  claude session resume fallback: jsonl missing
 ⚠️  claude session resume fallback: jsonl missing
 ⚠️  claude session resume fallback: no prior attempt id
+⚠️  claude session resume fallback: jsonl missing
 ⚠️  claude session resume fallback: no prior attempt id
 ⚠️  claude session resume fallback: no prior attempt id
 ⚠️  claude session resume fallback: jsonl missing
