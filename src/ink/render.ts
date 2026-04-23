@@ -45,7 +45,7 @@ export function renderInkControlPanel(
   if (!mounted) {
     process.stdout.write('\x1b[2J\x1b[H');
     inkInstance = render(React.createElement(App), {
-      stdin: undefined,
+      stdin: process.stdin,
       exitOnCtrlC: false,
       patchConsole: false,
     });
