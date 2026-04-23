@@ -284,3 +284,39 @@ function isPhaseStatus(value: unknown): value is PhaseStatus {
     || value === 'error'
     || value === 'skipped';
 }
+
+// --- Footer formatting ---
+
+export function formatFooter(summary: FooterSummary, columns: number): string {
+  if (typeof columns !== 'number' || columns <= 0) return '';
+  const phaseElapsed = formatPhaseDuration(summary.phaseRunningElapsedMs ?? 0, columns);
+  const sessionElapsed = formatDuration(summary.sessionElapsedMs, columns >= 80);
+  if (summary.currentPhase === 6) {
+    return columns >= 80
+      ? `P6 · ${phaseElapsed} phase · ${sessionElapsed} session`
+      : `P6 · ${phaseElapsed} / ${sessionElapsed}`;
+  }
+  const totalTokens = formatTokenMillions(summary.totalTokens);
+  if (columns >= 80) {
+    const claudeTokens = formatTokenMillions(summary.claudeTokens);
+    const gateTokens = formatTokenMillions(summary.gateTokens);
+    return `P${summary.currentPhase} attempt ${summary.attempt} · ${phaseElapsed} phase · ${sessionElapsed} session · ${totalTokens} tok (${claudeTokens} Claude + ${gateTokens} gate)`;
+  }
+  return `P${summary.currentPhase} a${summary.attempt} · ${phaseElapsed} / ${sessionElapsed} · ${totalTokens} tok`;
+}
+
+function formatPhaseDuration(elapsedMs: number, columns: number): string {
+  return formatDuration(elapsedMs, columns >= 80);
+}
+
+function formatDuration(elapsedMs: number, wide: boolean): string {
+  const totalSeconds = Math.max(Math.floor(elapsedMs / 1000), 0);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  const paddedSeconds = String(seconds).padStart(2, '0');
+  return wide ? `${minutes}m ${paddedSeconds}s` : `${minutes}m${paddedSeconds}s`;
+}
+
+function formatTokenMillions(tokens: number): string {
+  return `${(tokens / 1_000_000).toFixed(1)}M`;
+}

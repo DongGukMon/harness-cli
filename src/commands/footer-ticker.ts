@@ -2,6 +2,8 @@ import fs from 'fs';
 import { aggregateFooter, readEventsJsonl, readStateSlice } from '../metrics/footer-aggregator.js';
 import { clearFooterRow, formatFooter, writeFooterToPane } from '../ui.js';
 import type { SessionLogger } from '../types.js';
+import { mounted } from '../ink/render.js';
+import { dispatchFooter } from '../ink/store.js';
 
 export interface FooterTickerOptions {
   logger: SessionLogger;
@@ -41,6 +43,11 @@ export function startFooterTicker(opts: FooterTickerOptions): FooterTicker {
 
       const summary = aggregateFooter(events, stateSlice, Date.now());
       if (summary === null) {
+        return;
+      }
+
+      if (mounted) {
+        dispatchFooter(summary);
         return;
       }
 

@@ -1,7 +1,8 @@
 import { MODEL_PRESETS, REQUIRED_PHASE_KEYS, getPresetById } from './config.js';
-import type { FooterSummary } from './metrics/footer-aggregator.js';
+export { formatFooter } from './metrics/footer-aggregator.js';
 import type { HarnessState, FlowMode, SessionLogger, RenderCallsite } from './types.js';
 import type { InputManager } from './input.js';
+import { renderInkControlPanel, mounted } from './ink/render.js';
 
 // ANSI color codes
 const GREEN = '\x1b[32m';
@@ -9,6 +10,14 @@ const RED = '\x1b[31m';
 const YELLOW = '\x1b[33m';
 const BLUE = '\x1b[34m';
 const RESET = '\x1b[0m';
+
+function suppressedDuringMount(fn: string): boolean {
+  if (mounted) {
+    process.stderr.write(`[ui] suppressed ${fn} during Ink mount\n`);
+    return true;
+  }
+  return false;
+}
 
 export function separator(): string {
   const cols = process.stdout.columns;
@@ -36,67 +45,11 @@ export function renderControlPanel(
   logger?: SessionLogger,
   callsite?: RenderCallsite,
 ): void {
-  process.stdout.write('\x1b[2J\x1b[H'); // clear screen
-  console.error(separator());
-  console.error(`${GREEN}▶${RESET} Harness Control Panel`);
-  console.error(separator());
-  console.error(`  Run:   ${state.runId}`);
-  console.error(`  Phase: ${state.currentPhase}/7 — ${phaseLabel(state.currentPhase, state.flow)}`);
-  const preset = getPresetById(state.phasePresets?.[String(state.currentPhase)] ?? '');
-  if (preset) console.error(`  Model: ${preset.label}`);
-  console.error('');
-
-  for (let p = 1; p <= 7; p++) {
-    const status = state.phases[String(p)] ?? 'pending';
-    const isSkipped = status === 'skipped';
-    const icon = status === 'completed' ? `${GREEN}✓${RESET}`
-      : status === 'in_progress' ? `${YELLOW}▶${RESET}`
-      : status === 'failed' || status === 'error' ? `${RED}✗${RESET}`
-      : isSkipped ? '—'
-      : ' ';
-    const statusLabel = isSkipped ? '(skipped)' : `(${status})`;
-    const current = p === state.currentPhase ? ' ← current' : '';
-    console.error(`  [${icon}] Phase ${p}: ${phaseLabel(p, state.flow)} ${statusLabel}${current}`);
-  }
-  console.error('');
-  console.error(separator());
-
-  if (logger !== undefined && callsite !== undefined) {
-    const phaseStatus = state.phases[String(state.currentPhase)] ?? 'pending';
-    logger.logEvent({
-      event: 'ui_render',
-      phase: state.currentPhase,
-      phaseStatus,
-      callsite,
-    });
-  }
-}
-
-export function formatFooter(summary: FooterSummary, columns: number): string {
-  if (typeof columns !== 'number' || columns <= 0) {
-    return '';
-  }
-
-  const phaseElapsed = formatPhaseDuration(summary.phaseRunningElapsedMs ?? 0, columns);
-  const sessionElapsed = formatSessionDuration(summary.sessionElapsedMs, columns);
-
-  if (summary.currentPhase === 6) {
-    return columns >= 80
-      ? `P6 · ${phaseElapsed} phase · ${sessionElapsed} session`
-      : 'P6 · ' + `${phaseElapsed} / ${sessionElapsed}`;
-  }
-
-  const totalTokens = formatTokenMillions(summary.totalTokens);
-  if (columns >= 80) {
-    const claudeTokens = formatTokenMillions(summary.claudeTokens);
-    const gateTokens = formatTokenMillions(summary.gateTokens);
-    return `P${summary.currentPhase} attempt ${summary.attempt} · ${phaseElapsed} phase · ${sessionElapsed} session · ${totalTokens} tok (${claudeTokens} Claude + ${gateTokens} gate)`;
-  }
-
-  return `P${summary.currentPhase} a${summary.attempt} · ${phaseElapsed} / ${sessionElapsed} · ${totalTokens} tok`;
+  renderInkControlPanel(state, logger, callsite);
 }
 
 export function writeFooterToPane(line: string, rows: number, columns: number): void {
+  if (mounted) return; // Ink Footer component handles display
   void columns;
   if (line.length === 0) {
     return;
@@ -106,27 +59,8 @@ export function writeFooterToPane(line: string, rows: number, columns: number): 
 }
 
 export function clearFooterRow(rows: number): void {
+  if (mounted) return; // Ink Footer component handles display
   process.stderr.write(`\x1b[s\x1b[${rows};1H\x1b[2K\x1b[u`);
-}
-
-function formatPhaseDuration(elapsedMs: number, columns: number): string {
-  return formatDuration(elapsedMs, columns >= 80);
-}
-
-function formatSessionDuration(elapsedMs: number, columns: number): string {
-  return formatDuration(elapsedMs, columns >= 80);
-}
-
-function formatDuration(elapsedMs: number, wide: boolean): string {
-  const totalSeconds = Math.max(Math.floor(elapsedMs / 1000), 0);
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
-  const paddedSeconds = String(seconds).padStart(2, '0');
-  return wide ? `${minutes}m ${paddedSeconds}s` : `${minutes}m${paddedSeconds}s`;
-}
-
-function formatTokenMillions(tokens: number): string {
-  return `${(tokens / 1_000_000).toFixed(1)}M`;
 }
 
 /**
@@ -161,6 +95,7 @@ export function printPhaseTransition(
   fromStatus: string,
   toLabel: string,
 ): void {
+  if (suppressedDuringMount('printPhaseTransition')) return;
   console.error(`${GREEN}✓${RESET} Phase ${fromPhase} 완료 (${fromStatus})`);
   console.error(separator());
   console.error(`${GREEN}▶${RESET} Phase ${toPhase} 시작: ${toLabel}`);
@@ -171,6 +106,7 @@ export function printPhaseTransition(
  * Print warning (yellow ⚠ prefix).
  */
 export function printWarning(msg: string): void {
+  if (suppressedDuringMount('printWarning')) return;
   console.error(`${YELLOW}⚠️  ${msg}${RESET}`);
 }
 
@@ -178,6 +114,7 @@ export function printWarning(msg: string): void {
  * Print error (red ✗ prefix).
  */
 export function printError(msg: string): void {
+  if (suppressedDuringMount('printError')) return;
   console.error(`${RED}✗ ${msg}${RESET}`);
 }
 
@@ -185,6 +122,7 @@ export function printError(msg: string): void {
  * Print success (green ✓ prefix).
  */
 export function printSuccess(msg: string): void {
+  if (suppressedDuringMount('printSuccess')) return;
   console.error(`${GREEN}✓ ${msg}${RESET}`);
 }
 
@@ -192,10 +130,12 @@ export function printSuccess(msg: string): void {
  * Print info line.
  */
 export function printInfo(msg: string): void {
+  if (suppressedDuringMount('printInfo')) return;
   console.error(`${BLUE}ℹ ${msg}${RESET}`);
 }
 
 export function renderWelcome(runId: string): void {
+  if (suppressedDuringMount('renderWelcome')) return;
   process.stdout.write('\x1b[2J\x1b[H');
   console.error(separator());
   console.error(`${GREEN}▶${RESET} Harness`);
@@ -210,6 +150,7 @@ export function renderModelSelection(
   editablePhases?: Set<string>,
   flow: FlowMode = 'full',
 ): void {
+  if (suppressedDuringMount('renderModelSelection')) return;
   process.stdout.write('\x1b[2J\x1b[H');
   console.error(separator());
   console.error(`${GREEN}▶${RESET} Model Configuration`);
@@ -240,6 +181,7 @@ export async function promptModelConfig(
   editablePhases?: string[],
   flow: FlowMode = 'full',
 ): Promise<Record<string, string>> {
+  if (suppressedDuringMount('promptModelConfig')) return currentPresets;
   const presets = { ...currentPresets };
   const editable = editablePhases ? new Set(editablePhases) : new Set(REQUIRED_PHASE_KEYS as readonly string[]);
   const validPhaseKeys = new Set([...editable, '\r', '\n']);
