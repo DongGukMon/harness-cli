@@ -1,4 +1,4 @@
-import { execSync } from 'child_process';
+import { execSync, execFileSync } from 'child_process';
 import { existsSync, unlinkSync } from 'fs';
 import { join, isAbsolute } from 'path';
 import { getStagedFiles, getFileStatus, isStagedDeletion, isPathGitignored } from './git.js';
@@ -42,7 +42,7 @@ export function captureDirtyBaseline(cwd: string): string[] {
     const absPath = join(cwd, filePath);
     if (existsSync(absPath)) {
       try {
-        hash = execSync(`git hash-object -- "${filePath}"`, {
+        hash = execFileSync('git', ['hash-object', '--', filePath], {
           cwd,
           encoding: 'utf-8',
         }).trim();
@@ -134,7 +134,7 @@ function computeFingerprint(line: string, cwd: string): string {
   const resolvedPath = join(cwd, filePath);
   if (existsSync(resolvedPath)) {
     try {
-      hash = execSync(`git hash-object -- "${filePath}"`, {
+      hash = execFileSync('git', ['hash-object', '--', filePath], {
         cwd,
         encoding: 'utf-8',
       }).trim();
@@ -229,15 +229,16 @@ export function runPhase6Preconditions(
     const evalReportDeleted = isStagedDeletion(evalReportPath, cwd);
     const dirtyLines = finalPorcelainLines.filter((line) => {
       const linePath = line.slice(3);
-      // Filter eval report lines
-      if (linePath === evalReportPath && evalReportDeleted) return false;
+      // Filter parent-dir collapse entries for eval report
       if (linePath !== evalReportPath && evalReportPath.startsWith(linePath)) return false;
+      // Eval report itself: keep as dirty only if cleanup did NOT succeed
+      if (linePath === evalReportPath) return !evalReportDeleted;
       // Filter pre-existing baseline entries by fingerprint
       if (baselineSet.size > 0) {
         const fp = computeFingerprint(line, resolvedCwd);
         if (baselineSet.has(fp)) return false;
       }
-      return linePath !== evalReportPath;
+      return true;
     });
 
     if (dirtyLines.length > 0) {
