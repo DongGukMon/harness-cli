@@ -59,7 +59,7 @@ tmux session (변경 없음)
 | `src/ink/App.tsx` | Root 컴포넌트. theme provider + layout(Header / PhaseTimeline / CurrentPhase / GateVerdict / ActionMenu / Footer 배치). |
 | `src/ink/theme.ts` | Color palette, glyph 상수, `useTerminalSize` 훅. 색 위계는 status별 단일 정의(green=ok, yellow=in-progress, red=fail, dim=pending, cyan=accent). |
 | `src/ink/components/Header.tsx` | Brand title, run ID(축약), flow mode badge(full/light), elapsed time. |
-| `src/ink/components/PhaseTimeline.tsx` | 7-phase(full) 또는 5-phase(light) 가로 타임라인. 각 phase에 status icon + label. 현재 phase 강조. |
+| `src/ink/components/PhaseTimeline.tsx` | 가로 타임라인. flow에 따라 아래 "Phase Display Mapping"의 canonical phase 목록을 그린다. 각 phase에 status icon + label. 현재 phase 강조. |
 | `src/ink/components/CurrentPhase.tsx` | 현재 phase 상세 박스: 이름, 상태, gate retry index(있으면), preset(model/runner/effort). |
 | `src/ink/components/GateVerdict.tsx` | 가장 최근 gate verdict 요약(approved/rejected, retry index, runner). 없으면 hidden. |
 | `src/ink/components/ActionMenu.tsx` | Context-sensitive R/J/Q 메뉴 (terminal-failed 시 prominent, 그 외 hint 형태). |
@@ -74,12 +74,69 @@ tmux session (변경 없음)
 
 **변경되지 않는 모듈**: `src/tmux.ts`, `src/runners/{claude.ts,codex.ts,claude-usage.ts}`, `src/state.ts`, `src/types.ts`(스키마), `src/signal.ts`, `src/resume.ts`, `src/commands/{run,start,inner,resume,jump,skip}.ts`, `scripts/harness-verify.sh`, `src/context/**`, sentinel·gate·preset 흐름 전체.
 
+## Phase Display Mapping
+
+내부 state는 항상 7-phase(`state.phases['1'..'7']`)이고, light mode에서는 phase 3·4가 `'skipped'`로 초기화된다(현 `src/state.ts:248-253` 동작). UI는 flow에 따라 다음 canonical 목록을 **이 순서대로** 표시한다:
+
+- **flow === 'full'** — 7-phase, 좌→우: `[1, 2, 3, 4, 5, 6, 7]`
+  | UI slot | state key | label (현 `src/ui.ts` `phaseLabel`과 일치) |
+  |---|---|---|
+  | 1 | `'1'` | "Spec 작성" |
+  | 2 | `'2'` | "Spec Gate" |
+  | 3 | `'3'` | "Plan 작성" |
+  | 4 | `'4'` | "Plan Gate" |
+  | 5 | `'5'` | "구현" |
+  | 6 | `'6'` | "검증" |
+  | 7 | `'7'` | "Eval Gate" |
+
+- **flow === 'light'** — 5-phase, 좌→우: `[1, 2, 5, 6, 7]` (phase 3·4 hidden)
+  | UI slot | state key | label |
+  |---|---|---|
+  | 1 | `'1'` | "설계+플랜" |
+  | 2 | `'2'` | "Spec Gate" |
+  | 3 | `'5'` | "구현" |
+  | 4 | `'6'` | "검증" |
+  | 5 | `'7'` | "Eval Gate" |
+
+**Status mapping** — UI slot의 status는 해당 state key의 `state.phases[key]` 값을 그대로 사용한다. light mode의 hidden phase 3·4는 표시하지 않으며 `'skipped'` 상태가 UI에 노출되지 않는다(가로 정렬을 깨지 않기 위해). 신규 `phaseLabel(flow, slot)` 헬퍼는 두 매핑 표를 단일 source of truth로 보유하고, 기존 `src/ui.ts`의 라벨 정의와 동기화 상태로 유지한다(컴포넌트 테스트가 이 동기화를 강제).
+
 ## Rendering & Lifecycle
 
 - 외부 호출 시그니처 보존: `renderControlPanel(state: HarnessState, logger?: SessionLogger, callsite?: RenderCallsite): void`. 호출부는 변경 없음.
 - 내부 동작: 첫 호출 시 Ink `render()`로 마운트. 이후 호출은 store dispatch → React re-render. tmux pane이 사라지거나 `process.exit` 직전에는 `unmount()` cleanup. `process.stdin.isTTY === false`인 비대화형 환경에서는 Ink 마운트를 건너뛰고 한 줄 plain status를 stderr에 기록(현 `console.error` 동작과 호환).
 - alt-screen은 사용하지 않는다 — control pane은 흐르는 로그처럼 보이지 않고 정적인 panel처럼 보여야 하지만, alt-screen을 켜면 tmux pane scrollback이 깨지므로 일반 화면 모드에서 `\x1b[2J\x1b[H` clear 후 그린다(현 동작과 동일).
 - Resize: Ink가 SIGWINCH를 자체 처리한다. `useTerminalSize`로 폭 < 60일 때 component가 축약 표시로 자동 전환한다.
+
+## Output / Input Ownership Contract
+
+Ink 도입으로 같은 control pane에서 (a) Ink renderer, (b) `InputManager`의 raw stdin handling, (c) 기존 `src/ui.ts`의 직접 print 헬퍼 세 주체가 공존한다. 충돌을 막기 위한 책임 분담은 다음과 같이 **고정**한다.
+
+### Ink는 output-only
+
+- `src/ink/render.ts`의 마운트 호출은 Ink가 stdin/raw mode/SIGINT를 절대 가져가지 않도록 다음 옵션을 명시한다:
+  - `stdin: undefined` (Ink가 stdin을 구독하지 않도록 명시적으로 분리)
+  - `exitOnCtrlC: false` (Ctrl+C는 항상 `InputManager`가 처리)
+  - `patchConsole: false` (Ink가 `console.*`를 가로채지 않도록 — 비-render 호출이 Ink 영역을 깨지 않게)
+- Ink unmount 시 raw mode·stdin listener를 어떤 형태로도 변경하지 않는다. Cursor 표시 상태는 Ink가 자체적으로 복원하지만, raw mode flag는 `InputManager.stop()`만이 토글한다.
+- `process.exit` 또는 fatal error 경로에서의 cleanup 순서: ① Ink `unmount()` → ② `InputManager.stop()` → ③ exit. 역순일 경우 raw mode가 남아 터미널이 깨진다.
+
+### InputManager는 stdin/raw mode/Ctrl+C의 단독 소유자
+
+- `src/input.ts`는 변경 없이 그대로 사용한다(D4의 결정). raw mode 진입(`setRawMode(true)`)·해제(`setRawMode(false)`)·`SIGINT` 발생·`pendingKey` 1s TTL 버퍼링 모두 단독 책임.
+- Ink가 mount되어 있어도 `InputManager.start()`가 `process.stdin`에 직접 `'data'` listener를 붙이는 현 동작은 그대로 유지된다(Ink가 stdin을 구독하지 않으므로 충돌 없음).
+
+### `src/ui.ts` 직접 print 헬퍼 사용 규칙
+
+`renderControlPanel` 외에 `src/ui.ts`에 남는 export(`separator`, `formatFooter`, `writeFooterToPane`, `clearFooterRow`, `printPhaseTransition`, `printWarning`, `printError`, `printSuccess`, `printInfo`, `renderWelcome`, `renderModelSelection`, `promptModelConfig`)는 다음 두 시점에서만 호출 가능하다:
+
+1. **Pre-mount 단계**: `start.ts` / `inner.ts`의 시동 시퀀스 — `renderWelcome`, `renderModelSelection`, `promptModelConfig`, 초기 `printError`/`printInfo`. 이 시점에는 Ink가 아직 마운트되지 않았다.
+2. **Post-unmount 단계**: 정상 완료 직후 또는 fatal error 처리 중. cleanup 순서(①Ink unmount → ②InputManager stop)를 지킨 뒤에만 호출.
+
+**Ink mount 중에는 위 헬퍼를 절대 호출하지 않는다** — 호출하면 같은 pane에 ANSI escape가 섞여 Ink가 그린 화면이 깨진다. 이 규칙을 강제하기 위해 다음을 둔다:
+
+- `src/ink/render.ts`가 `mounted` boolean flag를 export한다.
+- 위 헬퍼들은 `mounted === true`인 동안 호출되면 즉시 return하고 stderr에 한 줄 dev-warning(`[ui] suppressed printX during Ink mount: <fn>`)을 남긴다(silent drop은 디버깅을 어렵게 하므로 명시적 경고).
+- Footer 출력(`writeFooterToPane`/`formatFooter`/`clearFooterRow`)은 Ink mount 중이면 store에 footer summary를 dispatch하는 경로로 흐른다. Pre/Post 단계에서는 기존 직접 출력을 유지한다.
 
 ## Telemetry & Compatibility
 
@@ -113,6 +170,11 @@ tmux session (변경 없음)
 5. `src/ink/` 디렉토리가 존재하며 다음 파일을 모두 포함한다: `render.ts`, `store.ts`, `App.tsx`, `theme.ts`, `components/Header.tsx`, `components/PhaseTimeline.tsx`, `components/CurrentPhase.tsx`, `components/GateVerdict.tsx`, `components/ActionMenu.tsx`, `components/Footer.tsx`.
 6. `src/types.ts`의 `RenderCallsite` 리터럴 union이 9종(loop-top, interactive-redirect, interactive-complete, gate-redirect, gate-approve, verify-complete, verify-redirect, terminal-failed, terminal-complete) 그대로 유지된다 — 추가/제거 금지.
 7. `package.json` dependencies에 `ink`와 `react`가 등록된다.
+8. `src/ink/render.ts` 본문 안에 `stdin: undefined`, `exitOnCtrlC: false`, `patchConsole: false` 세 옵션 키가 모두 등장해야 한다(`grep -E "stdin: undefined|exitOnCtrlC: false|patchConsole: false" src/ink/render.ts`이 3건 hit).
+9. `src/ink/render.ts`가 `mounted` 식별자를 export한다(`grep -E "export.*mounted" src/ink/render.ts`이 1건 이상 hit).
+10. `src/ink/` 어디에서도 `process.stdin.setRawMode`, `process.stdin.on(`, `process.stdin.resume(`을 호출하지 않는다(`grep -rnE "process\\.stdin\\.(setRawMode|on\\(|resume\\()" src/ink/`이 0건).
+11. `src/ink/` 어디에서도 tmux 모듈을 import하지 않는다(`grep -rn "from.*tmux" src/ink/`이 0건).
+12. light flow timeline의 canonical 순서는 정확히 `[1, 2, 5, 6, 7]`이며 phase 3·4를 표시하지 않는다 — `PhaseTimeline.tsx`의 light 분기에 phase 3 또는 4를 슬롯으로 추가하지 않는다(`grep -nE "['\"](3|4)['\"]" src/ink/components/PhaseTimeline.tsx`이 light branch 안에서 0건).
 
 ## Invariants
 
@@ -123,6 +185,9 @@ tmux session (변경 없음)
 - **InputManager 미변경**: `src/input.ts`의 `InputManager` 클래스 미변경(pre-emptive 1s TTL pendingKey, raw stdin handling 보존).
 - **Telemetry 호환**: 기존 `events.jsonl` 컨슈머가 본 변경 후에도 동일 schema로 이벤트를 받을 수 있어야 한다 — `ui_render`/`terminal_action` 외 새 이벤트 추가 금지, 기존 이벤트 필드 제거/이름 변경 금지.
 - **Headless 보존**: `process.stdin.isTTY === false` 환경에서 Ink mount 시도 없이 plain stderr 출력 fallback이 동작해야 한다.
+- **Ink output-only**: `src/ink/`는 stdin/raw mode/SIGINT를 절대 다루지 않는다(Success Criteria #10). Ctrl+C 처리·raw mode 토글·`pendingKey` 버퍼링은 `InputManager`가 단독으로 책임진다.
+- **Helper-Ink 상호배제**: Ink mount 중에는 `src/ui.ts`의 직접 print 헬퍼가 호출되어도 출력하지 않는다. Cleanup 순서는 항상 ① Ink unmount → ② InputManager stop.
+- **Light timeline 순서 고정**: light flow의 PhaseTimeline은 정확히 `[1, 2, 5, 6, 7]` 순서로 5개 슬롯을 그리며 phase 3·4를 슬롯으로 노출하지 않는다(Success Criteria #12).
 
 ## Out of Scope (defer)
 
