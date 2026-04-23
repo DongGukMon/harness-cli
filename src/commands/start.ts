@@ -247,8 +247,11 @@ export async function startCommand(task: string | undefined, options: StartOptio
     // Inject detected tracked repos (overrides the placeholder set by createInitialState)
     state.trackedRepos = trackedRepos;
 
-    // Capture pre-existing dirty-file fingerprints for Phase 6 baseline filtering
-    state.dirtyBaseline = inGitRepo ? captureDirtyBaseline(trackedRepos[0].path) : [];
+    // Capture pre-existing dirty-file fingerprints for Phase 6 baseline filtering.
+    // Always use trackedRepos[0].path (the docs-home git repo), not the outer cwd —
+    // in the depth-1 multi-repo mode the outer cwd may not be a git repo itself.
+    // captureDirtyBaseline() returns [] when called on a non-git path.
+    state.dirtyBaseline = captureDirtyBaseline(trackedRepos[0].path);
 
     if (options.codexNoIsolate) {
       // BUG-C risk surface: user explicitly bypassed isolation.
