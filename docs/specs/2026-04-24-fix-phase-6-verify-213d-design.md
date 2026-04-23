@@ -37,16 +37,17 @@ Phase 6 preconditions recompute the fingerprint for every live porcelain line (a
 
 R1. `runPhase6Preconditions` MUST filter out porcelain lines whose **fingerprint** (`<XY>\0<path>\0<hash>`) matches an entry in `dirtyBaseline`, in addition to filtering the eval report. Filtering is fingerprint-exact — a path whose content hash has changed since baseline capture MUST NOT match and MUST fire the guard. Both baseline capture and live Phase‑6 porcelain reads MUST use `git status --porcelain --untracked-files=all` so every untracked file has a file-granular fingerprint (no directory collapse).
 R2. The fingerprint filter MUST apply to both the initial dirty check (Step 2) and the final clean check (Step 4).
-R3. `state.dirtyBaseline: string[]` MUST be captured once at session init in `src/commands/start.ts`, after `.gitignore` commits and before `createInitialState` is persisted, from `git status --porcelain --untracked-files=all` run at `trackedRepos[0].path`. Each dirty path contributes one fingerprint string. Non-git roots and git roots with clean trees produce `[]`.
+R3. `state.dirtyBaseline: string[]` MUST be captured once at session init in `src/commands/start.ts`, after `.gitignore` commits and before the first `writeState` for the run, by unconditionally calling `captureDirtyBaseline(trackedRepos[0].path)` — **regardless of whether the outer `cwd` is a git repo**. `detectTrackedRepos` (and its per-repo preflight) already guarantees `trackedRepos[0].path` points at a git working tree, so docsRoot cleanliness is the authoritative source. Gating on the outer-cwd `inGitRepo` flag (as an earlier revision proposed) would silently skip baseline capture in the supported "non-git outer + depth-1 docsRoot" mode and is prohibited by this requirement. `captureDirtyBaseline` returns `[]` defensively if its `cwd` ever turns out not to be a git repo, and also `[]` for a clean git root — both acceptable.
 R4. `state.dirtyBaseline` MUST default to `[]` when reading legacy state files (backward-compatible migration in `src/state.ts::loadState`). Legacy in-flight runs retain strict pre-fix behavior by design (see Decision D4).
 R5. Existing tests (`tests/artifact.test.ts`, `tests/phases/verify.test.ts`) MUST keep passing — baseline defaults to `[]` when omitted, matching the current strict behavior.
 R6. New tests MUST cover:
     - Pre-existing tracked-dirty file whose fingerprint is in baseline → no throw (issue #68 repro, tracked variant).
     - Pre-existing untracked file whose fingerprint is in baseline → no throw (issue #68 repro, untracked variant).
     - Pre-existing dirty file + an additional **Phase-5-introduced** dirty file → still throws (regression guard).
-    - **Pre-existing dirty file whose content is further modified after baseline capture** → still throws (fingerprint mismatch, closes P1 round‑1 feedback gap).
-    - **Pre-existing untracked directory in baseline + Phase-5 adds a new file inside it** → still throws (file-granular baseline via `-uall`, closes P1 round‑2 feedback gap).
+    - **Pre-existing dirty file whose content is further modified after baseline capture** → still throws (fingerprint mismatch, closes P1 round‑1 gate‑2 gap).
+    - **Pre-existing untracked directory in baseline + Phase-5 adds a new file inside it** → still throws (file-granular baseline via `-uall`, closes P1 round‑2 gate‑2 gap).
     - Final clean check also respects baseline (baseline entries remain present after cleanup).
+    - **Session-init wiring regression (closes P1 + P2 gate‑7 gap).** A `startCommand`-level test that simulates a non-git outer `cwd` with a git `trackedRepos[0]` (docsRoot) containing a pre-existing dirty file, runs the session-init path, and asserts the persisted `state.dirtyBaseline` is populated from docsRoot (non-empty, matching the docsRoot fingerprint) — **not** `[]`. This pins the `inGitRepo`-independence mandated by R3 and makes the bug re-introduction regress in CI.
 R7. No change to the error message (`'Working tree must be clean before verification'`) — keeps existing string assertions in tests and logs.
 
 ## Design
@@ -76,11 +77,13 @@ The `--untracked-files=all` flag guarantees that every untracked file is listed 
 
 ### Capture point in `src/commands/start.ts`
 
-After step 11 (HEAD re-read post-`.gitignore` commit) and immediately after `state.trackedRepos = trackedRepos;` in step 12, call:
+After step 11 (HEAD re-read post-`.gitignore` commit) and immediately after `state.trackedRepos = trackedRepos;` in step 12, call — **unconditionally**, without gating on the outer-cwd `inGitRepo` flag:
 
 ```ts
-state.dirtyBaseline = inGitRepo ? captureDirtyBaseline(trackedRepos[0].path) : [];
+state.dirtyBaseline = captureDirtyBaseline(trackedRepos[0].path);
 ```
+
+`trackedRepos[0].path` is already validated as a git working tree by `detectTrackedRepos` + the per-repo preflight (`runPreflight(['git', 'head'], repo.path)`). In the supported "non-git outer + depth-1 docsRoot" topology (exercised by `tests/commands/start.test.ts` and `tests/multi-worktree.test.ts`), the outer `cwd` is not a git repo but `trackedRepos[0].path` still is — gating on `inGitRepo` would always leave `state.dirtyBaseline = []` there and silently disable the fix for an entire supported mode. The new helper returns `[]` defensively for any unexpected non-git path, so dropping the gate is safe.
 
 ### Precondition filter in `src/artifact.ts::runPhase6Preconditions`
 
@@ -110,8 +113,8 @@ Caller in `src/phases/verify.ts::runVerifyPhase` passes `state.dirtyBaseline ?? 
 ## Implementation Plan
 
 - **Task 1 — State schema + migration.** Add `dirtyBaseline: string[]` to `HarnessState` in `src/types.ts`. Default it to `[]` in `createInitialState` (`src/state.ts`). Add the one-line migration in `loadState` (`src/state.ts`).
-- **Task 2 — Fingerprint helper + session-init capture.** Add `captureDirtyBaseline(cwd)` in `src/artifact.ts`. In `src/commands/start.ts`, immediately after `state.trackedRepos = trackedRepos;` (step 12), assign `state.dirtyBaseline = inGitRepo ? captureDirtyBaseline(trackedRepos[0].path) : []`.
-- **Task 3 — Filter precondition + wire caller + tests.** Extend `runPhase6Preconditions` with a `dirtyBaseline: string[] = []` parameter, switch its two `git status --porcelain` invocations to `--porcelain --untracked-files=all`, compute live fingerprints and filter Steps 2 and 4 before the eval-report filter. Update `src/phases/verify.ts` to pass `state.dirtyBaseline ?? []`. Add six `tests/artifact.test.ts` cases covering R6 (including the content-mismatch regression and the untracked-directory-expansion regression from P1 gate‑2 rounds 1 and 2). Update `tests/phases/verify.test.ts` only if its `runPhase6Preconditions` mock assertion needs adjusting for the optional 4th arg.
+- **Task 2 — Fingerprint helper + session-init capture.** Add `captureDirtyBaseline(cwd)` in `src/artifact.ts`. In `src/commands/start.ts`, immediately after `state.trackedRepos = trackedRepos;` (step 12), assign `state.dirtyBaseline = captureDirtyBaseline(trackedRepos[0].path)` **unconditionally** (do not gate on the outer-cwd `inGitRepo` flag — see R3 and D6). Remove any prior `inGitRepo ? … : []` gating that may have been introduced by earlier revisions of this spec.
+- **Task 3 — Filter precondition + wire caller + tests.** Extend `runPhase6Preconditions` with a `dirtyBaseline: string[] = []` parameter, switch its two `git status --porcelain` invocations to `--porcelain --untracked-files=all`, compute live fingerprints and filter Steps 2 and 4 before the eval-report filter. Update `src/phases/verify.ts` to pass `state.dirtyBaseline ?? []`. Add the seven `tests/artifact.test.ts` / `tests/commands/start.test.ts` cases covering R6 — the six precondition-level cases (tracked-dirty, untracked, phase-5-added, content-mismatch, untracked-dir-expansion, final-clean respects baseline) **plus** the new session-init wiring test asserting `state.dirtyBaseline` is populated from `trackedRepos[0].path` even when the outer cwd is not a git repo (closes gate‑7 P1 + P2). Update `tests/phases/verify.test.ts` only if its `runPhase6Preconditions` mock assertion needs adjusting for the optional 4th arg.
 
 ## Eval Checklist Summary
 
