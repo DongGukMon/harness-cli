@@ -156,6 +156,7 @@ export function migrateState(raw: any, cwd?: string): HarnessState {
       raw.phaseClaudeSessions[key] = null;
     }
   }
+  if (!Array.isArray(raw.dirtyBaseline)) raw.dirtyBaseline = [];
   if (!('carryoverFeedback' in raw) || raw.carryoverFeedback === undefined) {
     raw.carryoverFeedback = null;
   }
@@ -322,5 +323,6 @@ export function createInitialState(
     loggingEnabled,
     phaseReopenSource: { '1': null, '3': null, '5': null },
     codexNoIsolate,
+    dirtyBaseline: [],
   };
 }

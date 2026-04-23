@@ -4,7 +4,7 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 import { execSync } from 'child_process';
 import { createTestRepo } from './helpers/test-repo.js';
-import { normalizeArtifactCommit, runPhase6Preconditions, commitEvalReport } from '../src/artifact.js';
+import { normalizeArtifactCommit, runPhase6Preconditions, commitEvalReport, captureDirtyBaseline } from '../src/artifact.js';
 import { createInitialState } from '../src/state.js';
 
 // Helper: get current HEAD SHA
@@ -259,6 +259,122 @@ describe('runPhase6Preconditions', () => {
     } finally {
       rmSync(outer, { recursive: true, force: true });
     }
+  });
+});
+
+describe('runPhase6Preconditions — dirty baseline filtering (issues #67/#68)', () => {
+  let repo: { path: string; cleanup: () => void };
+  const evalReportPath = 'docs/reports/my-run-eval.md';
+
+  beforeEach(() => {
+    repo = createTestRepo();
+  });
+
+  afterEach(() => {
+    repo.cleanup();
+  });
+
+  it('R6: pre-existing tracked-dirty file in baseline → no throw (issue #68 tracked variant)', () => {
+    // Create and commit a tracked file, then modify it (tracked-dirty)
+    writeFileSync(join(repo.path, 'tracked-dirty.txt'), 'original');
+    execSync('git add tracked-dirty.txt && git commit -m "add file"', { cwd: repo.path });
+    writeFileSync(join(repo.path, 'tracked-dirty.txt'), 'modified by user before harness');
+
+    // Capture baseline — contains the " M tracked-dirty.txt" fingerprint
+    const baseline = captureDirtyBaseline(repo.path);
+    expect(baseline.length).toBeGreaterThan(0);
+
+    // Must not throw — the dirty file is pre-existing (in baseline)
+    expect(() =>
+      runPhase6Preconditions(evalReportPath, 'my-run', repo.path, baseline)
+    ).not.toThrow();
+  });
+
+  it('R6: pre-existing untracked file in baseline → no throw (issue #68 untracked variant)', () => {
+    // An untracked file present before the harness session
+    writeFileSync(join(repo.path, 'preexisting-untracked.txt'), 'noise');
+
+    // Capture baseline
+    const baseline = captureDirtyBaseline(repo.path);
+    expect(baseline.length).toBeGreaterThan(0);
+
+    // Must not throw — the untracked file is in the baseline
+    expect(() =>
+      runPhase6Preconditions(evalReportPath, 'my-run', repo.path, baseline)
+    ).not.toThrow();
+  });
+
+  it('R6: pre-existing dirty file + Phase-5-introduced dirty file → still throws', () => {
+    // Create a pre-existing untracked file
+    writeFileSync(join(repo.path, 'preexisting.txt'), 'old content');
+
+    // Capture baseline (only contains preexisting.txt)
+    const baseline = captureDirtyBaseline(repo.path);
+    expect(baseline.length).toBeGreaterThan(0);
+
+    // Phase 5 introduces a NEW untracked file — not in baseline
+    writeFileSync(join(repo.path, 'phase5-new.txt'), 'uncommitted phase-5 work');
+
+    // Must throw — phase5-new.txt is not in baseline
+    expect(() =>
+      runPhase6Preconditions(evalReportPath, 'my-run', repo.path, baseline)
+    ).toThrow('Working tree must be clean before verification');
+  });
+
+  it('R6: pre-existing dirty file whose content changes after baseline → still throws', () => {
+    // Create a tracked file and modify it (pre-existing dirt)
+    writeFileSync(join(repo.path, 'shared.txt'), 'original');
+    execSync('git add shared.txt && git commit -m "add file"', { cwd: repo.path });
+    writeFileSync(join(repo.path, 'shared.txt'), 'pre-existing modification');
+
+    // Capture baseline — baseline fingerprint has content hash of "pre-existing modification"
+    const baseline = captureDirtyBaseline(repo.path);
+    expect(baseline.length).toBeGreaterThan(0);
+
+    // Phase 5 further modifies the same file — content hash changes
+    writeFileSync(join(repo.path, 'shared.txt'), 'phase-5 further edit');
+
+    // Must throw — the live fingerprint no longer matches baseline
+    expect(() =>
+      runPhase6Preconditions(evalReportPath, 'my-run', repo.path, baseline)
+    ).toThrow('Working tree must be clean before verification');
+  });
+
+  it('R6: pre-existing untracked directory + Phase-5 adds new file inside → still throws', () => {
+    // Create an existing untracked file inside a directory
+    mkdirSync(join(repo.path, 'pre-dir'), { recursive: true });
+    writeFileSync(join(repo.path, 'pre-dir/existing.txt'), 'pre-existing file');
+
+    // Capture baseline — with -uall, baseline has "pre-dir/existing.txt" fingerprint
+    const baseline = captureDirtyBaseline(repo.path);
+    expect(baseline.some((fp) => fp.includes('pre-dir/existing.txt'))).toBe(true);
+
+    // Phase 5 adds a NEW file inside the same directory
+    writeFileSync(join(repo.path, 'pre-dir/new-from-phase5.txt'), 'phase-5 addition');
+
+    // Must throw — pre-dir/new-from-phase5.txt is not in baseline
+    expect(() =>
+      runPhase6Preconditions(evalReportPath, 'my-run', repo.path, baseline)
+    ).toThrow('Working tree must be clean before verification');
+  });
+
+  it('R6: final clean check respects baseline (baseline entries remain after eval report cleanup)', () => {
+    // Pre-existing untracked file
+    writeFileSync(join(repo.path, 'preexisting.txt'), 'noise');
+
+    // Capture baseline
+    const baseline = captureDirtyBaseline(repo.path);
+
+    // Also create an untracked eval report that will be cleaned up
+    writeRepoFile(repo.path, evalReportPath, '# Eval Report');
+
+    // Must not throw — eval report is cleaned, preexisting.txt is in baseline
+    expect(() =>
+      runPhase6Preconditions(evalReportPath, 'my-run', repo.path, baseline)
+    ).not.toThrow();
+
+    // preexisting.txt still exists (baseline filtering, not cleanup)
+    expect(existsSync(join(repo.path, 'preexisting.txt'))).toBe(true);
   });
 });
 

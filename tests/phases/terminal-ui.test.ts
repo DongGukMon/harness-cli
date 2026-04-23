@@ -60,6 +60,7 @@ function makeState(overrides: Partial<HarnessState> = {}): HarnessState {
     loggingEnabled: false,
     phaseReopenSource: { '1': null, '3': null, '5': null },
     codexNoIsolate: false,
+    dirtyBaseline: [],
     ...overrides,
   };
 }

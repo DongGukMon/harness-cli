@@ -248,7 +248,7 @@ describe('runVerifyPhase — docsRoot (FR-3/6)', () => {
       // expected — resolveVerifyScriptPath returns null → throws after preconditions
     }
 
-    expect(mockPreconditions).toHaveBeenCalledWith('eval.md', 'test-run', docsRootDir);
+    expect(mockPreconditions).toHaveBeenCalledWith('eval.md', 'test-run', docsRootDir, []);
   });
 
   it('falls back to outer cwd when trackedRepos is empty or path is empty', async () => {
@@ -273,6 +273,6 @@ describe('runVerifyPhase — docsRoot (FR-3/6)', () => {
       // expected
     }
 
-    expect(mockPreconditions).toHaveBeenCalledWith('eval.md', 'test-run', outerCwd);
+    expect(mockPreconditions).toHaveBeenCalledWith('eval.md', 'test-run', outerCwd, []);
   });
 });

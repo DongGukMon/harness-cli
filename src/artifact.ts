@@ -5,6 +5,56 @@ import { getStagedFiles, getFileStatus, isStagedDeletion, isPathGitignored } fro
 import type { HarnessState } from './types.js';
 
 /**
+ * Compute a content-hashed fingerprint for every dirty path reported by
+ * `git status --porcelain --untracked-files=all` in the given directory.
+ *
+ * Each fingerprint is the string `"<XY>\0<path>\0<hash>"` where:
+ * - XY  : the 2-char porcelain status code (e.g. " M", "??", "A ")
+ * - path: the file path from column 4 of the porcelain line
+ * - hash: `git hash-object -- <path>` of the working-tree file, or "" when
+ *         the file is absent (deletion status) or hash-object fails
+ *
+ * Using `--untracked-files=all` ensures that every untracked file is listed
+ * individually instead of collapsed into a parent `?? dir/` entry, so each
+ * fingerprint binds to exactly one hashable file path.
+ *
+ * Returns [] when cwd is not a git repo or the tree is clean.
+ */
+export function captureDirtyBaseline(cwd: string): string[] {
+  let rawOutput: string;
+  try {
+    rawOutput = execSync('git status --porcelain --untracked-files=all', {
+      cwd,
+      encoding: 'utf-8',
+    });
+  } catch {
+    return [];
+  }
+  // Split by newline and filter empty lines — do NOT .trim() the full output,
+  // as that would strip the leading space from ' M' lines and corrupt XY parsing.
+  const lines = rawOutput.split('\n').filter(Boolean);
+  if (lines.length === 0) return [];
+
+  return lines.map((line) => {
+    const xy = line.slice(0, 2);
+    const filePath = line.slice(3);
+    let hash = '';
+    const absPath = join(cwd, filePath);
+    if (existsSync(absPath)) {
+      try {
+        hash = execSync(`git hash-object -- "${filePath}"`, {
+          cwd,
+          encoding: 'utf-8',
+        }).trim();
+      } catch {
+        hash = '';
+      }
+    }
+    return `${xy}\0${filePath}\0${hash}`;
+  });
+}
+
+/**
  * Resolve a (potentially relative) artifact path to an absolute path.
  * Uses trackedRepos[0].path as the doc root (falling back to outerCwd).
  */
@@ -59,13 +109,60 @@ export function normalizeArtifactCommit(filePath: string, message: string, cwd?:
 }
 
 /**
+ * Read `git status --porcelain --untracked-files=all` and return individual
+ * lines without trimming the full output (which would strip the leading space
+ * from ' M' lines and corrupt XY parsing).
+ *
+ * Errors from git (e.g. not in a git repo) propagate to the caller.
+ */
+function readPorcelainLines(cwd?: string): string[] {
+  const raw = execSync('git status --porcelain --untracked-files=all', {
+    cwd,
+    encoding: 'utf-8',
+  });
+  return raw.split('\n').filter(Boolean);
+}
+
+/**
+ * Compute a live fingerprint for a single porcelain line using the same format
+ * as captureDirtyBaseline: `"<XY>\0<path>\0<hash>"`.
+ */
+function computeFingerprint(line: string, cwd: string): string {
+  const xy = line.slice(0, 2);
+  const filePath = line.slice(3);
+  let hash = '';
+  const resolvedPath = join(cwd, filePath);
+  if (existsSync(resolvedPath)) {
+    try {
+      hash = execSync(`git hash-object -- "${filePath}"`, {
+        cwd,
+        encoding: 'utf-8',
+      }).trim();
+    } catch {
+      hash = '';
+    }
+  }
+  return `${xy}\0${filePath}\0${hash}`;
+}
+
+/**
  * Run Phase 6 preconditions in order:
  * 1. Check tree clean (excluding eval report) — abort if other files dirty
  * 2. Clean up eval report (untracked→rm, staged-new→restore+rm, tracked→git rm)
  * 3. Final clean-tree verification
+ *
+ * Pre-existing dirty files captured in dirtyBaseline (at session init) are
+ * filtered out by fingerprint before the cleanliness check — this allows runs
+ * on mission branches with uncommitted content (issues #67, #68).
  */
-export function runPhase6Preconditions(evalReportPath: string, runId: string, cwd?: string): void {
+export function runPhase6Preconditions(
+  evalReportPath: string,
+  runId: string,
+  cwd?: string,
+  dirtyBaseline: string[] = [],
+): void {
   const resolvedCwd = cwd ?? process.cwd();
+  const baselineSet = new Set(dirtyBaseline);
 
   // Step 1: Staged guard — if any file OTHER than eval report is staged → throw
   const stagedFiles = getStagedFiles(cwd);
@@ -74,23 +171,23 @@ export function runPhase6Preconditions(evalReportPath: string, runId: string, cw
     throw new Error('Working tree must be clean before verification');
   }
 
-  // Step 2: Unstaged/untracked guard — filter out eval report path, check others
-  const porcelainOutput = exec('git status --porcelain', cwd);
-  if (porcelainOutput !== '') {
-    const dirtyLines = porcelainOutput
-      .split('\n')
-      .filter(Boolean)
-      .filter((line) => {
-        // Path starts at index 3 in porcelain format (XY followed by space)
-        const linePath = line.slice(3);
-        // A line represents the eval report if it exactly matches the eval report path,
-        // or if it is a parent directory of the eval report (e.g. "?? docs/" covers
-        // "docs/reports/my-run-eval.md" when the dir is untracked).
-        return (
-          linePath !== evalReportPath &&
-          !evalReportPath.startsWith(linePath)
-        );
-      });
+  // Step 2: Unstaged/untracked guard — filter out eval report and baseline entries
+  const porcelainLines = readPorcelainLines(cwd);
+  if (porcelainLines.length > 0) {
+    const dirtyLines = porcelainLines.filter((line) => {
+      // Path starts at index 3 in porcelain format (XY followed by space)
+      const linePath = line.slice(3);
+      // Filter out the eval report (exact match or parent-dir collapse)
+      if (linePath === evalReportPath || evalReportPath.startsWith(linePath)) {
+        return false;
+      }
+      // Filter out pre-existing baseline entries by fingerprint
+      if (baselineSet.size > 0) {
+        const fp = computeFingerprint(line, resolvedCwd);
+        if (baselineSet.has(fp)) return false;
+      }
+      return true;
+    });
 
     if (dirtyLines.length > 0) {
       throw new Error('Working tree must be clean before verification');
@@ -126,20 +223,22 @@ export function runPhase6Preconditions(evalReportPath: string, runId: string, cw
     exec(`git rm -f "${evalReportPath}"`, cwd);
   }
 
-  // Step 4: Final clean check
-  const finalStatus = exec('git status --porcelain', cwd);
-  if (finalStatus !== '') {
+  // Step 4: Final clean check — baseline entries may still appear (they were not cleaned up)
+  const finalPorcelainLines = readPorcelainLines(cwd);
+  if (finalPorcelainLines.length > 0) {
     const evalReportDeleted = isStagedDeletion(evalReportPath, cwd);
-    const dirtyLines = finalStatus
-      .split('\n')
-      .filter(Boolean)
-      .filter((line) => {
-        const linePath = line.slice(3);
-        if (linePath !== evalReportPath && !evalReportPath.startsWith(linePath)) {
-          return true;
-        }
-        return linePath === evalReportPath && !evalReportDeleted;
-      });
+    const dirtyLines = finalPorcelainLines.filter((line) => {
+      const linePath = line.slice(3);
+      // Filter eval report lines
+      if (linePath === evalReportPath && evalReportDeleted) return false;
+      if (linePath !== evalReportPath && evalReportPath.startsWith(linePath)) return false;
+      // Filter pre-existing baseline entries by fingerprint
+      if (baselineSet.size > 0) {
+        const fp = computeFingerprint(line, resolvedCwd);
+        if (baselineSet.has(fp)) return false;
+      }
+      return linePath !== evalReportPath;
+    });
 
     if (dirtyLines.length > 0) {
       throw new Error('Working tree is not clean after eval report cleanup');

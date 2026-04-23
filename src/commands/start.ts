@@ -8,6 +8,7 @@ import { runPreflight } from '../preflight.js';
 import { findHarnessRoot, setCurrentRun } from '../root.js';
 import { cleanupOrphans } from '../orphan-cleanup.js';
 import { createInitialState, writeState } from '../state.js';
+import { captureDirtyBaseline } from '../artifact.js';
 import { isInsideTmux, getCurrentSessionName, getActiveWindowId, createSession, createWindow, sendKeys, killSession, selectWindow, getDefaultPaneId } from '../tmux.js';
 import { openTerminalWindow } from '../terminal.js';
 import { HANDOFF_TIMEOUT_MS } from '../config.js';
@@ -245,6 +246,9 @@ export async function startCommand(task: string | undefined, options: StartOptio
 
     // Inject detected tracked repos (overrides the placeholder set by createInitialState)
     state.trackedRepos = trackedRepos;
+
+    // Capture pre-existing dirty-file fingerprints for Phase 6 baseline filtering
+    state.dirtyBaseline = inGitRepo ? captureDirtyBaseline(trackedRepos[0].path) : [];
 
     if (options.codexNoIsolate) {
       // BUG-C risk surface: user explicitly bypassed isolation.

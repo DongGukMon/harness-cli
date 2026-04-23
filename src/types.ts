@@ -105,6 +105,10 @@ export interface HarnessState {
   // codex-phase spawn runs inside <runDir>/codex-home/ with only auth.json
   // symlinked in. Persisted so that `harness resume` honors the decision.
   codexNoIsolate: boolean;
+  // Content-hashed dirty-file fingerprints captured once at session init.
+  // Phase 6 subtracts these from the porcelain output before evaluating cleanliness,
+  // so pre-existing uncommitted files do not block verification (issues #67, #68).
+  dirtyBaseline: string[];
 }
 
 export interface LockData {
