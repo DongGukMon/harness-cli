@@ -10,14 +10,16 @@ Small — scoped to one guard in `runPhase6Preconditions` plus a content-hashed 
 
 **Intent of the original guard.** The check exists to protect Phase 6 from a Phase‑5 failure mode where the implementor leaves tracked work uncommitted (so the eval report reflects an unstable tree). The invariant we actually want is *"no Phase‑5-introduced changes are uncommitted"*, not *"the working tree is pristine relative to the empty set"*.
 
-**Chosen baseline anchor — content-hashed fingerprints.** The task prompt suggests `state.implRetryBase` "or equivalent". `implRetryBase` is a commit, which only captures tracked-file diffs — it cannot distinguish *pre-existing untracked files* from *Phase‑5-introduced untracked files*. We therefore snapshot the dirty state of `trackedRepos[0].path` (docsRoot, the only repo the precondition inspects) **once at session init**, after `.gitignore` housekeeping, as a set of *fingerprints* — one per dirty path — and persist it in `state.dirtyBaseline: string[]`.
+**Chosen baseline anchor — content-hashed fingerprints (file-granular).** The task prompt suggests `state.implRetryBase` "or equivalent". `implRetryBase` is a commit, which only captures tracked-file diffs — it cannot distinguish *pre-existing untracked files* from *Phase‑5-introduced untracked files*. We therefore snapshot the dirty state of `trackedRepos[0].path` (docsRoot, the only repo the precondition inspects) **once at session init**, after `.gitignore` housekeeping, as a set of *fingerprints* — one per dirty path — and persist it in `state.dirtyBaseline: string[]`.
+
+**Both the baseline capture and the live Phase‑6 check use `git status --porcelain --untracked-files=all`** (alias `-uall`). Without this flag, Git collapses an untracked directory to a single `?? dir/` entry — the path is not hashable as a file and any Phase‑5 addition *inside* that directory would produce the same `?? dir/` line, allowing new uncommitted content to be masked by a directory-level fingerprint. `--untracked-files=all` expands every untracked file individually, so each baseline entry binds to exactly one hashable path. This closes the P1 feedback gap from gate‑2 round 2.
 
 Each fingerprint is the tuple `"<XY>\0<path>\0<hash>"`, where:
 - `XY` is the 2-char porcelain status code (e.g. ` M`, `??`, `A `, ` D`).
-- `path` is the path from porcelain column 4 onward.
+- `path` is the path from porcelain column 4 onward (a file path, not a directory, thanks to `-uall`).
 - `hash` is `git hash-object -- <path>` for files that exist on disk, or `""` for deletions / missing files.
 
-Phase 6 preconditions recompute the fingerprint for every live porcelain line and only filter entries whose fingerprint is present in the baseline set. **This closes the P1 feedback gap from gate‑2 review**: further Phase‑5 edits to a pre-existing dirty path change the file's content hash, so the live fingerprint no longer matches the baseline and the guard fires as intended.
+Phase 6 preconditions recompute the fingerprint for every live porcelain line (also via `-uall`) and only filter entries whose fingerprint is present in the baseline set. Further Phase‑5 edits to a pre-existing dirty file change its content hash → live fingerprint no longer matches baseline → guard fires as intended. Phase‑5 additions inside a pre-existing untracked directory produce new `?? dir/newfile` entries whose fingerprints were never in the baseline → guard fires as intended.
 
 **Why session-init rather than Phase‑5-open re-snapshot.** A baseline frozen at session init represents "state before the harness touched anything". Re-snapshotting at every Phase‑5 reopen would fold prior Phase‑5 leftovers into the baseline and mask real regressions. Session-init captures the user's genuine pre-existing dirt exactly once; everything introduced after that point is treated as Phase‑5 work and must be committed before Phase 6.
 
@@ -33,16 +35,17 @@ Phase 6 preconditions recompute the fingerprint for every live porcelain line an
 
 ## Requirements / Scope
 
-R1. `runPhase6Preconditions` MUST filter out porcelain lines whose **fingerprint** (`<XY>\0<path>\0<hash>`) matches an entry in `dirtyBaseline`, in addition to filtering the eval report. Filtering is fingerprint-exact — a path whose content hash has changed since baseline capture MUST NOT match and MUST fire the guard.
+R1. `runPhase6Preconditions` MUST filter out porcelain lines whose **fingerprint** (`<XY>\0<path>\0<hash>`) matches an entry in `dirtyBaseline`, in addition to filtering the eval report. Filtering is fingerprint-exact — a path whose content hash has changed since baseline capture MUST NOT match and MUST fire the guard. Both baseline capture and live Phase‑6 porcelain reads MUST use `git status --porcelain --untracked-files=all` so every untracked file has a file-granular fingerprint (no directory collapse).
 R2. The fingerprint filter MUST apply to both the initial dirty check (Step 2) and the final clean check (Step 4).
-R3. `state.dirtyBaseline: string[]` MUST be captured once at session init in `src/commands/start.ts`, after `.gitignore` commits and before `createInitialState` is persisted, from the porcelain output of `trackedRepos[0].path`. Each dirty path contributes one fingerprint string. Non-git roots and git roots with clean trees produce `[]`.
+R3. `state.dirtyBaseline: string[]` MUST be captured once at session init in `src/commands/start.ts`, after `.gitignore` commits and before `createInitialState` is persisted, from `git status --porcelain --untracked-files=all` run at `trackedRepos[0].path`. Each dirty path contributes one fingerprint string. Non-git roots and git roots with clean trees produce `[]`.
 R4. `state.dirtyBaseline` MUST default to `[]` when reading legacy state files (backward-compatible migration in `src/state.ts::loadState`). Legacy in-flight runs retain strict pre-fix behavior by design (see Decision D4).
 R5. Existing tests (`tests/artifact.test.ts`, `tests/phases/verify.test.ts`) MUST keep passing — baseline defaults to `[]` when omitted, matching the current strict behavior.
 R6. New tests MUST cover:
     - Pre-existing tracked-dirty file whose fingerprint is in baseline → no throw (issue #68 repro, tracked variant).
     - Pre-existing untracked file whose fingerprint is in baseline → no throw (issue #68 repro, untracked variant).
     - Pre-existing dirty file + an additional **Phase-5-introduced** dirty file → still throws (regression guard).
-    - **Pre-existing dirty file whose content is further modified after baseline capture** → still throws (fingerprint mismatch, closes P1 feedback gap).
+    - **Pre-existing dirty file whose content is further modified after baseline capture** → still throws (fingerprint mismatch, closes P1 round‑1 feedback gap).
+    - **Pre-existing untracked directory in baseline + Phase-5 adds a new file inside it** → still throws (file-granular baseline via `-uall`, closes P1 round‑2 feedback gap).
     - Final clean check also respects baseline (baseline entries remain present after cleanup).
 R7. No change to the error message (`'Working tree must be clean before verification'`) — keeps existing string assertions in tests and logs.
 
@@ -67,7 +70,9 @@ if (!Array.isArray(raw.dirtyBaseline)) raw.dirtyBaseline = [];
 
 ### Fingerprint helper
 
-A small helper — new exported function `captureDirtyBaseline(cwd: string): string[]` — lives in `src/artifact.ts` (next to `runPhase6Preconditions`, which is the only consumer). It runs `git status --porcelain`, parses each line into `{ xy, path }`, computes `git hash-object -- <path>` when the path exists on disk (safe-wrapped — missing file / `R` status fall through to `hash = ""`), and returns the fingerprint list `"<xy>\0<path>\0<hash>"`. Non-git cwd returns `[]`.
+A small helper — new exported function `captureDirtyBaseline(cwd: string): string[]` — lives in `src/artifact.ts` (next to `runPhase6Preconditions`, which is the only consumer). It runs `git status --porcelain --untracked-files=all`, parses each line into `{ xy, path }`, computes `git hash-object -- <path>` when the path exists on disk as a file (safe-wrapped — missing file / `R` status fall through to `hash = ""`), and returns the fingerprint list `"<xy>\0<path>\0<hash>"`. Non-git cwd returns `[]`.
+
+The `--untracked-files=all` flag guarantees that every untracked file is listed individually rather than collapsed into a parent `?? dir/` entry, so each baseline fingerprint binds to exactly one hashable file path. This is the single point where Phase‑5 additions inside a pre-existing untracked directory are distinguished from the baseline.
 
 ### Capture point in `src/commands/start.ts`
 
@@ -90,7 +95,7 @@ export function runPhase6Preconditions(
 ): void
 ```
 
-Convert `dirtyBaseline` to a `Set<string>` once. In Step 2 (`porcelainOutput`) and Step 4 (`finalStatus`), **before** the existing eval-report filter, for each live porcelain line recompute the fingerprint (same parsing + `git hash-object`) and drop the line if its fingerprint is in the baseline set. Remaining logic unchanged.
+Convert `dirtyBaseline` to a `Set<string>` once. Replace the two `git status --porcelain` calls in the function (Step 2 `porcelainOutput`, Step 4 `finalStatus`) with `git status --porcelain --untracked-files=all` so live fingerprints are computed on the same file-granular representation the baseline was captured with — without this flag the live output could collapse an untracked directory and no recomputed fingerprint would match a baseline file-level entry. Then, in both Steps 2 and 4, **before** the existing eval-report filter, recompute the fingerprint per live line (same parsing + `git hash-object`) and drop the line if its fingerprint is in the baseline set. Remaining logic unchanged.
 
 Caller in `src/phases/verify.ts::runVerifyPhase` passes `state.dirtyBaseline ?? []`.
 
@@ -106,7 +111,7 @@ Caller in `src/phases/verify.ts::runVerifyPhase` passes `state.dirtyBaseline ?? 
 
 - **Task 1 — State schema + migration.** Add `dirtyBaseline: string[]` to `HarnessState` in `src/types.ts`. Default it to `[]` in `createInitialState` (`src/state.ts`). Add the one-line migration in `loadState` (`src/state.ts`).
 - **Task 2 — Fingerprint helper + session-init capture.** Add `captureDirtyBaseline(cwd)` in `src/artifact.ts`. In `src/commands/start.ts`, immediately after `state.trackedRepos = trackedRepos;` (step 12), assign `state.dirtyBaseline = inGitRepo ? captureDirtyBaseline(trackedRepos[0].path) : []`.
-- **Task 3 — Filter precondition + wire caller + tests.** Extend `runPhase6Preconditions` with a `dirtyBaseline: string[] = []` parameter, compute live fingerprints and filter Steps 2 and 4 before the eval-report filter. Update `src/phases/verify.ts` to pass `state.dirtyBaseline ?? []`. Add five `tests/artifact.test.ts` cases covering R6 (including the content-mismatch regression for P1 feedback). Update `tests/phases/verify.test.ts` only if its `runPhase6Preconditions` mock assertion needs adjusting for the optional 4th arg.
+- **Task 3 — Filter precondition + wire caller + tests.** Extend `runPhase6Preconditions` with a `dirtyBaseline: string[] = []` parameter, switch its two `git status --porcelain` invocations to `--porcelain --untracked-files=all`, compute live fingerprints and filter Steps 2 and 4 before the eval-report filter. Update `src/phases/verify.ts` to pass `state.dirtyBaseline ?? []`. Add six `tests/artifact.test.ts` cases covering R6 (including the content-mismatch regression and the untracked-directory-expansion regression from P1 gate‑2 rounds 1 and 2). Update `tests/phases/verify.test.ts` only if its `runPhase6Preconditions` mock assertion needs adjusting for the optional 4th arg.
 
 ## Eval Checklist Summary
 
