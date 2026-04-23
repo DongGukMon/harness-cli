@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { execSync } from 'child_process';
-import { existsSync, readFileSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
+import { tmpdir } from 'os';
 import { createTestRepo } from '../helpers/test-repo.js';
 import { startCommand } from '../../src/commands/start.js';
 
@@ -218,4 +219,68 @@ describe('startCommand', () => {
     expect(stderr).not.toMatch(/CODEX_HOME isolation disabled/i);
   });
 
+});
+
+describe('startCommand — non-git outer cwd, dirtyBaseline wiring (R3)', () => {
+  // Regression for: state.dirtyBaseline was always [] when outer cwd was not a git repo,
+  // because capture was gated on inGitRepo(outerCwd). In depth-1 multi-repo mode the outer
+  // directory is not git-backed; fix always calls captureDirtyBaseline(trackedRepos[0].path).
+  let outer: string;
+  let innerRepo: string;
+  let origCwd: string;
+  let exitSpy: any;
+  let stderrSpy: any;
+
+  beforeEach(() => {
+    outer = mkdtempSync(join(tmpdir(), 'nongit-outer-'));
+    innerRepo = join(outer, 'inner-repo');
+    mkdirSync(innerRepo, { recursive: true });
+    execSync('git init', { cwd: innerRepo, stdio: 'pipe' });
+    execSync('git config user.email "t@t.com"', { cwd: innerRepo, stdio: 'pipe' });
+    execSync('git config user.name "T"', { cwd: innerRepo, stdio: 'pipe' });
+    writeFileSync(join(innerRepo, 'init.txt'), 'x');
+    execSync('git add . && git commit -m "init"', { cwd: innerRepo, stdio: 'pipe' });
+
+    origCwd = process.cwd();
+    process.chdir(outer);
+    exitSpy = vi.spyOn(process, 'exit').mockImplementation(((code?: number) => {
+      throw new Error(`__exit__:${code}`);
+    }) as never);
+    stderrSpy = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
+  });
+
+  afterEach(() => {
+    process.chdir(origCwd);
+    exitSpy.mockRestore();
+    stderrSpy.mockRestore();
+    rmSync(outer, { recursive: true, force: true });
+  });
+
+  it('persists non-empty dirtyBaseline from inner git repo when outer cwd is not git (R3)', async () => {
+    // Pre-existing dirty file in the tracked (inner) git repo
+    writeFileSync(join(innerRepo, 'pre-existing.txt'), 'user content before harness');
+
+    // outer is not a git repo; inner-repo is auto-detected at depth 1
+    await startCommand('test', { root: outer });
+
+    const harnessDir = join(outer, '.harness');
+    const runId = readFileSync(join(harnessDir, 'current-run'), 'utf-8').trim();
+    const state = JSON.parse(readFileSync(join(harnessDir, runId, 'state.json'), 'utf-8'));
+
+    // Must be populated from innerRepo — not [] from outer non-git cwd check
+    expect(Array.isArray(state.dirtyBaseline)).toBe(true);
+    expect(state.dirtyBaseline.length).toBeGreaterThan(0);
+    expect(state.dirtyBaseline.some((fp: string) => fp.includes('pre-existing.txt'))).toBe(true);
+  });
+
+  it('persists empty dirtyBaseline when inner git repo is clean', async () => {
+    // No dirty files — inner repo is clean after init commit
+    await startCommand('test', { root: outer });
+
+    const harnessDir = join(outer, '.harness');
+    const runId = readFileSync(join(harnessDir, 'current-run'), 'utf-8').trim();
+    const state = JSON.parse(readFileSync(join(harnessDir, runId, 'state.json'), 'utf-8'));
+
+    expect(state.dirtyBaseline).toEqual([]);
+  });
 });
