@@ -9,6 +9,7 @@ import { runPhaseLoop, handleVerifyError } from '../phases/runner.js';
 import { registerSignalHandlers } from '../signal.js';
 import { killSession, killWindow, selectWindow, splitPane, paneExists, selectPane } from '../tmux.js';
 import { renderWelcome, promptModelConfig } from '../ui.js';
+import { unmountInk } from '../ink/render.js';
 import { InputManager } from '../input.js';
 import { runRunnerAwarePreflight } from '../preflight.js';
 import { REQUIRED_PHASE_KEYS, getEffectiveReopenTarget, getRequiredPhaseKeys } from '../config.js';
@@ -284,6 +285,7 @@ export async function innerCommand(runId: string, options: InnerOptions = {}): P
     logger.logEvent({ event: 'session_end', status: sessionEndStatus, totalWallMs: Date.now() - logger.getStartedAt() });
     logger.finalizeSummary(state);
     logger.close();
+    unmountInk();
     inputManager.stop();
     releaseLock(harnessDir, runId);
   }
@@ -342,6 +344,7 @@ export function buildConfigCancelHandler(args: ConfigCancelHandlerArgs): () => v
     logger.close();
 
     releaseLock(harnessDir, runId);
+    unmountInk();
     inputManager.stop();
     process.exit(0);
   };

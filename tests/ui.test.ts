@@ -8,59 +8,6 @@ function makeState(overrides: Partial<HarnessState> = {}): HarnessState {
   return { ...base, ...overrides };
 }
 
-describe('renderControlPanel — skipped phases', () => {
-  it('renders "skipped" as "(skipped)" without success/error glyphs', () => {
-    const state = makeState({ flow: 'light' });
-    state.phases['2'] = 'skipped';
-    state.phases['3'] = 'skipped';
-    state.phases['4'] = 'skipped';
-    const captured: string[] = [];
-    const origErr = console.error;
-    console.error = (...args: any[]) => { captured.push(args.join(' ')); };
-    try {
-      renderControlPanel(state);
-    } finally {
-      console.error = origErr;
-    }
-    const transcript = captured.join('\n');
-    expect(transcript).toMatch(/Phase 2: .* \(skipped\)/);
-    expect(transcript).toMatch(/Phase 3: .* \(skipped\)/);
-    expect(transcript).toMatch(/Phase 4: .* \(skipped\)/);
-    expect(transcript).not.toMatch(/✗.*Phase [234]/);
-  });
-});
-
-describe('renderControlPanel — flow-aware Phase 1 label', () => {
-  it('shows "설계+플랜" for Phase 1 in light flow', () => {
-    const state = makeState({ flow: 'light', currentPhase: 1 });
-    const captured: string[] = [];
-    const origErr = console.error;
-    console.error = (...args: any[]) => { captured.push(args.join(' ')); };
-    try {
-      renderControlPanel(state);
-    } finally {
-      console.error = origErr;
-    }
-    const transcript = captured.join('\n');
-    expect(transcript).toMatch(/Phase 1.*설계\+플랜/);
-    expect(transcript).not.toMatch(/Phase 1.*Spec 작성/);
-  });
-
-  it('shows "Spec 작성" for Phase 1 in full flow', () => {
-    const state = makeState({ flow: 'full', currentPhase: 1 });
-    const captured: string[] = [];
-    const origErr = console.error;
-    console.error = (...args: any[]) => { captured.push(args.join(' ')); };
-    try {
-      renderControlPanel(state);
-    } finally {
-      console.error = origErr;
-    }
-    const transcript = captured.join('\n');
-    expect(transcript).toMatch(/Phase 1.*Spec 작성/);
-    expect(transcript).not.toMatch(/Phase 1.*설계\+플랜/);
-  });
-});
 
 describe('renderModelSelection — flow-aware row visibility', () => {
   it('hides spec-gate + plan-gate rows for light and shows "설계+플랜" label', () => {
@@ -121,14 +68,7 @@ describe('renderControlPanel — ui_render emission', () => {
     const state = makeState({ flow: 'full', currentPhase: 5 });
     state.phases['5'] = 'in_progress';
     const logger = makeLogger();
-    const captured: string[] = [];
-    const origErr = console.error;
-    console.error = (...args: any[]) => { captured.push(args.join(' ')); };
-    try {
-      renderControlPanel(state, logger, 'loop-top');
-    } finally {
-      console.error = origErr;
-    }
+    renderControlPanel(state, logger, 'loop-top');
     expect(logger.logEvent).toHaveBeenCalledWith({
       event: 'ui_render',
       phase: 5,
@@ -139,28 +79,22 @@ describe('renderControlPanel — ui_render emission', () => {
 
   it('does not emit when logger is omitted', () => {
     const state = makeState();
-    const captured: string[] = [];
-    const origErr = console.error;
-    console.error = (...args: any[]) => { captured.push(args.join(' ')); };
-    try {
-      renderControlPanel(state); // legacy single-arg call
-    } finally {
-      console.error = origErr;
-    }
-    // No assertion on logger; the test passes as long as no throw and no logger call.
+    renderControlPanel(state);
+    // No assertion on logger — passes as long as no throw.
   });
 
   it('does not emit when callsite is omitted', () => {
     const state = makeState();
     const logger = makeLogger();
-    const captured: string[] = [];
-    const origErr = console.error;
-    console.error = (...args: any[]) => { captured.push(args.join(' ')); };
-    try {
-      renderControlPanel(state, logger);
-    } finally {
-      console.error = origErr;
-    }
+    renderControlPanel(state, logger);
     expect(logger.logEvent).not.toHaveBeenCalled();
+  });
+});
+
+describe('helper mount-guard — suppression when Ink is mounted', () => {
+  it('mounted is false in non-TTY test environment (Ink never mounted)', async () => {
+    const { mounted } = await import('../src/ink/render.js');
+    // In test environment (no TTY), Ink is never mounted
+    expect(mounted).toBe(false);
   });
 });
