@@ -91,7 +91,7 @@ describe('renderControlPanel — ui_render emission', () => {
   });
 });
 
-describe('helper mount-guard — suppression when Ink is mounted', () => {
+describe('helper mount-guard — mounted flag; promptChoice is NOT guarded', () => {
   it('mounted is false in non-TTY test environment (Ink never mounted)', async () => {
     const { mounted } = await import('../src/ink/render.js');
     // In test environment (no TTY), Ink is never mounted

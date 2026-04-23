@@ -73,7 +73,6 @@ export async function promptChoice(
   choices: { key: string; label: string }[],
   inputManager: InputManager,
 ): Promise<string> {
-  if (suppressedDuringMount('promptChoice')) return '';
   const choiceText = choices.map((c) => `[${c.key.toUpperCase()}] ${c.label}`).join('  ');
   process.stderr.write(`\n${message}\n${choiceText}\n`);
   const validKeys = new Set(choices.map((c) => c.key.toLowerCase()));
