@@ -35,6 +35,7 @@ function buildState(overrides: Partial<HarnessState> = {}): HarnessState {
     tmuxControlWindow: '', tmuxWorkspacePane: '', tmuxControlPane: '',
     loggingEnabled: true,
     codexNoIsolate: false,
+    dirtyBaseline: [],
   };
   return { ...base, ...overrides };
 }

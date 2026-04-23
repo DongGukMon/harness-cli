@@ -201,7 +201,8 @@ describe('generateRunId', () => {
     spy.mockReturnValueOnce(Buffer.from([0xaa, 0xaa]))
        .mockReturnValueOnce(Buffer.from([0xbb, 0xbb]));
 
-    const datePrefix = new Date().toISOString().slice(0, 10);
+    const now = new Date();
+    const datePrefix = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
     // Pre-create the first candidate directory to force a redraw
     mkdirSync(join(harnessDir, `${datePrefix}-my-task-aaaa`));
 
@@ -215,7 +216,8 @@ describe('generateRunId', () => {
     const spy = vi.spyOn(crypto, 'randomBytes') as any;
     spy.mockReturnValue(Buffer.from([0xca, 0xfe]));
 
-    const datePrefix = new Date().toISOString().slice(0, 10);
+    const now = new Date();
+    const datePrefix = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
     // Pre-create the randomized candidate to exhaust all 6 draw attempts
     mkdirSync(join(harnessDir, `${datePrefix}-my-task-cafe`));
 
