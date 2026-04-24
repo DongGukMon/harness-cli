@@ -240,7 +240,7 @@ export async function runGatePhase(
       }
     }
     const resumePromptResult = assembleGateResumePrompt(
-      phase, state, cwd, savedSession.lastOutcome, previousFeedback,
+      phase, state, cwd, savedSession.lastOutcome, previousFeedback, runDir,
     );
     if (typeof resumePromptResult !== 'string') {
       return { type: 'error', error: resumePromptResult.error };

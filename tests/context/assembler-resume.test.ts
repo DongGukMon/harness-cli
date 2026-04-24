@@ -58,7 +58,7 @@ describe('assembleGateResumePrompt — Variant A (reject + feedback)', () => {
   it('includes updated artifacts, previous feedback, and actually loads fixture content', () => {
     const cwd = 'tests/context/fixtures';
     const state = makeState();
-    const res = assembleGateResumePrompt(2, state, cwd, 'reject', 'P1: fix X\nP1: fix Y');
+    const res = assembleGateResumePrompt(2, state, cwd, 'reject', 'P1: fix X\nP1: fix Y', '/tmp/harness/r1');
     expect(typeof res).toBe('string');
     if (typeof res === 'string') {
       expect(res).toMatch(/Updated Artifacts \(Re-Review Requested\)/);
@@ -77,7 +77,7 @@ describe('assembleGateResumePrompt — Variant B (error/approve or empty feedbac
   it('omits previous feedback block for error outcome', () => {
     const cwd = 'tests/context/fixtures';
     const state = makeState();
-    const res = assembleGateResumePrompt(2, state, cwd, 'error', '');
+    const res = assembleGateResumePrompt(2, state, cwd, 'error', '', '/tmp/harness/r1');
     expect(typeof res).toBe('string');
     if (typeof res === 'string') {
       expect(res).toMatch(/Continue Review/);
@@ -89,7 +89,7 @@ describe('assembleGateResumePrompt — Variant B (error/approve or empty feedbac
   it('treats approve as Variant B for safety', () => {
     const cwd = 'tests/context/fixtures';
     const state = makeState();
-    const res = assembleGateResumePrompt(4, state, cwd, 'approve', '');
+    const res = assembleGateResumePrompt(4, state, cwd, 'approve', '', '/tmp/harness/r1');
     expect(typeof res).toBe('string');
     if (typeof res === 'string') {
       expect(res).toMatch(/Continue Review/);
@@ -100,7 +100,7 @@ describe('assembleGateResumePrompt — Variant B (error/approve or empty feedbac
   it('Phase 4 resume includes spec + plan sections', () => {
     const cwd = 'tests/context/fixtures';
     const state = makeState();
-    const res = assembleGateResumePrompt(4, state, cwd, 'reject', 'feedback');
+    const res = assembleGateResumePrompt(4, state, cwd, 'reject', 'feedback', '/tmp/harness/r1');
     if (typeof res === 'string') {
       expect(res).toMatch(/<spec>/);
       expect(res).toMatch(/<plan>/);
@@ -111,7 +111,7 @@ describe('assembleGateResumePrompt — Variant B (error/approve or empty feedbac
   it('Phase 2 resume only includes spec (no plan/eval)', () => {
     const cwd = 'tests/context/fixtures';
     const state = makeState();
-    const res = assembleGateResumePrompt(2, state, cwd, 'reject', 'feedback');
+    const res = assembleGateResumePrompt(2, state, cwd, 'reject', 'feedback', '/tmp/harness/r1');
     if (typeof res === 'string') {
       expect(res).toMatch(/<spec>/);
       expect(res).not.toMatch(/<plan>/);
@@ -122,7 +122,7 @@ describe('assembleGateResumePrompt — Variant B (error/approve or empty feedbac
   it('§4.3 Phase 7 resume includes eval_report + <metadata> block', () => {
     const cwd = 'tests/context/fixtures';
     const state = makeState();
-    const res = assembleGateResumePrompt(7, state, cwd, 'reject', 'feedback');
+    const res = assembleGateResumePrompt(7, state, cwd, 'reject', 'feedback', '/tmp/harness/r1');
     if (typeof res === 'string') {
       expect(res).toMatch(/<spec>/);
       expect(res).toMatch(/<plan>/);
@@ -139,7 +139,7 @@ describe('assembleGateResumePrompt — §4.4 anomaly: reject + missing feedback'
     const cwd = 'tests/context/fixtures';
     const state = makeState();
     // lastOutcome=reject but empty feedback — spec §4.4 requires Variant A, not Variant B
-    const res = assembleGateResumePrompt(2, state, cwd, 'reject', '');
+    const res = assembleGateResumePrompt(2, state, cwd, 'reject', '', '/tmp/harness/r1');
     if (typeof res === 'string') {
       expect(res).toMatch(/Updated Artifacts \(Re-Review Requested\)/);
       expect(res).not.toMatch(/Continue Review/);
@@ -153,7 +153,7 @@ describe('buildResumeSections — Phase 7 flow-aware (ADR-12)', () => {
 
   it('light + phase 7 resume omits <plan> but keeps <eval_report> + diff + metadata', () => {
     const state = makeState({ flow: 'light', currentPhase: 7 });
-    const prompt = assembleGateResumePrompt(7, state, cwd, 'reject', 'prior feedback');
+    const prompt = assembleGateResumePrompt(7, state, cwd, 'reject', 'prior feedback', '/tmp/harness/r1');
     if (typeof prompt !== 'string') throw new Error('expected string');
     expect(prompt).toContain('<spec>\n');
     expect(prompt).toContain('<eval_report>\n');
@@ -163,7 +163,7 @@ describe('buildResumeSections — Phase 7 flow-aware (ADR-12)', () => {
 
   it('full + phase 7 resume still includes <plan>', () => {
     const state = makeState({ currentPhase: 7 });
-    const prompt = assembleGateResumePrompt(7, state, cwd, 'reject', 'prior feedback');
+    const prompt = assembleGateResumePrompt(7, state, cwd, 'reject', 'prior feedback', '/tmp/harness/r1');
     if (typeof prompt !== 'string') throw new Error('expected string');
     expect(prompt).toContain('<plan>\n');
   });

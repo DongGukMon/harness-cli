@@ -45,6 +45,24 @@ This is Gate 2 of a 7-phase harness lifecycle. You are reviewing ONLY the <spec>
 # Full Spec
 full flow content
 </spec>
+
+
+---
+
+## Output Protocol (REQUIRED — do not skip)
+
+After producing your verdict, you MUST perform these two file writes in order:
+
+1. Write your full verdict response (the \`## Verdict\`, \`## Comments\`, \`## Summary\` sections) to:
+   \`/tmp/harness/my-run/gate-2-verdict.md\`
+
+2. Write exactly this text to:
+   \`/tmp/harness/my-run/phase-2.done\`
+
+   Content: \`\`
+
+Use your file-write tool (apply_patch, write_file, or equivalent) for both writes.
+Do NOT omit either write — the harness waits for the sentinel file to know you are done.
 "
 `;
 
@@ -95,5 +113,23 @@ This is Gate 2 of a 5-phase light harness lifecycle (P1 design → P2 pre-impl r
 # combined spec
 spec content
 </spec>
+
+
+---
+
+## Output Protocol (REQUIRED — do not skip)
+
+After producing your verdict, you MUST perform these two file writes in order:
+
+1. Write your full verdict response (the \`## Verdict\`, \`## Comments\`, \`## Summary\` sections) to:
+   \`/tmp/harness/my-run/gate-2-verdict.md\`
+
+2. Write exactly this text to:
+   \`/tmp/harness/my-run/phase-2.done\`
+
+   Content: \`\`
+
+Use your file-write tool (apply_patch, write_file, or equivalent) for both writes.
+Do NOT omit either write — the harness waits for the sentinel file to know you are done.
 "
 `;
