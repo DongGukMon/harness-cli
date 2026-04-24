@@ -661,7 +661,7 @@ describe('spawnCodexInPane — fresh', () => {
     const cmd: string = vi.mocked(sendKeysToPane).mock.calls[0][2];
     expect(cmd).toContain('codex');
     expect(cmd).toContain('--full-auto');
-    expect(cmd).not.toContain('exec'); // TUI path, not exec path
+    expect(cmd).not.toMatch(/\bcodex\s+exec\b/); // reject legacy 'codex exec' form; shell exec wrapper is expected
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 });
@@ -1494,9 +1494,19 @@ vi.mock('../../src/runners/codex.js', () => ({
   runCodexGate: vi.fn(),  // kept for any direct caller
   spawnCodexInPane: vi.fn().mockResolvedValue({ pid: 99999 }),
 }));
+
+// readCodexSessionUsage must be mocked so _persistCodexSession receives a codexSessionId.
+// Without this mock the JSONL lookup returns null → codexSessionId is undefined →
+// phaseCodexSessions stays null, breaking same-session resume assertions (R4/E2/E7).
+vi.mock('../../src/runners/codex-usage.js', () => ({
+  readCodexSessionUsage: vi.fn().mockResolvedValue({
+    sessionId: 'aa-11',
+    tokens: { input: 10, output: 5, cacheRead: 0, cacheCreate: 0, total: 15 },
+  }),
+}));
 ```
 
-Since `runGatePhaseInteractive` internally calls `spawnCodexInPane` and then waits for a sentinel, the tests need to also write the sentinel file. Create a helper:
+Since `runGatePhaseInteractive` internally calls `spawnCodexInPane` and then waits for a sentinel, the tests need to also write the sentinel file. Create helpers:
 
 ```typescript
 function writeSentinel(runDir: string, phase: number, attemptId: string): void {
@@ -1529,6 +1539,8 @@ it('saves new session after first call (fresh)', async () => {
 
   const res = await runGatePhase(2, state, runDir, runDir, runDir);
   expect(res.type).toBe('verdict');
+  // sessionId extracted from mocked readCodexSessionUsage → persisted in phaseCodexSessions
+  expect(state.phaseCodexSessions['2']?.sessionId).toBe('aa-11');
   expect(state.phaseCodexSessions['2']?.lastOutcome).toBe('reject');
 });
 ```
