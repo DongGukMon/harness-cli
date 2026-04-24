@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { randomUUID } from 'crypto';
-import type { HarnessState, PendingAction, PhaseNumber, InteractivePhase, GatePhase, Scope, SessionLogger } from '../types.js';
+import type { HarnessState, PendingAction, PhaseNumber, InteractivePhase, GatePhase, GatePhaseResult, Scope, SessionLogger, ClaudeTokens } from '../types.js';
 import type { InputManager } from '../input.js';
 import {
   GATE_TIMEOUT_MS,
@@ -543,8 +543,19 @@ export async function handleGatePhase(
   const retryIndex = state.gateRetries[String(phase)] ?? 0;
   const gatePresetMeta = getPhasePresetMeta(state, phase);
 
+  const phaseStartTs = Date.now();
+
+  // Persist attemptId before gate execution; assembler embeds it in the Output Protocol block.
+  const attemptId = state.phaseAttemptId[String(phase)] ?? randomUUID();
+  state.phaseAttemptId[String(phase)] = attemptId;
+  writeState(runDir, state);
+
+  logger.logEvent({ event: 'phase_start', phase, attemptId, preset: gatePresetMeta });
+
   printInfo(`Codex 리뷰 진행 중... (최대 ${Math.round(GATE_TIMEOUT_MS / 1000)}초 소요)`);
-  const result = await runGatePhase(phase, state, harnessDir, runDir, cwd, sidecarReplayAllowed);
+  const rawResult = await runGatePhase(phase, state, harnessDir, runDir, cwd, sidecarReplayAllowed);
+  const codexTokens = (rawResult as GatePhaseResult & { codexTokens?: ClaudeTokens | null }).codexTokens;
+  const result: GatePhaseResult = rawResult;
 
   // §4.10 Verdict redirect guard — applies to BOTH verdict and error paths.
   // If SIGUSR1 jump/skip mutated state.currentPhase during the gate call, do
@@ -552,6 +563,12 @@ export async function handleGatePhase(
   if (state.currentPhase !== phase) {
     printInfo(`Phase ${phase} interrupted by control signal → phase ${state.currentPhase}`);
     renderControlPanel(state, logger, 'gate-redirect');
+    logger.logEvent({
+      event: 'phase_end', phase, attemptId,
+      status: 'failed', durationMs: Date.now() - phaseStartTs,
+      details: { reason: 'redirected' },
+      ...(codexTokens !== undefined ? { codexTokens } : {}),
+    });
     return;
   }
 
@@ -583,6 +600,12 @@ export async function handleGatePhase(
           preset: gatePresetMeta,
         });
       }
+
+      logger.logEvent({
+        event: 'phase_end', phase, attemptId,
+        status: 'completed', durationMs: Date.now() - phaseStartTs,
+        ...(codexTokens !== undefined ? { codexTokens } : {}),
+      });
 
       state.phases[String(phase)] = 'completed';
 
@@ -629,6 +652,11 @@ export async function handleGatePhase(
           preset: gatePresetMeta,
         });
       }
+      logger.logEvent({
+        event: 'phase_end', phase, attemptId,
+        status: 'failed', durationMs: Date.now() - phaseStartTs,
+        ...(codexTokens !== undefined ? { codexTokens } : {}),
+      });
       await handleGateReject(phase, result.comments, result.scope, retryIndex, state, harnessDir, runDir, cwd, inputManager, logger);
     }
   } else {
@@ -651,6 +679,11 @@ export async function handleGatePhase(
         preset: gatePresetMeta,
       });
     }
+    logger.logEvent({
+      event: 'phase_end', phase, attemptId,
+      status: 'failed', durationMs: Date.now() - phaseStartTs,
+      ...(codexTokens !== undefined ? { codexTokens } : {}),
+    });
     await handleGateError(phase, result.error, state, runDir, cwd, inputManager, logger);
   }
 }
