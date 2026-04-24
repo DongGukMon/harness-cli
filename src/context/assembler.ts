@@ -310,6 +310,31 @@ function buildLifecycleContext(phase: 2 | 4 | 7, flow: FlowMode = 'full'): strin
   );
 }
 
+// ─── Gate Output Protocol block (R3) ─────────────────────────────────────────
+//
+// Injected at the END of every gate prompt (fresh and resume). Instructs Codex
+// to write the verdict file and sentinel file after producing its verdict.
+// The harness waits for the sentinel to know the gate run is complete.
+
+function buildGateOutputProtocol(
+  phase: 2 | 4 | 7,
+  runDir: string,
+  attemptId: string,
+): string {
+  const verdictFile = path.join(runDir, `gate-${phase}-verdict.md`);
+  const sentinelFile = path.join(runDir, `phase-${phase}.done`);
+  return (
+    '\n\n---\n\n' +
+    '## Output Protocol (REQUIRED — do not skip)\n\n' +
+    'After producing your verdict, you MUST perform these two file writes in order:\n\n' +
+    `1. Write your full verdict response (the \`## Verdict\`, \`## Comments\`, \`## Summary\` sections) to:\n   \`${verdictFile}\`\n\n` +
+    `2. Write exactly this text to:\n   \`${sentinelFile}\`\n\n` +
+    `   Content: \`${attemptId}\`\n\n` +
+    'Use your file-write tool (apply_patch, write_file, or equivalent) for both writes.\n' +
+    'Do NOT omit either write — the harness waits for the sentinel file to know you are done.\n'
+  );
+}
+
 // ─── Gate 2: Spec review ─────────────────────────────────────────────────────
 
 function buildGatePromptPhase2(state: HarnessState, cwd: string): string | { error: string } {
@@ -632,8 +657,6 @@ export function assembleGatePrompt(
   harnessDir: string,
   cwd: string
 ): string | { error: string } {
-  void harnessDir;
-
   let result: string | { error: string };
 
   if (phase === 2) {
@@ -642,6 +665,16 @@ export function assembleGatePrompt(
     result = buildGatePromptPhase4(state, cwd);
   } else {
     result = buildGatePromptPhase7(state, cwd);
+  }
+
+  if (typeof result === 'string') {
+    // Append Output Protocol block (R3: verdict file + sentinel write instructions)
+    const runDir = path.join(harnessDir, state.runId);
+    const attemptId = state.phaseAttemptId[String(phase)];
+    if (!attemptId) {
+      return { error: `assembleGatePrompt: phaseAttemptId not set for phase ${phase}` };
+    }
+    result = result + buildGateOutputProtocol(phase, runDir, attemptId);
   }
 
   if (typeof result === 'string' && result.length > MAX_PROMPT_SIZE_KB * 1024) {
@@ -697,6 +730,7 @@ export function assembleGateResumePrompt(
   cwd: string,
   lastOutcome: 'approve' | 'reject' | 'error',
   previousFeedback: string,
+  runDir: string,
 ): string | { error: string } {
   const sections = buildResumeSections(phase, state, cwd);
   if (typeof sections !== 'string') return sections;
@@ -739,6 +773,13 @@ export function assembleGateResumePrompt(
       '\n## Instructions\n\n' +
       structuredOutputReminder;
   }
+
+  // Append Output Protocol block (same requirement on resume path)
+  const attemptId = state.phaseAttemptId[String(phase)];
+  if (!attemptId) {
+    return { error: `assembleGateResumePrompt: phaseAttemptId not set for phase ${phase}` };
+  }
+  prompt = prompt + buildGateOutputProtocol(phase, runDir, attemptId);
 
   if (prompt.length > MAX_PROMPT_SIZE_KB * 1024) {
     return {

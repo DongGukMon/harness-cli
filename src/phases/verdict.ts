@@ -1,3 +1,4 @@
+import fs from 'fs';
 import type { GatePhaseResult, Scope } from '../types.js';
 
 /**
@@ -103,5 +104,39 @@ export function buildGateResult(
     comments: parsed.comments,
     scope: parsed.scope,
     rawOutput: stdout,
+  };
+}
+
+/**
+ * Read verdict from a file written by Codex (Output Protocol, R3).
+ * Returns error result if file missing, unreadable, or has no ## Verdict header.
+ */
+export function buildGateResultFromFile(verdictFilePath: string): GatePhaseResult {
+  let raw: string;
+  try {
+    raw = fs.readFileSync(verdictFilePath, 'utf-8');
+  } catch {
+    return {
+      type: 'error',
+      error: `Gate verdict file missing or unreadable: ${verdictFilePath}`,
+      rawOutput: '',
+    };
+  }
+
+  const parsed = parseVerdict(raw);
+  if (!parsed) {
+    return {
+      type: 'error',
+      error: `Gate output missing ## Verdict header (from verdict file ${verdictFilePath})`,
+      rawOutput: raw,
+    };
+  }
+
+  return {
+    type: 'verdict',
+    verdict: parsed.verdict,
+    comments: parsed.comments,
+    scope: parsed.scope,
+    rawOutput: raw,
   };
 }

@@ -1,6 +1,10 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { EventEmitter } from 'events';
-import { runCodexGate, runCodexInteractive, stderrTail } from '../../src/runners/codex.js';
+import fs from 'fs';
+import path from 'path';
+import os from 'os';
+import { runCodexGate, runCodexInteractive, stderrTail, spawnCodexInPane } from '../../src/runners/codex.js';
+import { sendKeysToPane } from '../../src/tmux.js';
 import { type ModelPreset } from '../../src/config.js';
 import type { HarnessState } from '../../src/types.js';
 
@@ -19,8 +23,13 @@ vi.mock('../../src/lock.js', () => ({
   clearLockChild: vi.fn(),
 }));
 vi.mock('../../src/process.js', () => ({
-  getProcessStartTime: vi.fn(() => 0),
+  getProcessStartTime: vi.fn(() => 100),
   killProcessGroup: vi.fn(async () => {}),
+  isPidAlive: vi.fn().mockReturnValue(false),
+}));
+vi.mock('../../src/tmux.js', () => ({
+  sendKeysToPane: vi.fn(),
+  pollForPidFile: vi.fn().mockResolvedValue(12345),
 }));
 vi.mock('../../src/state.js', () => ({
   writeState: vi.fn(),
@@ -268,5 +277,105 @@ describe('runCodexGate — nonzero_exit_other includes stderr tail (FR-4)', () =
       expect(result.error).toBe('Gate subprocess exited with code 2');
       expect(result.error).not.toContain('--- stderr (tail) ---');
     }
+  });
+});
+
+// Helper for spawnCodexInPane tests
+function makeMinimalState(): HarnessState {
+  return {
+    runId: 'test-run',
+    flow: 'full',
+    carryoverFeedback: null,
+    currentPhase: 2,
+    status: 'in_progress',
+    autoMode: false,
+    task: 'test',
+    baseCommit: 'abc',
+    implRetryBase: 'abc',
+    trackedRepos: [],
+    codexPath: null,
+    externalCommitsDetected: false,
+    artifacts: { spec: '', plan: '', decisionLog: '', checklist: '', evalReport: '' },
+    phases: {},
+    gateRetries: {},
+    verifyRetries: 0,
+    pauseReason: null,
+    specCommit: null,
+    planCommit: null,
+    implCommit: null,
+    evalCommit: null,
+    verifiedAtHead: null,
+    pausedAtHead: null,
+    pendingAction: null,
+    phaseOpenedAt: {},
+    phaseAttemptId: {},
+    phasePresets: {},
+    phaseReopenFlags: {},
+    phaseCodexSessions: { '2': null, '4': null, '7': null },
+    phaseClaudeSessions: { '1': null, '3': null, '5': null },
+    lastWorkspacePid: null,
+    lastWorkspacePidStartTime: null,
+    tmuxSession: 'harness-sess',
+    tmuxMode: 'dedicated',
+    tmuxWindows: [],
+    tmuxControlWindow: '',
+    tmuxWorkspacePane: '%5',
+    tmuxControlPane: '',
+    loggingEnabled: false,
+    phaseReopenSource: {},
+    codexNoIsolate: false,
+    dirtyBaseline: [],
+  } as HarnessState;
+}
+
+describe('spawnCodexInPane — fresh', () => {
+  it('sends fresh codex command to pane and returns pid', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-pane-'));
+    const state = makeMinimalState();
+    const result = await spawnCodexInPane({
+      phase: 2,
+      state,
+      preset,
+      harnessDir: tmpDir,
+      runDir: tmpDir,
+      promptFile: path.join(tmpDir, 'prompt.md'),
+      cwd: tmpDir,
+      codexHome: null,
+      mode: 'fresh',
+    });
+    expect(result.pid).toBe(12345);
+    const sendCalls = vi.mocked(sendKeysToPane).mock.calls;
+    // Last sendKeysToPane call should be the wrappedCmd
+    const cmds = sendCalls.map(c => c[2]);
+    const wrappedCmd = cmds.find(c => c.includes('codex') && c.includes('--full-auto'));
+    expect(wrappedCmd).toBeDefined();
+    expect(wrappedCmd).not.toMatch(/\bcodex\s+exec\b/); // must NOT use legacy 'codex exec'
+    expect(wrappedCmd).toContain('--full-auto');
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+});
+
+describe('spawnCodexInPane — resume', () => {
+  it('sends codex resume command with sessionId', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-pane-'));
+    const state = makeMinimalState();
+    await spawnCodexInPane({
+      phase: 2,
+      state,
+      preset,
+      harnessDir: tmpDir,
+      runDir: tmpDir,
+      promptFile: path.join(tmpDir, 'resume-prompt.md'),
+      cwd: tmpDir,
+      codexHome: null,
+      mode: 'resume',
+      sessionId: 'sess-abc-123',
+    });
+    const sendCalls = vi.mocked(sendKeysToPane).mock.calls;
+    const cmds = sendCalls.map(c => c[2]);
+    const wrappedCmd = cmds.find(c => c.includes('resume'));
+    expect(wrappedCmd).toBeDefined();
+    expect(wrappedCmd).toContain('sess-abc-123');
+    fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 });

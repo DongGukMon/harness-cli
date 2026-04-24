@@ -109,6 +109,7 @@ export interface HarnessState {
   // Phase 6 subtracts these from the porcelain output before evaluating cleanliness,
   // so pre-existing uncommitted files do not block verification (issues #67, #68).
   dirtyBaseline: string[];
+  migrationVersion?: number;  // 2 = codex-pane-gate migration
 }
 
 export interface LockData {
@@ -275,7 +276,7 @@ export type LogEvent =
   | (LogEventBase & { event: 'escalation'; phase: number; reason: 'gate-retry-limit' | 'gate-error' | 'verify-limit' | 'verify-error'; userChoice?: 'C' | 'S' | 'Q' | 'R' })
   | (LogEventBase & { event: 'force_pass'; phase: number; by: 'auto' | 'user' })
   | (LogEventBase & { event: 'verify_result'; passed: boolean; retryIndex: number; durationMs: number; failedChecks?: string[] })
-  | (LogEventBase & { event: 'phase_end'; phase: number; attemptId?: string | null; status: 'completed' | 'failed'; durationMs: number; details?: { reason: string }; claudeTokens?: ClaudeTokens | null })
+  | (LogEventBase & { event: 'phase_end'; phase: number; attemptId?: string | null; status: 'completed' | 'failed'; durationMs: number; details?: { reason: string }; claudeTokens?: ClaudeTokens | null; codexTokens?: ClaudeTokens | null })
   | (LogEventBase & { event: 'state_anomaly'; kind: string; details: Record<string, unknown> })
   | (LogEventBase & {
       event: 'ui_render';

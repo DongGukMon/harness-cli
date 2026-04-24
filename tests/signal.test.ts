@@ -7,6 +7,12 @@ vi.mock('../src/tmux.js', () => ({
   sendKeysToPane: vi.fn(),
 }));
 
+vi.mock('../src/process.js', () => ({
+  killProcessGroup: vi.fn().mockResolvedValue(undefined),
+  isPidAlive: vi.fn().mockReturnValue(false),
+  getProcessStartTime: vi.fn().mockReturnValue(null),
+}));
+
 import { registerSignalHandlers, handleShutdown } from '../src/signal.js';
 import type { SignalContext } from '../src/signal.js';
 import { createInitialState } from '../src/state.js';
@@ -483,6 +489,51 @@ describe('SIGUSR1 handler', () => {
     expect(currentState.phases['5']).toBe('pending');
     expect(currentState.phases['2']).toBe('completed');
     expect(fs.existsSync(path.join(runDir, 'pending-action.json'))).toBe(false);
+  });
+
+  it('gate codex phase: skip sends C-c to workspace pane and kills lastWorkspacePid', async () => {
+    const { sendKeysToPane } = await import('../src/tmux.js');
+    const { killProcessGroup, isPidAlive, getProcessStartTime } = await import('../src/process.js');
+
+    // Make the PID appear alive and the same instance for the guard to pass
+    vi.mocked(isPidAlive).mockReturnValue(true);
+    vi.mocked(getProcessStartTime).mockReturnValue(1000);
+
+    const dir = makeTmpDir();
+    tmpDirs.push(dir);
+    const runId = 'run-sigusr1-gate-codex';
+    const runDir = path.join(dir, runId);
+    fs.mkdirSync(runDir, { recursive: true });
+
+    const baseState = createInitialState(runId, 'task', 'abc', false);
+    baseState.currentPhase = 2;
+    baseState.phases['2'] = 'in_progress';
+    baseState.phasePresets['2'] = 'codex-high';
+    baseState.tmuxSession = 'grove-test-session';
+    baseState.tmuxWorkspacePane = '%10';
+    baseState.lastWorkspacePid = 99999;
+    baseState.lastWorkspacePidStartTime = 1000;
+
+    let currentState = { ...baseState };
+    fs.writeFileSync(path.join(runDir, 'state.json'), JSON.stringify(currentState, null, 2));
+
+    const ctx: SignalContext = {
+      harnessDir: dir,
+      runId,
+      getState: () => currentState,
+      setState: (s) => { currentState = s; },
+      getChildPid: () => null,
+      getCurrentPhaseType: () => 'automated',
+      cwd: dir,
+    };
+
+    registerAndCaptureSIGUSR1(ctx);
+
+    fs.writeFileSync(path.join(runDir, 'pending-action.json'), JSON.stringify({ action: 'skip' }));
+    sigusr1Handler!();
+
+    expect(vi.mocked(sendKeysToPane)).toHaveBeenCalledWith('grove-test-session', '%10', 'C-c');
+    expect(vi.mocked(killProcessGroup)).toHaveBeenCalledWith(99999, expect.any(Number));
   });
 
   it('no-op when pending-action.json does not exist', () => {

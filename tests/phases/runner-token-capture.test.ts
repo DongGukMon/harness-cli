@@ -13,6 +13,14 @@ vi.mock('../../src/phases/interactive.js', () => ({
   validatePhaseArtifacts: vi.fn(),
 }));
 
+vi.mock('../../src/phases/gate.js', () => ({
+  runGatePhase: vi.fn(),
+  checkGateSidecars: vi.fn(),
+  deleteGateSidecars: vi.fn(),
+  saveGateApproveVerdict: vi.fn(),
+  buildGateResult: vi.fn(),
+}));
+
 vi.mock('../../src/runners/claude-usage.js', () => ({
   readClaudeSessionUsage: vi.fn(),
   encodeProjectDir: vi.fn((cwd: string) => cwd.replace(/[^a-zA-Z0-9]/g, '-')),
@@ -55,8 +63,9 @@ vi.mock('../../src/state.js', async (importOriginal) => {
   return { ...actual, writeState: vi.fn() };
 });
 
-import { handleInteractivePhase } from '../../src/phases/runner.js';
+import { handleInteractivePhase, handleGatePhase } from '../../src/phases/runner.js';
 import { runInteractivePhase } from '../../src/phases/interactive.js';
+import { runGatePhase } from '../../src/phases/gate.js';
 import { readClaudeSessionUsage } from '../../src/runners/claude-usage.js';
 import { normalizeArtifactCommit } from '../../src/artifact.js';
 
@@ -111,6 +120,62 @@ const HAPPY_TOKENS: ClaudeTokens = {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
+
+describe('handleGatePhase — codexTokens in phase_end', () => {
+  it('logs phase_start and phase_end with codexTokens for APPROVE result', async () => {
+    const tmpDir = makeTmpDir();
+    const state = makeState({ currentPhase: 2 });
+    state.phases['2'] = 'in_progress';
+    state.phasePresets['2'] = 'codex-high';
+
+    const tokens: ClaudeTokens = { input: 10, output: 5, cacheRead: 0, cacheCreate: 0, total: 15 };
+    vi.mocked(runGatePhase).mockResolvedValue({
+      type: 'verdict', verdict: 'APPROVE', comments: '', rawOutput: '',
+      runner: 'codex', durationMs: 100, promptBytes: 50,
+      codexTokens: tokens,
+    } as any);
+
+    const events: any[] = [];
+    const logger = { logEvent: (e: any) => events.push(e) } as any;
+    const inputManager = { consumePendingKey: vi.fn() } as any;
+
+    await handleGatePhase(2, state, tmpDir, tmpDir, tmpDir, inputManager, logger, { value: false });
+
+    const startEvt = events.find((e) => e.event === 'phase_start');
+    const endEvt = events.find((e) => e.event === 'phase_end');
+
+    expect(startEvt).toBeDefined();
+    expect(startEvt.phase).toBe(2);
+
+    expect(endEvt).toBeDefined();
+    expect(endEvt.phase).toBe(2);
+    expect(endEvt.status).toBe('completed');
+    expect(endEvt.codexTokens).toEqual(tokens);
+  });
+
+  it('omits codexTokens field from phase_end when result has no codexTokens', async () => {
+    const tmpDir = makeTmpDir();
+    const state = makeState({ currentPhase: 2 });
+    state.phases['2'] = 'in_progress';
+    state.phasePresets['2'] = 'codex-high';
+
+    vi.mocked(runGatePhase).mockResolvedValue({
+      type: 'verdict', verdict: 'APPROVE', comments: '', rawOutput: '',
+      runner: 'codex', durationMs: 100, promptBytes: 50,
+      // no codexTokens field
+    } as any);
+
+    const events: any[] = [];
+    const logger = { logEvent: (e: any) => events.push(e) } as any;
+    const inputManager = { consumePendingKey: vi.fn() } as any;
+
+    await handleGatePhase(2, state, tmpDir, tmpDir, tmpDir, inputManager, logger, { value: false });
+
+    const endEvt = events.find((e) => e.event === 'phase_end');
+    expect(endEvt).toBeDefined();
+    expect('codexTokens' in endEvt).toBe(false);
+  });
+});
 
 describe('handleInteractivePhase claudeTokens capture', () => {
   // Case 1 — Claude preset + completed path → claudeTokens present

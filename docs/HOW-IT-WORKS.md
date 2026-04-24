@@ -199,6 +199,8 @@ codex exec --model <model> -c model_reasoning_effort="<effort>" -
 
 If a gate phase is explicitly mapped to a Claude preset, harness instead runs a `claude --print` gate subprocess.
 
+Gate phases (2, 4, 7) run Codex CLI as an interactive TUI in the **same tmux workspace pane** used by interactive phases. Codex writes its verdict to `<runDir>/gate-N-verdict.md`, and harness detects completion via a sentinel file `<runDir>/phase-N.done`. While a gate is running, the control-pane footer shows `attach: tmux attach -t <session>` so you can switch to the workspace pane and watch the review in real time.
+
 ### Codex isolation
 
 By default, Codex subprocesses run inside `<runDir>/codex-home/` with only `auth.json` symlinked in.

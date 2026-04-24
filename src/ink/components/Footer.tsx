@@ -11,10 +11,13 @@ interface Props {
 export function Footer({ summary, columns }: Props): React.ReactElement | null {
   if (summary === null) return null;
   const line = formatFooter(summary, columns);
-  if (!line) return null;
+  if (!line && !summary.tmuxSession) return null;
   return (
-    <Box>
-      <Text dimColor>{line}</Text>
+    <Box flexDirection="column">
+      {line && <Text dimColor>{line}</Text>}
+      {summary.tmuxSession && (
+        <Text dimColor>{`attach: tmux attach -t ${summary.tmuxSession}`}</Text>
+      )}
     </Box>
   );
 }

@@ -5,7 +5,8 @@ import type { HarnessState, GatePhaseResult } from '../types.js';
 import type { ModelPreset } from '../config.js';
 import { INTERACTIVE_TIMEOUT_MS, GATE_TIMEOUT_MS, SIGTERM_WAIT_MS, MAX_PROMPT_SIZE_KB } from '../config.js';
 import { updateLockChild, clearLockChild } from '../lock.js';
-import { getProcessStartTime, killProcessGroup } from '../process.js';
+import { getProcessStartTime, killProcessGroup, isPidAlive } from '../process.js';
+import { sendKeysToPane, pollForPidFile } from '../tmux.js';
 import { writeState } from '../state.js';
 import { buildGateResult, extractCodexMetadata } from '../phases/verdict.js';
 import { isInGitRepo } from '../git.js';
@@ -394,4 +395,96 @@ export async function runCodexGate(
   }
 
   return rawToResult(first, preset, resumeSessionId ?? null, /* resumeFallback */ false);
+}
+
+export interface SpawnCodexInPaneInput {
+  phase: number;
+  state: HarnessState;
+  preset: ModelPreset;
+  harnessDir: string;
+  runDir: string;
+  promptFile: string;
+  cwd: string;
+  codexHome: string | null;
+  mode: 'fresh' | 'resume';
+  sessionId?: string;
+}
+
+export interface CodexSpawnResult {
+  pid: number | null;
+}
+
+/**
+ * Inject a Codex TUI command into the tmux workspace pane.
+ * Used for gate phases (2/4/7). Mirrors runClaudeInteractive: sends the
+ * command via sendKeysToPane, polls for a PID file, updates state.lastWorkspacePid.
+ */
+export async function spawnCodexInPane(input: SpawnCodexInPaneInput): Promise<CodexSpawnResult> {
+  const { phase, state, preset, harnessDir, runDir, promptFile, cwd, codexHome, mode, sessionId } = input;
+
+  const sessionName = state.tmuxSession;
+  const workspacePane = state.tmuxWorkspacePane;
+
+  // Kill previous workspace process if alive (same guard as runClaudeInteractive)
+  if (state.lastWorkspacePid !== null && isPidAlive(state.lastWorkspacePid)) {
+    const savedStart = state.lastWorkspacePidStartTime;
+    const actualStart = getProcessStartTime(state.lastWorkspacePid);
+    if (savedStart !== null && actualStart !== null && Math.abs(actualStart - savedStart) <= 2) {
+      sendKeysToPane(sessionName, workspacePane, 'C-c');
+      const deadline = Date.now() + 5000;
+      while (isPidAlive(state.lastWorkspacePid) && Date.now() < deadline) {
+        await new Promise<void>((r) => setTimeout(r, 200));
+      }
+      if (isPidAlive(state.lastWorkspacePid)) {
+        await killProcessGroup(state.lastWorkspacePid, SIGTERM_WAIT_MS);
+      }
+    }
+    state.lastWorkspacePid = null;
+    state.lastWorkspacePidStartTime = null;
+    writeState(runDir, state);
+  }
+
+  sendKeysToPane(sessionName, workspacePane, 'C-c');
+  await new Promise<void>((r) => setTimeout(r, 500));
+
+  const pidFile = path.join(runDir, `codex-gate-${phase}.pid`);
+  if (fs.existsSync(pidFile)) fs.unlinkSync(pidFile);
+
+  const codexBin = resolveCodexBin();
+  const skipGitFlag = !isInGitRepo(cwd) ? '--skip-git-repo-check ' : '';
+  const codexHomeEnv = codexHome ? `CODEX_HOME="${codexHome}" ` : '';
+
+  let codexCmd: string;
+  if (mode === 'resume' && sessionId) {
+    codexCmd =
+      `${codexBin} resume ${sessionId} ` +
+      `${skipGitFlag}` +
+      `--model ${preset.model} ` +
+      `-c model_reasoning_effort="${preset.effort}" ` +
+      `-s workspace-write -a never --full-auto ` +
+      `< "${promptFile}"`;
+  } else {
+    codexCmd =
+      `${codexBin} ` +
+      `${skipGitFlag}` +
+      `--model ${preset.model} ` +
+      `-c model_reasoning_effort="${preset.effort}" ` +
+      `-s workspace-write -a never --full-auto ` +
+      `< "${promptFile}"`;
+  }
+
+  const wrappedCmd = `sh -c 'cd "${cwd}" && echo $$ > ${pidFile} && ${codexHomeEnv}exec ${codexCmd}'`;
+  sendKeysToPane(sessionName, workspacePane, wrappedCmd);
+
+  const codexPid = await pollForPidFile(pidFile, 5000);
+
+  if (codexPid !== null) {
+    const startTime = getProcessStartTime(codexPid);
+    updateLockChild(harnessDir, codexPid, phase, startTime);
+    state.lastWorkspacePid = codexPid;
+    state.lastWorkspacePidStartTime = startTime;
+    writeState(runDir, state);
+  }
+
+  return { pid: codexPid };
 }

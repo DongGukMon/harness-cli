@@ -6,6 +6,7 @@ import { execSync } from 'child_process';
 import {
   assembleInteractivePrompt,
   assembleGatePrompt,
+  assembleGateResumePrompt,
   parseComplexitySignal,
   buildComplexityDirective,
   __resetComplexityWarning,
@@ -37,7 +38,19 @@ function makeState(overrides: Partial<HarnessState> = {}): HarnessState {
     'deadbeef',
     false
   );
-  return { ...base, ...overrides };
+  // Ensure phaseAttemptId is initialized with a sensible default for testing
+  const withPhaseIds = {
+    ...base,
+    phaseAttemptId: {
+      '1': 'test-attempt-id-1',
+      '2': 'test-attempt-id-2',
+      '3': 'test-attempt-id-3',
+      '4': 'test-attempt-id-4',
+      '5': 'test-attempt-id-5',
+      '7': 'test-attempt-id-7',
+    }
+  };
+  return { ...withPhaseIds, ...overrides };
 }
 
 function writeEvalFixtures(dir: string): void {
@@ -58,6 +71,14 @@ function makeLightEvalState(overrides: Partial<HarnessState> = {}): HarnessState
               '5': 'completed', '6': 'completed', '7': 'pending' },
     implCommit: 'impl-sha',
     evalCommit: 'eval-sha',
+    phaseAttemptId: {
+      '1': 'test-attempt-id-1',
+      '2': 'test-attempt-id-2',
+      '3': 'test-attempt-id-3',
+      '4': 'test-attempt-id-4',
+      '5': 'test-attempt-id-5',
+      '7': 'test-attempt-id-7',
+    },
     ...overrides,
   };
 }
@@ -71,6 +92,14 @@ function makeFullEvalState(overrides: Partial<HarnessState> = {}): HarnessState 
               '5': 'completed', '6': 'completed', '7': 'pending' },
     implCommit: 'impl-sha',
     evalCommit: 'eval-sha',
+    phaseAttemptId: {
+      '1': 'test-attempt-id-1',
+      '2': 'test-attempt-id-2',
+      '3': 'test-attempt-id-3',
+      '4': 'test-attempt-id-4',
+      '5': 'test-attempt-id-5',
+      '7': 'test-attempt-id-7',
+    },
     ...overrides,
   };
 }
@@ -1133,5 +1162,57 @@ describe('assembleInteractivePrompt — absolute prompt vars (FR-1/2/5)', () => 
     const runDir = path.join(outer, '.harness', 'my-run');
     const result = validatePhaseArtifacts(1, state, outer, runDir);
     expect(result).toBe(true);
+  });
+});
+
+// ─── Output Protocol block injection ─────────────────────────────────────────
+
+describe('assembleGatePrompt — Output Protocol block', () => {
+  it('includes gate-N-verdict.md and sentinel instructions', () => {
+    const cwd = makeTmpDir();
+    const harnessDir = path.join(cwd, '.harness');
+    const state = makeState();
+    state.runId = 'test-run-123';
+    const specAbsPath = path.join(cwd, state.artifacts.spec);
+    fs.mkdirSync(path.dirname(specAbsPath), { recursive: true });
+    fs.writeFileSync(specAbsPath, '# Spec');
+    const result = assembleGatePrompt(2, state, harnessDir, cwd);
+    expect(typeof result).toBe('string');
+    const prompt = result as string;
+    expect(prompt).toContain('gate-2-verdict.md');
+    expect(prompt).toContain('phase-2.done');
+    expect(prompt).toContain('Output Protocol');
+  });
+
+  it('includes attemptId in sentinel instruction', () => {
+    const cwd = makeTmpDir();
+    const harnessDir = path.join(cwd, '.harness');
+    const state = makeState();
+    state.runId = 'test-run-456';
+    state.phaseAttemptId['2'] = 'test-attempt-uuid-123';
+    const specAbsPath = path.join(cwd, state.artifacts.spec);
+    fs.mkdirSync(path.dirname(specAbsPath), { recursive: true });
+    fs.writeFileSync(specAbsPath, '# Spec');
+    const result = assembleGatePrompt(2, state, harnessDir, cwd);
+    const prompt = result as string;
+    expect(prompt).toContain('test-attempt-uuid-123');
+  });
+});
+
+describe('assembleGateResumePrompt — Output Protocol block', () => {
+  it('includes gate-N-verdict.md instruction on resume', () => {
+    const cwd = makeTmpDir();
+    const runDir = path.join(cwd, '.harness', 'test-run-resume');
+    const state = makeState();
+    state.runId = 'test-run-resume';
+    state.phaseAttemptId['2'] = 'resume-uuid-456';
+    const specAbsPath = path.join(cwd, state.artifacts.spec);
+    fs.mkdirSync(path.dirname(specAbsPath), { recursive: true });
+    fs.writeFileSync(specAbsPath, '# Spec');
+    const result = assembleGateResumePrompt(2, state, cwd, 'reject', 'P1 feedback here', runDir);
+    const prompt = result as string;
+    expect(prompt).toContain('gate-2-verdict.md');
+    expect(prompt).toContain('phase-2.done');
+    expect(prompt).toContain('resume-uuid-456');
   });
 });

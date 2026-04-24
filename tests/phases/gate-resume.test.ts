@@ -5,7 +5,10 @@ import os from 'os';
 import type { HarnessState, GatePhaseResult } from '../../src/types.js';
 import { runGatePhase } from '../../src/phases/gate.js';
 
-vi.mock('../../src/runners/codex.js', () => ({ runCodexGate: vi.fn() }));
+vi.mock('../../src/runners/codex.js', () => ({
+  runCodexGate: vi.fn(),
+  spawnCodexInPane: vi.fn().mockResolvedValue({ pid: null }),
+}));
 vi.mock('../../src/runners/claude.js', () => ({ runClaudeGate: vi.fn() }));
 vi.mock('../../src/context/assembler.js', async (importOriginal) => {
   const actual = await importOriginal<any>();
@@ -16,9 +19,17 @@ vi.mock('../../src/context/assembler.js', async (importOriginal) => {
     assembleGateResumePrompt: vi.fn(() => 'RESUME_PROMPT'),
   };
 });
+vi.mock('../../src/runners/codex-usage.js', () => ({
+  readCodexSessionUsage: vi.fn(),
+}));
+vi.mock('../../src/phases/interactive.js', () => ({
+  waitForPhaseCompletion: vi.fn(),
+}));
 
-import { runCodexGate } from '../../src/runners/codex.js';
+import { spawnCodexInPane } from '../../src/runners/codex.js';
 import { runClaudeGate } from '../../src/runners/claude.js';
+import { readCodexSessionUsage } from '../../src/runners/codex-usage.js';
+import { waitForPhaseCompletion } from '../../src/phases/interactive.js';
 
 function makeState(): HarnessState {
   return {
@@ -50,36 +61,47 @@ function makeState(): HarnessState {
   };
 }
 
-function mockVerdict(overrides: Partial<GatePhaseResult> = {}): GatePhaseResult {
-  return {
-    type: 'verdict',
-    verdict: 'REJECT',
-    comments: 'P1',
-    rawOutput: 'session id: aa-11\n## Verdict\nREJECT\n',
-    runner: 'codex',
-    codexSessionId: 'aa-11',
-    sourcePreset: { model: 'gpt-5.5', effort: 'high' },
-    resumedFrom: null,
-    resumeFallback: false,
-    ...overrides,
-  } as GatePhaseResult;
+function writeVerdictFile(dir: string, phase: number, verdict: 'APPROVE' | 'REJECT', comments = ''): void {
+  fs.writeFileSync(
+    path.join(dir, `gate-${phase}-verdict.md`),
+    `## Verdict\n${verdict}\n\n## Comments\n${comments}\n\n## Summary\nOk.\n`,
+  );
 }
 
+import { assembleGatePrompt, assembleGateResumePrompt } from '../../src/context/assembler.js';
+
 let runDir: string;
-beforeEach(() => {
+beforeEach(async () => {
   runDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gate-resume-'));
+  vi.resetAllMocks();
+  // Restore assembler mocks after reset
+  vi.mocked(assembleGatePrompt).mockReturnValue('FRESH_PROMPT');
+  vi.mocked(assembleGateResumePrompt).mockReturnValue('RESUME_PROMPT');
+  vi.mocked(waitForPhaseCompletion).mockResolvedValue({ status: 'completed' });
+  vi.mocked(readCodexSessionUsage).mockResolvedValue(null);
+  vi.mocked(spawnCodexInPane).mockResolvedValue({ pid: null });
 });
 afterEach(() => { vi.clearAllMocks(); });
 
 // ─── Basic path dispatch ─────────────────────────────────────────────────────
 
 describe('runGatePhase — first call (fresh)', () => {
-  it('calls runCodexGate without resumeSessionId and saves new session', async () => {
+  it('calls spawnCodexInPane with mode:fresh and saves session from JSONL', async () => {
     const state = makeState();
-    vi.mocked(runCodexGate).mockResolvedValueOnce(mockVerdict());
+    state.phaseAttemptId['2'] = 'attempt-fresh-1';
+    vi.mocked(spawnCodexInPane).mockImplementationOnce(async () => {
+      writeVerdictFile(runDir, 2, 'REJECT', 'P1 issue');
+      return { pid: null };
+    });
+    vi.mocked(readCodexSessionUsage).mockResolvedValueOnce({
+      sessionId: 'aa-11',
+      tokens: { input: 10, output: 5, cacheRead: 0, cacheCreate: 0, total: 15 },
+    });
     const res = await runGatePhase(2, state, runDir, runDir, runDir);
     expect(res.type).toBe('verdict');
-    expect(vi.mocked(runCodexGate).mock.calls[0][5]).toBeNull();
+    const spawnCall = vi.mocked(spawnCodexInPane).mock.calls[0][0];
+    expect(spawnCall.mode).toBe('fresh');
+    expect(spawnCall.sessionId).toBeUndefined();
     expect(state.phaseCodexSessions['2']).toEqual({
       sessionId: 'aa-11', runner: 'codex', model: 'gpt-5.5', effort: 'high', lastOutcome: 'reject',
     });
@@ -87,113 +109,116 @@ describe('runGatePhase — first call (fresh)', () => {
 });
 
 describe('runGatePhase — second call (resume)', () => {
-  it('passes stored sessionId on compatible preset', async () => {
+  it('calls spawnCodexInPane with mode:resume and stored sessionId', async () => {
     const state = makeState();
+    state.phaseAttemptId['2'] = 'attempt-resume-1';
     state.phaseCodexSessions['2'] = {
       sessionId: 'aa-11', runner: 'codex', model: 'gpt-5.5', effort: 'high', lastOutcome: 'reject',
     };
-    vi.mocked(runCodexGate).mockResolvedValueOnce(
-      mockVerdict({ verdict: 'APPROVE', resumedFrom: 'aa-11', codexSessionId: 'aa-11' }),
-    );
+    vi.mocked(spawnCodexInPane).mockImplementationOnce(async () => {
+      writeVerdictFile(runDir, 2, 'APPROVE', '');
+      return { pid: null };
+    });
+    vi.mocked(readCodexSessionUsage).mockResolvedValueOnce({
+      sessionId: 'aa-11',
+      tokens: { input: 10, output: 5, cacheRead: 0, cacheCreate: 0, total: 15 },
+    });
     await runGatePhase(2, state, runDir, runDir, runDir);
-    expect(vi.mocked(runCodexGate).mock.calls[0][5]).toBe('aa-11');
+    const spawnCall = vi.mocked(spawnCodexInPane).mock.calls[0][0];
+    expect(spawnCall.mode).toBe('resume');
+    expect(spawnCall.sessionId).toBe('aa-11');
   });
 });
 
 describe('runGatePhase — incompatible saved session', () => {
-  it('nulls saved session and uses fresh path when model differs', async () => {
+  it('nulls saved session and uses fresh mode when model differs', async () => {
     const state = makeState();
+    state.phaseAttemptId['2'] = 'attempt-incompat-1';
     state.phaseCodexSessions['2'] = {
       sessionId: 'aa-11', runner: 'codex', model: 'old-model', effort: 'high', lastOutcome: 'reject',
     };
-    vi.mocked(runCodexGate).mockResolvedValueOnce(mockVerdict());
+    vi.mocked(spawnCodexInPane).mockImplementationOnce(async () => {
+      writeVerdictFile(runDir, 2, 'REJECT', '');
+      return { pid: null };
+    });
+    vi.mocked(readCodexSessionUsage).mockResolvedValueOnce({
+      sessionId: 'new-sid',
+      tokens: { input: 1, output: 1, cacheRead: 0, cacheCreate: 0, total: 2 },
+    });
     await runGatePhase(2, state, runDir, runDir, runDir);
-    expect(vi.mocked(runCodexGate).mock.calls[0][5]).toBeNull();
+    const spawnCall = vi.mocked(spawnCodexInPane).mock.calls[0][0];
+    expect(spawnCall.mode).toBe('fresh');
+    expect(spawnCall.sessionId).toBeUndefined();
+    expect(state.phaseCodexSessions['2']?.sessionId).toBe('new-sid');
   });
 });
 
-describe('runGatePhase — resumeFallback clears stale id when new id absent', () => {
-  it('clears stale id when fallback fires with no new id', async () => {
+// ─── JSONL session extraction ─────────────────────────────────────────────────
+
+describe('runGatePhase — JSONL session extraction', () => {
+  it('no session saved when readCodexSessionUsage returns null', async () => {
     const state = makeState();
-    state.phaseCodexSessions['2'] = {
-      sessionId: 'stale-aa', runner: 'codex', model: 'gpt-5.5', effort: 'high', lastOutcome: 'reject',
-    };
-    vi.mocked(runCodexGate).mockResolvedValueOnce({
-      type: 'error',
-      error: 'fallback failed',
-      runner: 'codex',
-      resumedFrom: 'stale-aa',
-      resumeFallback: true,
-      codexSessionId: undefined,
-    } as GatePhaseResult);
+    state.phaseAttemptId['2'] = 'attempt-no-session';
+    vi.mocked(spawnCodexInPane).mockImplementationOnce(async () => {
+      writeVerdictFile(runDir, 2, 'APPROVE', '');
+      return { pid: null };
+    });
+    // default mock returns null (set in beforeEach)
     await runGatePhase(2, state, runDir, runDir, runDir);
     expect(state.phaseCodexSessions['2']).toBeNull();
   });
 
-  // §4.4 P1 regression (eval gate round-6): if a resumeFallback response
-  // accidentally carries forward the stale sessionId, runGatePhase must NOT
-  // re-persist that dead lineage. Clearing happens unconditionally on
-  // resumeFallback=true, then save only a new non-empty id.
-  it('§4.4 does not re-save stale sessionId on resumeFallback=true (order: clear → conditional save)', async () => {
+  it('JSONL session overrides undefined codexSessionId from verdict file', async () => {
     const state = makeState();
-    state.phaseCodexSessions['2'] = {
-      sessionId: 'dead-sid', runner: 'codex', model: 'gpt-5.5', effort: 'high', lastOutcome: 'reject',
-    };
-    // runCodexGate returns an error where resumeFallback=true but codexSessionId
-    // is the DEAD id (worst-case metadata carry-forward).
-    vi.mocked(runCodexGate).mockResolvedValueOnce({
-      type: 'error',
-      error: 'Resume fallback failed: fresh prompt too large',
-      runner: 'codex',
-      resumedFrom: 'dead-sid',
-      resumeFallback: true,
-      codexSessionId: 'dead-sid', // ← stale id leaked through
-    } as GatePhaseResult);
+    state.phaseAttemptId['2'] = 'attempt-jsonl-override';
+    vi.mocked(spawnCodexInPane).mockImplementationOnce(async () => {
+      writeVerdictFile(runDir, 2, 'APPROVE', '');
+      return { pid: null };
+    });
+    vi.mocked(readCodexSessionUsage).mockResolvedValueOnce({
+      sessionId: 'jsonl-sid',
+      tokens: { input: 5, output: 2, cacheRead: 0, cacheCreate: 0, total: 7 },
+    });
     await runGatePhase(2, state, runDir, runDir, runDir);
-    // Cleared — not re-saved with the stale id
-    expect(state.phaseCodexSessions['2']).toBeNull();
-  });
-
-  it('§4.4 accepts a NEW non-empty id on resumeFallback=true, overwriting the dead lineage', async () => {
-    const state = makeState();
-    state.phaseCodexSessions['2'] = {
-      sessionId: 'dead-sid', runner: 'codex', model: 'gpt-5.5', effort: 'high', lastOutcome: 'reject',
-    };
-    vi.mocked(runCodexGate).mockResolvedValueOnce({
-      type: 'verdict', verdict: 'APPROVE', comments: '', rawOutput: '',
-      runner: 'codex',
-      resumedFrom: 'dead-sid',
-      resumeFallback: true,
-      codexSessionId: 'new-fresh-sid',
-    } as GatePhaseResult);
-    await runGatePhase(2, state, runDir, runDir, runDir);
-    expect(state.phaseCodexSessions['2']?.sessionId).toBe('new-fresh-sid');
+    expect(state.phaseCodexSessions['2']?.sessionId).toBe('jsonl-sid');
     expect(state.phaseCodexSessions['2']?.lastOutcome).toBe('approve');
   });
 
-  // §4.1 trim-non-empty guard at persist site (P2 backported from round-3/5/6)
-  it('§4.1 rejects whitespace-only codexSessionId at persist site', async () => {
+  it('preserves existing sessionId when resumeSessionId matches JSONL result', async () => {
     const state = makeState();
-    vi.mocked(runCodexGate).mockResolvedValueOnce({
-      type: 'verdict', verdict: 'APPROVE', comments: '', rawOutput: '',
-      runner: 'codex',
-      codexSessionId: '   ', // malformed
-      resumedFrom: null,
-      resumeFallback: false,
-    } as GatePhaseResult);
+    state.phaseAttemptId['2'] = 'attempt-resume-jsonl';
+    state.phaseCodexSessions['2'] = {
+      sessionId: 'kept-sid', runner: 'codex', model: 'gpt-5.5', effort: 'high', lastOutcome: 'reject',
+    };
+    vi.mocked(spawnCodexInPane).mockImplementationOnce(async () => {
+      writeVerdictFile(runDir, 2, 'APPROVE', '');
+      return { pid: null };
+    });
+    vi.mocked(readCodexSessionUsage).mockResolvedValueOnce({
+      sessionId: 'kept-sid',
+      tokens: { input: 5, output: 2, cacheRead: 0, cacheCreate: 0, total: 7 },
+    });
     await runGatePhase(2, state, runDir, runDir, runDir);
-    // Whitespace id must NOT be persisted
-    expect(state.phaseCodexSessions['2']).toBeNull();
+    // On resume, discoveredSessionId stays undefined (JSONL id not re-applied for resume path),
+    // so the session slot is not overwritten — sessionId is preserved, lastOutcome unchanged.
+    expect(state.phaseCodexSessions['2']?.sessionId).toBe('kept-sid');
+    expect(state.phaseCodexSessions['2']?.lastOutcome).toBe('reject');
   });
 });
 
 describe('runGatePhase — stillActivePhase guard', () => {
-  it('skips session persist if currentPhase changed during call', async () => {
+  it('skips session persist if currentPhase changed during gate', async () => {
     const state = makeState();
-    vi.mocked(runCodexGate).mockImplementationOnce(async () => {
-      state.currentPhase = 3; // simulate SIGUSR1 jump during call
-      return mockVerdict({ codexSessionId: 'should-not-save' });
+    state.phaseAttemptId['2'] = 'attempt-redirect-1';
+    vi.mocked(waitForPhaseCompletion).mockImplementationOnce(async () => {
+      state.currentPhase = 3; // simulate SIGUSR1 jump during gate wait
+      return { status: 'completed' };
     });
+    vi.mocked(readCodexSessionUsage).mockResolvedValueOnce({
+      sessionId: 'should-not-save',
+      tokens: { input: 1, output: 1, cacheRead: 0, cacheCreate: 0, total: 2 },
+    });
+    vi.mocked(spawnCodexInPane).mockResolvedValueOnce({ pid: null });
     await runGatePhase(2, state, runDir, runDir, runDir);
     expect(state.phaseCodexSessions['2']).toBeNull();
   });
@@ -203,10 +228,12 @@ describe('runGatePhase — stillActivePhase guard', () => {
   // invalidation's replay-sidecar deletion is re-armed by the stale gate.
   it('does not write gate-N-raw/result.json sidecars when currentPhase changed mid-gate', async () => {
     const state = makeState();
-    vi.mocked(runCodexGate).mockImplementationOnce(async () => {
-      state.currentPhase = 3; // simulate jump during gate run
-      return mockVerdict({ codexSessionId: 'should-not-save' });
+    state.phaseAttemptId['2'] = 'attempt-redirect-2';
+    vi.mocked(waitForPhaseCompletion).mockImplementationOnce(async () => {
+      state.currentPhase = 3;
+      return { status: 'completed' };
     });
+    vi.mocked(spawnCodexInPane).mockResolvedValueOnce({ pid: null });
     await runGatePhase(2, state, runDir, runDir, runDir);
     expect(fs.existsSync(path.join(runDir, 'gate-2-raw.txt'))).toBe(false);
     expect(fs.existsSync(path.join(runDir, 'gate-2-result.json'))).toBe(false);
@@ -249,11 +276,11 @@ describe('runGatePhase — sidecar replay compatibility gate (§4.7)', () => {
     });
     const flag = { value: true };
     const res = await runGatePhase(2, state, runDir, runDir, runDir, flag);
-    // runCodexGate는 호출되지 않아야 함 (replay hit)
-    expect(vi.mocked(runCodexGate).mock.calls.length).toBe(0);
+    // spawnCodexInPane は呼ばれないはず (replay hit)
+    expect(vi.mocked(spawnCodexInPane).mock.calls.length).toBe(0);
     expect(res.type).toBe('verdict');
     expect((res as any).recoveredFromSidecar).toBe(true);
-    // Hydration 확인
+    // Hydration 確認
     expect(state.phaseCodexSessions['2']).toEqual({
       sessionId: 'side-aa', runner: 'codex', model: 'gpt-5.5', effort: 'high', lastOutcome: 'reject',
     });
@@ -261,52 +288,64 @@ describe('runGatePhase — sidecar replay compatibility gate (§4.7)', () => {
 
   it('(2) mismatched sourcePreset: replay skipped, live path taken', async () => {
     const state = makeState();
+    state.phaseAttemptId['2'] = 'attempt-mismatch-1';
     writeSidecar(2, {
       verdict: 'APPROVE',
       runner: 'codex',
       codexSessionId: 'mismatch-aa',
       sourcePreset: { model: 'some-other-model', effort: 'high' },
     });
-    vi.mocked(runCodexGate).mockResolvedValueOnce(
-      mockVerdict({ codexSessionId: 'live-aa' }),
-    );
+    vi.mocked(spawnCodexInPane).mockImplementationOnce(async () => {
+      writeVerdictFile(runDir, 2, 'REJECT', '');
+      return { pid: null };
+    });
+    vi.mocked(readCodexSessionUsage).mockResolvedValueOnce({
+      sessionId: 'live-aa',
+      tokens: { input: 1, output: 1, cacheRead: 0, cacheCreate: 0, total: 2 },
+    });
     const flag = { value: true };
     await runGatePhase(2, state, runDir, runDir, runDir, flag);
-    // Live path 탔는지 확인
-    expect(vi.mocked(runCodexGate).mock.calls.length).toBe(1);
+    // Live path taken
+    expect(vi.mocked(spawnCodexInPane).mock.calls.length).toBe(1);
     expect(state.phaseCodexSessions['2']?.sessionId).toBe('live-aa');
   });
 
   it('(3) legacy sidecar (no runner/sourcePreset metadata): replay skipped', async () => {
     const state = makeState();
+    state.phaseAttemptId['2'] = 'attempt-legacy-1';
     fs.writeFileSync(path.join(runDir, 'gate-2-raw.txt'), 'session id: legacy\n## Verdict\nAPPROVE\n');
     fs.writeFileSync(
       path.join(runDir, 'gate-2-result.json'),
       JSON.stringify({ exitCode: 0, timestamp: Date.now() }),
     );
-    vi.mocked(runCodexGate).mockResolvedValueOnce(
-      mockVerdict({ codexSessionId: 'live-aa' }),
-    );
+    vi.mocked(spawnCodexInPane).mockImplementationOnce(async () => {
+      writeVerdictFile(runDir, 2, 'REJECT', '');
+      return { pid: null };
+    });
+    vi.mocked(readCodexSessionUsage).mockResolvedValueOnce({
+      sessionId: 'live-aa',
+      tokens: { input: 1, output: 1, cacheRead: 0, cacheCreate: 0, total: 2 },
+    });
     const flag = { value: true };
     await runGatePhase(2, state, runDir, runDir, runDir, flag);
     // replay skip → live spawn
-    expect(vi.mocked(runCodexGate).mock.calls.length).toBe(1);
+    expect(vi.mocked(spawnCodexInPane).mock.calls.length).toBe(1);
     expect(state.phaseCodexSessions['2']?.sessionId).toBe('live-aa');
   });
 
   it('(4) Claude sidecar with matching runner: replay accepted, no codex hydration', async () => {
     const state = makeState();
-    // Claude runner 로 교체
+    // Claude runner
     state.phasePresets['2'] = 'sonnet-high';
     writeSidecar(2, { verdict: 'APPROVE', runner: 'claude' });
     const flag = { value: true };
     const res = await runGatePhase(2, state, runDir, runDir, runDir, flag);
     // Neither runner should be called (replay hit)
-    expect(vi.mocked(runCodexGate).mock.calls.length).toBe(0);
+    expect(vi.mocked(spawnCodexInPane).mock.calls.length).toBe(0);
     expect(vi.mocked(runClaudeGate).mock.calls.length).toBe(0);
     expect(res.type).toBe('verdict');
     expect((res as any).recoveredFromSidecar).toBe(true);
-    // Claude replay는 phaseCodexSessions hydrate 대상 아님
+    // Claude replay は phaseCodexSessions hydrate 対象外
     expect(state.phaseCodexSessions['2']).toBeNull();
   });
 });
