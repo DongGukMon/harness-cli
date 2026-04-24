@@ -3,7 +3,7 @@ import os from 'os';
 import path from 'path';
 import type { HarnessState, GatePhaseResult, GateResult, GateSessionInfo, ClaudeTokens } from '../types.js';
 import { assembleGatePrompt, assembleGateResumePrompt } from '../context/assembler.js';
-import { getPresetById } from '../config.js';
+import { getPresetById, SIGTERM_WAIT_MS } from '../config.js';
 import type { ModelPreset } from '../config.js';
 import { runClaudeGate } from '../runners/claude.js';
 import { spawnCodexInPane } from '../runners/codex.js';
@@ -12,6 +12,8 @@ import { writeState } from '../state.js';
 import { readCodexSessionUsage } from '../runners/codex-usage.js';
 import { parseVerdict, buildGateResult, buildGateResultFromFile } from './verdict.js';
 import { waitForPhaseCompletion } from './interactive.js';
+import { sendKeysToPane } from '../tmux.js';
+import { killProcessGroup } from '../process.js';
 export { parseVerdict, buildGateResult, buildGateResultFromFile } from './verdict.js';
 
 type GatePhaseKey = '2' | '4' | '7';
@@ -346,6 +348,20 @@ export async function runGatePhaseInteractive(
   const sentinelResult = await waitForPhaseCompletion(
     sentinelPath, attemptId, spawnResult.pid, phase, state, cwd, runDir,
   );
+
+  // Interrupt TUI and wait for process group to flush JSONL before reading usage
+  if (state.tmuxSession && state.tmuxWorkspacePane) {
+    sendKeysToPane(state.tmuxSession, state.tmuxWorkspacePane, 'C-c');
+    if (spawnResult.pid !== null) {
+      // On completed: await to ensure JSONL is flushed before readCodexSessionUsage.
+      // On failed: fire-and-forget since we skip JSONL read anyway.
+      if (sentinelResult.status === 'completed') {
+        await killProcessGroup(spawnResult.pid, SIGTERM_WAIT_MS);
+      } else {
+        void killProcessGroup(spawnResult.pid, SIGTERM_WAIT_MS);
+      }
+    }
+  }
 
   const durationMs = Date.now() - phaseStartTs;
 

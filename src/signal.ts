@@ -165,12 +165,22 @@ export function registerSignalHandlers(ctx: SignalContext): void {
       fs.writeFileSync(interruptFlagPath, '1');
 
       // Interrupt the INTERRUPTED phase's process (not the next phase's)
-      // Dispatch based on runner: Claude interactive phases use tmux C-c; Codex or gate/verify → kill subprocess
+      // Dispatch based on runner: Claude interactive phases use tmux C-c; Codex gate phases use pane C-c + kill; others → kill subprocess
       const interruptedPreset = getPresetById(state.phasePresets[String(interruptedPhase)]);
       const interruptedRunner = interruptedPreset?.runner ?? null;
       const isInteractivePhase = [1, 3, 5].includes(interruptedPhase as number);
+      const isGateCodexPhase = [2, 4, 7].includes(interruptedPhase as number) && interruptedRunner === 'codex';
       if (isInteractivePhase && interruptedRunner === 'claude' && state.tmuxWorkspacePane) {
         sendKeysToPane(state.tmuxSession, state.tmuxWorkspacePane, 'C-c');
+      } else if (isGateCodexPhase && state.tmuxWorkspacePane) {
+        sendKeysToPane(state.tmuxSession, state.tmuxWorkspacePane, 'C-c');
+        if (
+          state.lastWorkspacePid !== null &&
+          isPidAlive(state.lastWorkspacePid) &&
+          isSameProcessInstance(state.lastWorkspacePid, state.lastWorkspacePidStartTime)
+        ) {
+          void killProcessGroup(state.lastWorkspacePid, SIGTERM_WAIT_MS);
+        }
       } else {
         const childPid = getChildPid();
         if (childPid) {

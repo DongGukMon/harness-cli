@@ -13,6 +13,14 @@ vi.mock('../../src/runners/codex.js', () => ({
 }));
 vi.mock('../../src/runners/claude.js', () => ({ runClaudeGate: vi.fn() }));
 vi.mock('../../src/context/assembler.js', () => ({ assembleGatePrompt: vi.fn() }));
+vi.mock('../../src/tmux.js', () => ({
+  sendKeysToPane: vi.fn(),
+}));
+vi.mock('../../src/process.js', () => ({
+  killProcessGroup: vi.fn().mockResolvedValue(undefined),
+  isPidAlive: vi.fn().mockReturnValue(false),
+  getProcessStartTime: vi.fn().mockReturnValue(null),
+}));
 vi.mock('../../src/runners/codex-isolation.js', async () => {
   const actual = await vi.importActual<typeof import('../../src/runners/codex-isolation.js')>(
     '../../src/runners/codex-isolation.js',
@@ -584,6 +592,76 @@ describe('buildGateResultFromFile', () => {
     fs.writeFileSync(verdictPath, '# No verdict section here\n');
     const result = buildGateResultFromFile(verdictPath);
     expect(result.type).toBe('error');
+  });
+});
+
+// ─── runGatePhase — sentinel completion triggers C-c + killProcessGroup ───────
+
+describe('runGatePhase — TUI interrupt after sentinel completion', () => {
+  it('calls sendKeysToPane(C-c) and killProcessGroup when sentinel completes', async () => {
+    const { assembleGatePrompt: mockAssembler } = await import('../../src/context/assembler.js');
+    const { spawnCodexInPane: mockSpawn } = await import('../../src/runners/codex.js');
+    const { sendKeysToPane: mockSendKeys } = await import('../../src/tmux.js');
+    const { killProcessGroup: mockKillPG } = await import('../../src/process.js');
+
+    vi.mocked(mockAssembler).mockReturnValue('mock prompt');
+    vi.mocked(mockSpawn).mockResolvedValue({ pid: 12345 });
+    // waitForPhaseCompletion is already mocked to return { status: 'completed' } in beforeEach
+
+    const runDir = makeTmpDir();
+    fs.writeFileSync(path.join(runDir, 'phase-2.done'), 'test-attempt-id');
+    fs.writeFileSync(path.join(runDir, 'gate-2-verdict.md'), '## Verdict\nAPPROVE\n\n## Comments\nNone\n');
+
+    const state = {
+      phasePresets: { '2': 'codex-high' },
+      gateRetries: { '2': 0 },
+      phaseCodexSessions: { '2': null, '4': null, '7': null },
+      phaseAttemptId: { '2': 'test-attempt-id' },
+      currentPhase: 2,
+      codexNoIsolate: false,
+      tmuxSession: 'harness-test-session',
+      tmuxWorkspacePane: '%10',
+    } as any;
+
+    await runGatePhase(2, state, '/fake-harness', runDir, '/cwd');
+
+    expect(vi.mocked(mockSendKeys)).toHaveBeenCalledWith('harness-test-session', '%10', 'C-c');
+    expect(vi.mocked(mockKillPG)).toHaveBeenCalledWith(12345, expect.any(Number));
+
+    const { readCodexSessionUsage: mockReadUsage } = await import('../../src/runners/codex-usage.js');
+    const sendOrder = vi.mocked(mockSendKeys).mock.invocationCallOrder[0];
+    const killOrder = vi.mocked(mockKillPG).mock.invocationCallOrder[0];
+    const readOrder = vi.mocked(mockReadUsage).mock.invocationCallOrder[0];
+    expect(sendOrder).toBeLessThan(killOrder);
+    expect(killOrder).toBeLessThan(readOrder);
+  });
+
+  it('does NOT call sendKeysToPane when tmuxSession is absent', async () => {
+    const { assembleGatePrompt: mockAssembler } = await import('../../src/context/assembler.js');
+    const { spawnCodexInPane: mockSpawn } = await import('../../src/runners/codex.js');
+    const { sendKeysToPane: mockSendKeys } = await import('../../src/tmux.js');
+
+    vi.mocked(mockAssembler).mockReturnValue('mock prompt');
+    vi.mocked(mockSpawn).mockResolvedValue({ pid: null });
+
+    const runDir = makeTmpDir();
+    fs.writeFileSync(path.join(runDir, 'phase-2.done'), 'test-attempt-id');
+    fs.writeFileSync(path.join(runDir, 'gate-2-verdict.md'), '## Verdict\nAPPROVE\n\n## Comments\nNone\n');
+
+    const state = {
+      phasePresets: { '2': 'codex-high' },
+      gateRetries: { '2': 0 },
+      phaseCodexSessions: { '2': null, '4': null, '7': null },
+      phaseAttemptId: { '2': 'test-attempt-id' },
+      currentPhase: 2,
+      codexNoIsolate: false,
+      tmuxSession: undefined,
+      tmuxWorkspacePane: undefined,
+    } as any;
+
+    await runGatePhase(2, state, '/fake-harness', runDir, '/cwd');
+
+    expect(vi.mocked(mockSendKeys)).not.toHaveBeenCalled();
   });
 });
 
