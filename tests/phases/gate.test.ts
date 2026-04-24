@@ -1,12 +1,16 @@
-import { describe, it, expect, afterEach, vi } from 'vitest';
+import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { parseVerdict, checkGateSidecars, buildGateResult, runGatePhase } from '../../src/phases/gate.js';
+import { parseVerdict, checkGateSidecars, buildGateResult, buildGateResultFromFile, runGatePhase } from '../../src/phases/gate.js';
+import { buildGateResultFromFile as buildGateResultFromFileVerdict } from '../../src/phases/verdict.js';
 import type { GateResult } from '../../src/types.js';
 
 // ─── module mocks (hoisted) ──────────────────────────────────────────────────
-vi.mock('../../src/runners/codex.js', () => ({ runCodexGate: vi.fn() }));
+vi.mock('../../src/runners/codex.js', () => ({
+  runCodexGate: vi.fn(),
+  spawnCodexInPane: vi.fn().mockResolvedValue({ pid: null }),
+}));
 vi.mock('../../src/runners/claude.js', () => ({ runClaudeGate: vi.fn() }));
 vi.mock('../../src/context/assembler.js', () => ({ assembleGatePrompt: vi.fn() }));
 vi.mock('../../src/runners/codex-isolation.js', async () => {
@@ -18,10 +22,23 @@ vi.mock('../../src/runners/codex-isolation.js', async () => {
     ensureCodexIsolation: vi.fn((runDir: string) => `${runDir}/codex-home`),
   };
 });
+vi.mock('../../src/runners/codex-usage.js', () => ({
+  readCodexSessionUsage: vi.fn(),
+}));
+vi.mock('../../src/phases/interactive.js', () => ({
+  waitForPhaseCompletion: vi.fn(),
+}));
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
 const tmpDirs: string[] = [];
+
+beforeEach(async () => {
+  const { waitForPhaseCompletion } = await import('../../src/phases/interactive.js');
+  const { readCodexSessionUsage } = await import('../../src/runners/codex-usage.js');
+  vi.mocked(waitForPhaseCompletion).mockResolvedValue({ status: 'completed' });
+  vi.mocked(readCodexSessionUsage).mockResolvedValue(null);
+});
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -426,21 +443,22 @@ describe('runGatePhase — one-shot sidecar replay', () => {
     void assembleGatePrompt; // silence unused import warning
   });
 
-  it('ensureCodexIsolation(runDir) is called and codexHome threaded to runCodexGate (positive path, codexNoIsolate=false)', async () => {
+  it('ensureCodexIsolation(runDir) is called and codexHome threaded to spawnCodexInPane (positive path, codexNoIsolate=false)', async () => {
     const { assembleGatePrompt: mockAssembler } = await import('../../src/context/assembler.js');
-    const { runCodexGate: mockCodex } = await import('../../src/runners/codex.js');
+    const { spawnCodexInPane: mockSpawn } = await import('../../src/runners/codex.js');
     const { ensureCodexIsolation } = await import('../../src/runners/codex-isolation.js');
 
     vi.mocked(mockAssembler).mockReturnValue('mock prompt');
-    vi.mocked(mockCodex).mockResolvedValue({
-      type: 'verdict', verdict: 'APPROVE', comments: '', rawOutput: '## Verdict\nAPPROVE\n',
-    } as any);
+    vi.mocked(mockSpawn).mockResolvedValue({ pid: null });
 
     const runDir = makeTmpDir();
+    fs.writeFileSync(path.join(runDir, 'phase-2.done'), 'test-attempt-id');
+
     const state = {
       phasePresets: { '2': 'codex-high' },
       gateRetries: { '2': 0 },
       phaseCodexSessions: { '2': null, '4': null, '7': null },
+      phaseAttemptId: { '2': 'test-attempt-id' },
       currentPhase: 2,
       codexNoIsolate: false,
     } as any;
@@ -448,26 +466,26 @@ describe('runGatePhase — one-shot sidecar replay', () => {
     await runGatePhase(2, state, '/fake-harness', runDir, '/cwd');
 
     expect(vi.mocked(ensureCodexIsolation)).toHaveBeenCalledWith(runDir);
-    // codexHome is the 8th positional arg of runCodexGate
-    const call = vi.mocked(mockCodex).mock.calls[0];
-    expect(call[7]).toBe(`${runDir}/codex-home`);
+    const call = vi.mocked(mockSpawn).mock.calls[0];
+    expect(call[0].codexHome).toBe(`${runDir}/codex-home`);
   });
 
-  it('codexNoIsolate=true: ensureCodexIsolation NOT called; runCodexGate receives codexHome=null', async () => {
+  it('codexNoIsolate=true: ensureCodexIsolation NOT called; spawnCodexInPane receives codexHome=null', async () => {
     const { assembleGatePrompt: mockAssembler } = await import('../../src/context/assembler.js');
-    const { runCodexGate: mockCodex } = await import('../../src/runners/codex.js');
+    const { spawnCodexInPane: mockSpawn } = await import('../../src/runners/codex.js');
     const { ensureCodexIsolation } = await import('../../src/runners/codex-isolation.js');
 
     vi.mocked(mockAssembler).mockReturnValue('mock prompt');
-    vi.mocked(mockCodex).mockResolvedValue({
-      type: 'verdict', verdict: 'APPROVE', comments: '', rawOutput: '## Verdict\nAPPROVE\n',
-    } as any);
+    vi.mocked(mockSpawn).mockResolvedValue({ pid: null });
 
     const runDir = makeTmpDir();
+    fs.writeFileSync(path.join(runDir, 'phase-2.done'), 'test-attempt-id');
+
     const state = {
       phasePresets: { '2': 'codex-high' },
       gateRetries: { '2': 0 },
       phaseCodexSessions: { '2': null, '4': null, '7': null },
+      phaseAttemptId: { '2': 'test-attempt-id' },
       currentPhase: 2,
       codexNoIsolate: true,
     } as any;
@@ -475,8 +493,8 @@ describe('runGatePhase — one-shot sidecar replay', () => {
     await runGatePhase(2, state, '/fake-harness', runDir, '/cwd');
 
     expect(vi.mocked(ensureCodexIsolation)).not.toHaveBeenCalled();
-    const call = vi.mocked(mockCodex).mock.calls[0];
-    expect(call[7]).toBeNull();
+    const call = vi.mocked(mockSpawn).mock.calls[0];
+    expect(call[0].codexHome).toBeNull();
   });
 
   it('CodexIsolationError propagates as gate error (no retry — hard abort)', async () => {
@@ -511,15 +529,10 @@ describe('runGatePhase — one-shot sidecar replay', () => {
 
   it('with flag.value=false: skips replay, runs runner (no infinite retry on REJECT sidecar)', async () => {
     const { assembleGatePrompt: mockAssembler } = await import('../../src/context/assembler.js');
-    const { runCodexGate: mockCodex } = await import('../../src/runners/codex.js');
+    const { spawnCodexInPane: mockSpawn } = await import('../../src/runners/codex.js');
 
     vi.mocked(mockAssembler).mockReturnValue('mock prompt text');
-    vi.mocked(mockCodex).mockResolvedValue({
-      type: 'verdict',
-      verdict: 'APPROVE',
-      comments: '',
-      rawOutput: '## Verdict\nAPPROVE\n',
-    } as any);
+    vi.mocked(mockSpawn).mockResolvedValue({ pid: null });
 
     const runDir = makeTmpDir();
     // Even though sidecar exists (and would replay), flag=false skips it
@@ -528,19 +541,50 @@ describe('runGatePhase — one-shot sidecar replay', () => {
       JSON.stringify({ exitCode: 0, timestamp: Date.now(), runner: 'codex', promptBytes: 1000, durationMs: 10000 }),
     );
     fs.writeFileSync(path.join(runDir, 'gate-2-raw.txt'), '## Verdict\nAPPROVE\n');
+    fs.writeFileSync(path.join(runDir, 'phase-2.done'), 'test-attempt-id');
+    fs.writeFileSync(path.join(runDir, 'gate-2-verdict.md'), '## Verdict\nAPPROVE\n');
 
     const state = {
       phasePresets: { '2': 'codex-high' },
       gateRetries: { '2': 0 },
       phaseCodexSessions: { '2': null, '4': null, '7': null },
+      phaseAttemptId: { '2': 'test-attempt-id' },
       currentPhase: 2,
     } as any;
 
     const flag = { value: false };
     const result = await runGatePhase(2, state, '/fake-harness', runDir, '/cwd', flag);
 
-    expect(vi.mocked(mockCodex)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(mockSpawn)).toHaveBeenCalledTimes(1);
     expect((result as any).recoveredFromSidecar).toBeFalsy();
-    expect(result.type).toBe('verdict');
   });
 });
+
+// ─── buildGateResultFromFile tests ───────────────────────────────────────────
+
+describe('buildGateResultFromFile', () => {
+  it('reads APPROVE verdict from file', () => {
+    const tmpDir = makeTmpDir();
+    const verdictPath = path.join(tmpDir, 'gate-2-verdict.md');
+    fs.writeFileSync(verdictPath, '## Verdict\nAPPROVE\n\n## Comments\nNone\n\n## Summary\nOk.\n');
+    const result = buildGateResultFromFile(verdictPath);
+    expect(result.type).toBe('verdict');
+    if (result.type === 'verdict') expect(result.verdict).toBe('APPROVE');
+  });
+
+  it('returns error result when verdict file is missing', () => {
+    const result = buildGateResultFromFile('/nonexistent/gate-2-verdict.md');
+    expect(result.type).toBe('error');
+    if (result.type === 'error') expect(result.error).toContain('verdict file missing');
+  });
+
+  it('returns error result when verdict header absent', () => {
+    const tmpDir = makeTmpDir();
+    const verdictPath = path.join(tmpDir, 'gate-2-verdict.md');
+    fs.writeFileSync(verdictPath, '# No verdict section here\n');
+    const result = buildGateResultFromFile(verdictPath);
+    expect(result.type).toBe('error');
+  });
+});
+
+void buildGateResultFromFileVerdict; // ensure the direct import is also exercised

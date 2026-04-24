@@ -124,11 +124,14 @@ export function checkSentinelFreshness(
  * cleanliness is no longer enforced — see 2026-04-19 spec.
  */
 export function validatePhaseArtifacts(
-  phase: InteractivePhase,
+  phase: number,
   state: HarnessState,
   cwd: string,
   runDir: string,
 ): boolean {
+  if (phase === 2 || phase === 4 || phase === 7) {
+    return true; // gate completion is sentinel-only; caller verifies verdict file separately
+  }
   if (phase === 1 || phase === 3) {
     const artifactKeys = getPhaseArtifactFiles(state.flow, phase);
     if (artifactKeys.length === 0) return false;
@@ -300,11 +303,11 @@ export async function runInteractivePhase(
  * Uses chokidar for filesystem watching plus polling for PID liveness.
  * Also responds to interrupt flags written by SIGUSR1 (skip/jump control).
  */
-async function waitForPhaseCompletion(
+export async function waitForPhaseCompletion(
   sentinelPath: string,
   attemptId: string,
   claudePid: number | null,
-  phase: InteractivePhase,
+  phase: number,
   state: HarnessState,
   cwd: string,
   runDir: string

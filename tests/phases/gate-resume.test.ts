@@ -5,7 +5,10 @@ import os from 'os';
 import type { HarnessState, GatePhaseResult } from '../../src/types.js';
 import { runGatePhase } from '../../src/phases/gate.js';
 
-vi.mock('../../src/runners/codex.js', () => ({ runCodexGate: vi.fn() }));
+vi.mock('../../src/runners/codex.js', () => ({
+  runCodexGate: vi.fn(),
+  spawnCodexInPane: vi.fn().mockResolvedValue({ pid: null }),
+}));
 vi.mock('../../src/runners/claude.js', () => ({ runClaudeGate: vi.fn() }));
 vi.mock('../../src/context/assembler.js', async (importOriginal) => {
   const actual = await importOriginal<any>();
@@ -16,6 +19,12 @@ vi.mock('../../src/context/assembler.js', async (importOriginal) => {
     assembleGateResumePrompt: vi.fn(() => 'RESUME_PROMPT'),
   };
 });
+vi.mock('../../src/runners/codex-usage.js', () => ({
+  readCodexSessionUsage: vi.fn(),
+}));
+vi.mock('../../src/phases/interactive.js', () => ({
+  waitForPhaseCompletion: vi.fn(),
+}));
 
 import { runCodexGate } from '../../src/runners/codex.js';
 import { runClaudeGate } from '../../src/runners/claude.js';
@@ -66,8 +75,12 @@ function mockVerdict(overrides: Partial<GatePhaseResult> = {}): GatePhaseResult 
 }
 
 let runDir: string;
-beforeEach(() => {
+beforeEach(async () => {
   runDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gate-resume-'));
+  const { waitForPhaseCompletion } = await import('../../src/phases/interactive.js');
+  const { readCodexSessionUsage } = await import('../../src/runners/codex-usage.js');
+  vi.mocked(waitForPhaseCompletion).mockResolvedValue({ status: 'completed' });
+  vi.mocked(readCodexSessionUsage).mockResolvedValue(null);
 });
 afterEach(() => { vi.clearAllMocks(); });
 
