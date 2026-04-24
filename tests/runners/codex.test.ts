@@ -329,7 +329,7 @@ function makeMinimalState(): HarnessState {
 }
 
 describe('spawnCodexInPane — fresh', () => {
-  it('sends fresh codex command to pane and returns pid', async () => {
+  it('sends fresh `codex exec` command to pane and returns pid', async () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-pane-'));
     const state = makeMinimalState();
     const result = await spawnCodexInPane({
@@ -345,18 +345,21 @@ describe('spawnCodexInPane — fresh', () => {
     });
     expect(result.pid).toBe(12345);
     const sendCalls = vi.mocked(sendKeysToPane).mock.calls;
-    // Last sendKeysToPane call should be the wrappedCmd
     const cmds = sendCalls.map(c => c[2]);
-    const wrappedCmd = cmds.find(c => c.includes('codex') && c.includes('--full-auto'));
+    const wrappedCmd = cmds.find(c => /\bcodex\s+exec\b/.test(c));
     expect(wrappedCmd).toBeDefined();
-    expect(wrappedCmd).not.toMatch(/\bcodex\s+exec\b/); // must NOT use legacy 'codex exec'
-    expect(wrappedCmd).toContain('--full-auto');
+    // codex-cli 0.124.0: top-level `codex` refuses stdin redirect and removed
+    // --skip-git-repo-check; we must use `codex exec` for pane injection now.
+    expect(wrappedCmd).toMatch(/\bcodex\s+exec\b/);
+    expect(wrappedCmd).not.toMatch(/\s-s\s+workspace-write\b/);
+    expect(wrappedCmd).not.toMatch(/\s-a\s+never\b/);
+    expect(wrappedCmd).toMatch(/- < ".*prompt\.md"/);
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 });
 
 describe('spawnCodexInPane — resume', () => {
-  it('sends codex resume command with sessionId', async () => {
+  it('sends `codex exec resume <sessionId>` command', async () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-pane-'));
     const state = makeMinimalState();
     await spawnCodexInPane({
@@ -375,7 +378,11 @@ describe('spawnCodexInPane — resume', () => {
     const cmds = sendCalls.map(c => c[2]);
     const wrappedCmd = cmds.find(c => c.includes('resume'));
     expect(wrappedCmd).toBeDefined();
-    expect(wrappedCmd).toContain('sess-abc-123');
+    expect(wrappedCmd).toMatch(/\bcodex\s+exec\s+resume\s+sess-abc-123\b/);
+    // codex exec resume does NOT accept -s / -a / --full-auto.
+    expect(wrappedCmd).not.toMatch(/\s-s\s+workspace-write\b/);
+    expect(wrappedCmd).not.toMatch(/\s-a\s+never\b/);
+    expect(wrappedCmd).not.toMatch(/--full-auto/);
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 });
