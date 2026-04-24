@@ -306,6 +306,27 @@ describe('migrateState', () => {
     expect(migrated.phaseReopenFlags['1']).toBe(true);
     expect(migrated.phaseReopenFlags['3']).toBe(false);
   });
+
+  it('migrateState sets migrationVersion=2 when field absent', () => {
+    const raw = JSON.parse(JSON.stringify(makeState()));
+    delete raw.migrationVersion;
+    const migrated = migrateState(raw);
+    expect(migrated.migrationVersion).toBe(2);
+  });
+
+  it('migrateState upgrades migrationVersion from 1 to 2', () => {
+    const raw = JSON.parse(JSON.stringify(makeState()));
+    raw.migrationVersion = 1;
+    const migrated = migrateState(raw);
+    expect(migrated.migrationVersion).toBe(2);
+  });
+
+  it('migrateState preserves migrationVersion=2 when already current', () => {
+    const raw = JSON.parse(JSON.stringify(makeState()));
+    raw.migrationVersion = 2;
+    const migrated = migrateState(raw);
+    expect(migrated.migrationVersion).toBe(2);
+  });
 });
 
 describe('flow + carryoverFeedback (light-flow spec)', () => {

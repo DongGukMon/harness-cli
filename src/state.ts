@@ -168,6 +168,10 @@ export function migrateState(raw: any, cwd?: string): HarnessState {
       implHead: raw.implCommit ?? null,
     }];
   }
+  // migrationVersion: bump to 2 (codex pane-gate migration; state schema unchanged)
+  if (!raw.migrationVersion || raw.migrationVersion < 2) {
+    raw.migrationVersion = 2;
+  }
   return raw as HarnessState;
 }
 
