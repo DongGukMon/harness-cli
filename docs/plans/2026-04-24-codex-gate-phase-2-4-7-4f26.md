@@ -470,7 +470,7 @@ describe('assembleGateResumePrompt — Output Protocol block', () => {
   it('includes gate-N-verdict.md instruction on resume', () => {
     const state = makeLightState();
     state.phaseAttemptId['2'] = 'resume-uuid';
-    const result = assembleGateResumePrompt(2, state, '/tmp/cwd', 'reject', 'P1 feedback');
+    const result = assembleGateResumePrompt(2, state, '/tmp/cwd', 'reject', 'P1 feedback', '/tmp/runDir');
     const prompt = result as string;
     expect(prompt).toContain('gate-2-verdict.md');
     expect(prompt).toContain('phase-2.done');
@@ -574,14 +574,13 @@ export function assembleGateResumePrompt(
   cwd: string,
   lastOutcome: 'approve' | 'reject' | 'error',
   previousFeedback: string,
-  runDir: string = '',   // added: path to the run directory for Output Protocol
+  runDir: string,   // required: path to the run directory for Output Protocol
 ): string | { error: string }
 ```
 
 And append at the return site:
 ```typescript
-  const protocol = runDir ? buildGateOutputProtocol(phase, runDir, state.phaseAttemptId[String(phase)] ?? '') : '';
-  return prompt + protocol;
+  return prompt + buildGateOutputProtocol(phase, runDir, state.phaseAttemptId[String(phase)] ?? '');
 ```
 
 Update callers of `assembleGateResumePrompt` in `src/phases/gate.ts` to pass `runDir`.
@@ -834,6 +833,7 @@ git commit -m "feat(runners): add spawnCodexInPane for tmux workspace gate execu
 Add `buildGateResultFromFile` to `verdict.ts` and `runGatePhaseInteractive` to `gate.ts`. Route codex-runner gate execution through the new interactive path.
 
 **Files:**
+- Modify: `src/phases/interactive.ts` — export `waitForPhaseCompletion`; widen `phase` type; add gate-phase pass-through in `validatePhaseArtifacts`
 - Modify: `src/phases/verdict.ts`
 - Modify: `src/phases/gate.ts`
 - Test: `tests/phases/gate.test.ts`
@@ -889,6 +889,22 @@ pnpm vitest run tests/phases/gate.test.ts 2>&1 | head -40
 
 Expected: FAIL — `buildGateResultFromFile` not exported
 
+- [ ] **Step 2b: Prepare `src/phases/interactive.ts` — export `waitForPhaseCompletion` + gate-phase support**
+
+Three minimal changes required so gate phases (2/4/7) can call the existing sentinel wait path:
+
+```typescript
+// 1. Change: async function waitForPhaseCompletion → export async function waitForPhaseCompletion
+// 2. Widen parameter:  phase: InteractivePhase → phase: number  (in both waitForPhaseCompletion
+//    and validatePhaseArtifacts signatures)
+// 3. In validatePhaseArtifacts, add before the existing if-branches:
+if (phase === 2 || phase === 4 || phase === 7) {
+  return true; // gate completion is sentinel-only; caller verifies verdict file separately
+}
+```
+
+No other changes to `interactive.ts`.
+
 - [ ] **Step 3: Add `buildGateResultFromFile` to `src/phases/verdict.ts`**
 
 ```typescript
@@ -934,12 +950,12 @@ Add `import fs from 'fs'` at top of `verdict.ts` if not present.
 This function orchestrates: prompt assembly → pane injection → sentinel wait → verdict file read → session persistence. It replaces the subprocess path for codex runner.
 
 ```typescript
-// Add import at top:
+// Add imports at top:
+import os from 'os';
 import { spawnCodexInPane } from '../runners/codex.js';
 import { buildGateResultFromFile } from './verdict.js';
 import { readCodexSessionUsage } from '../runners/codex-usage.js';
-import chokidar from 'chokidar';
-import { isPidAlive } from '../process.js';
+import { waitForPhaseCompletion } from './interactive.js'; // reuses existing sentinel protocol (spec decision 4)
 import { ensureCodexIsolation, CodexIsolationError } from '../runners/codex-isolation.js';
 
 /**
@@ -1112,9 +1128,12 @@ export async function runGatePhaseInteractive(
     sessionId: resumeSessionId ?? undefined,
   });
 
-  // Step 8: Wait for sentinel (same mechanism as interactive phases)
+  // Step 8: Wait for sentinel using existing waitForPhaseCompletion (spec decision 4).
+  // interactive.ts must export waitForPhaseCompletion and accept phase: number so gate
+  // phases (2/4/7) can call it. validatePhaseArtifacts returns true for gate phases
+  // since verdict check is handled by buildGateResultFromFile after this call.
   const attemptId = state.phaseAttemptId[String(phase)] ?? '';
-  const sentinelResult = await _waitForGateSentinel(sentinelPath, attemptId, spawnResult.pid, phase, state);
+  const sentinelResult = await waitForPhaseCompletion(sentinelPath, attemptId, spawnResult.pid, phase, state, cwd, runDir);
 
   const durationMs = Date.now() - phaseStartTs;
 
@@ -1125,12 +1144,10 @@ export async function runGatePhaseInteractive(
 
   // Step 10: Read verdict file
   let gateResult: GatePhaseResult;
-  if (sentinelResult === 'timeout' || sentinelResult === 'interrupted') {
+  if (sentinelResult.status === 'failed') {
     gateResult = {
       type: 'error',
-      error: sentinelResult === 'timeout'
-        ? `Gate ${phase} timed out waiting for sentinel`
-        : `Gate ${phase} interrupted`,
+      error: `Gate ${phase} failed (timed out or interrupted)`,
       runner: 'codex',
       promptBytes,
       durationMs,
@@ -1151,12 +1168,16 @@ export async function runGatePhaseInteractive(
     };
   }
 
-  // Step 11: Collect codexTokens from JSONL
+  // Step 11: Collect codexTokens from JSONL.
+  // When --codex-no-isolate is active, codexHome is null. Resolve the real home via
+  // $CODEX_HOME env var or the Codex default (~/.codex) so JSONL files are findable
+  // regardless of isolation mode (N4/R4). The empty-string fallback would scan the wrong dir.
+  const effectiveCodexHome = codexHome ?? process.env.CODEX_HOME ?? path.join(os.homedir(), '.codex');
   let codexTokens: import('../types.js').ClaudeTokens | null | undefined;
   try {
     const usageResult = await readCodexSessionUsage({
       sessionId: resumeSessionId,
-      codexHome: codexHome ?? '',
+      codexHome: effectiveCodexHome,
       phaseStartTs,
     });
     if (usageResult !== null) {
@@ -1184,71 +1205,14 @@ export async function runGatePhaseInteractive(
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
 
-const GATE_SENTINEL_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
-
-async function _waitForGateSentinel(
-  sentinelPath: string,
-  attemptId: string,
-  pid: number | null,
-  phase: number,
-  state: HarnessState,
-): Promise<'done' | 'timeout' | 'interrupted'> {
-  return new Promise<'done' | 'timeout' | 'interrupted'>((resolve) => {
-    let settled = false;
-    let watcher: ReturnType<typeof chokidar.watch> | null = null;
-    let pidPoll: ReturnType<typeof setInterval> | null = null;
-    let timeout: ReturnType<typeof setTimeout> | null = null;
-    let interruptPoll: ReturnType<typeof setInterval> | null = null;
-
-    function settle(result: 'done' | 'timeout' | 'interrupted'): void {
-      if (settled) return;
-      settled = true;
-      if (watcher) { void watcher.close(); watcher = null; }
-      if (pidPoll) { clearInterval(pidPoll); pidPoll = null; }
-      if (timeout) { clearTimeout(timeout); timeout = null; }
-      if (interruptPoll) { clearInterval(interruptPoll); interruptPoll = null; }
-      resolve(result);
-    }
-
-    function checkSentinel(): void {
-      if (settled) return;
-      try {
-        const content = fs.readFileSync(sentinelPath, 'utf-8').trim();
-        if (content === attemptId) settle('done');
-      } catch { /* not yet written */ }
-    }
-
-    watcher = chokidar.watch(sentinelPath, { persistent: true, ignoreInitial: false, usePolling: true, interval: 200 });
-    watcher.on('add', checkSentinel);
-    watcher.on('change', checkSentinel);
-
-    if (pid !== null) {
-      pidPoll = setInterval(() => {
-        if (settled) return;
-        if (!isPidAlive(pid)) {
-          clearInterval(pidPoll!); pidPoll = null;
-          checkSentinel();
-          if (!settled) settle('interrupted');
-        }
-      }, 1000);
-    }
-
-    // Interrupt flag (SIGUSR1 jump/skip)
-    const runDir = path.dirname(sentinelPath);
-    const interruptFlagPath = path.join(runDir, `interrupted-${phase}.flag`);
-    interruptPoll = setInterval(() => {
-      if (settled) return;
-      if (fs.existsSync(interruptFlagPath)) {
-        try { fs.unlinkSync(interruptFlagPath); } catch { /* ignore */ }
-        settle('interrupted');
-      }
-    }, 500);
-
-    timeout = setTimeout(() => settle('timeout'), GATE_SENTINEL_TIMEOUT_MS);
-
-    if (fs.existsSync(sentinelPath)) checkSentinel();
-  });
-}
+// Note: sentinel wait is handled by waitForPhaseCompletion from interactive.ts.
+// Before calling it, interactive.ts must be updated:
+//   1. Export waitForPhaseCompletion (change private → export)
+//   2. Widen phase parameter from InteractivePhase to number in both
+//      waitForPhaseCompletion and validatePhaseArtifacts
+//   3. In validatePhaseArtifacts, add: if (phase === 2 || phase === 4 || phase === 7)
+//      return true; // gate completion is sentinel-only; verdict checked by caller
+// These are the only changes to interactive.ts required by this migration.
 
 function _persistCodexSession(
   state: HarnessState,
@@ -1583,6 +1547,32 @@ vi.mock('../../src/runners/codex.js', () => ({
 - [ ] **Step 3: Update `tests/integration/codex-session-resume.test.ts`**
 
 Replace `runCodexGate` mock with `spawnCodexInPane` + sentinel setup pattern.
+
+- [ ] **Step 3b: Add `codexNoIsolate: true` test (P1 regression — N4/R4)**
+
+Add to `tests/phases/gate-resume.test.ts` (or `tests/phases/gate.test.ts`):
+
+```typescript
+describe('runGatePhase — codexNoIsolate path', () => {
+  it('does not fail when codexNoIsolate=true and codexHome is null', async () => {
+    const state = makeState();
+    state.codexNoIsolate = true;
+    state.phaseAttemptId['2'] = 'attempt-isolate';
+
+    vi.mocked(spawnCodexInPane).mockImplementationOnce(async () => {
+      writeVerdictFile(runDir, 2, 'APPROVE', 'ok');
+      writeSentinel(runDir, 2, 'attempt-isolate');
+      return { pid: null };
+    });
+
+    const res = await runGatePhase(2, state, runDir, runDir, runDir);
+    // codexNoIsolate means codexHome=null in spawnCodexInPane;
+    // effectiveCodexHome fallback must not cause a crash or wrong dir scan
+    expect(res.type).toBe('verdict');
+    if (res.type === 'verdict') expect(res.verdict).toBe('APPROVE');
+  });
+});
+```
 
 - [ ] **Step 4: Run all affected tests**
 
