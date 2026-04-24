@@ -37,4 +37,11 @@ describe('Footer', () => {
     expect(frame).toContain('a1');
     expect(frame).not.toContain('attempt 1');
   });
+
+  it('renders tmuxSession attach hint when provided', () => {
+    const { lastFrame } = render(
+      <Footer summary={makeSummary({ tmuxSession: 'grove-abc123' })} columns={80} />
+    );
+    expect(lastFrame()).toContain('attach: tmux attach -t grove-abc123');
+  });
 });

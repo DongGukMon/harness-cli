@@ -9,6 +9,7 @@ export interface FooterStateSlice {
   currentPhase: number;
   gateRetries: Record<string, number>;
   phaseStatus: PhaseStatus;
+  tmuxSession?: string;
 }
 
 export interface FooterSummary {
@@ -19,6 +20,7 @@ export interface FooterSummary {
   claudeTokens: number;
   gateTokens: number;
   totalTokens: number;
+  tmuxSession?: string;
 }
 
 export function readEventsJsonl(path: string): LogEvent[] {
@@ -46,6 +48,7 @@ export function readStateSlice(stateJsonPath: string): FooterStateSlice | null {
       currentPhase?: unknown;
       gateRetries?: unknown;
       phases?: unknown;
+      tmuxSession?: unknown;
     };
 
     if (!isLivePhase(raw.currentPhase)) return null;
@@ -59,6 +62,7 @@ export function readStateSlice(stateJsonPath: string): FooterStateSlice | null {
       currentPhase: raw.currentPhase,
       gateRetries: raw.gateRetries,
       phaseStatus,
+      ...(typeof raw.tmuxSession === 'string' && raw.tmuxSession.trim().length > 0 ? { tmuxSession: raw.tmuxSession } : {}),
     };
   } catch {
     return null;
@@ -88,6 +92,7 @@ export function aggregateFooter(
     claudeTokens,
     gateTokens,
     totalTokens: claudeTokens + gateTokens,
+    tmuxSession: stateSlice.tmuxSession,
   };
 }
 
