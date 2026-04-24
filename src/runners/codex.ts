@@ -454,22 +454,29 @@ export async function spawnCodexInPane(input: SpawnCodexInPaneInput): Promise<Co
   const skipGitFlag = !isInGitRepo(cwd) ? '--skip-git-repo-check ' : '';
   const codexHomeEnv = codexHome ? `CODEX_HOME="${codexHome}" ` : '';
 
+  // codex-cli 0.124.0: top-level `codex` refuses stdin redirect ("stdin is not
+  // a terminal") and drops `--skip-git-repo-check`. Both flags/flow were moved
+  // under the `exec` subcommand. Mirror runCodexExecRaw's argument structure so
+  // the pane path stays aligned with the headless path on a single source of
+  // truth. The trade-off vs PR #74 is loss of TUI chat visualization in the
+  // workspace pane — exec streams plain progress output instead. Still visible
+  // in the pane, just not interactive.
   let codexCmd: string;
   if (mode === 'resume' && sessionId) {
     codexCmd =
-      `${codexBin} resume ${sessionId} ` +
+      `${codexBin} exec resume ${sessionId} ` +
       `${skipGitFlag}` +
       `--model ${preset.model} ` +
       `-c model_reasoning_effort="${preset.effort}" ` +
-      `-s workspace-write -a never --full-auto ` +
+      `- ` +
       `< "${promptFile}"`;
   } else {
     codexCmd =
-      `${codexBin} ` +
+      `${codexBin} exec ` +
       `${skipGitFlag}` +
       `--model ${preset.model} ` +
       `-c model_reasoning_effort="${preset.effort}" ` +
-      `-s workspace-write -a never --full-auto ` +
+      `- ` +
       `< "${promptFile}"`;
   }
 
