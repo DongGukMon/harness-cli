@@ -30,7 +30,7 @@ Current built-in presets:
 - `codex-high`, `codex-medium`
 
 Default phase assignments:
-- Phase 1 → `opus-1m-high`
+- Phase 1 → `opus-1m-xhigh`
 - Phase 2 → `codex-high`
 - Phase 3 → `sonnet-high`
 - Phase 4 → `codex-high`

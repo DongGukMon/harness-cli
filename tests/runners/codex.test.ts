@@ -48,7 +48,7 @@ function makeMockChild(opts: {
 const preset: ModelPreset = {
   id: 'codex-high',
   runner: 'codex',
-  model: 'gpt-5.4',
+  model: 'gpt-5.5',
   effort: 'high',
   label: 'codex-high',
 };

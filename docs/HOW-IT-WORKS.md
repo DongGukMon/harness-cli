@@ -33,21 +33,21 @@ Built-in presets come from `src/config.ts`:
 | id | runner | model | effort |
 |---|---|---|---|
 | `opus-1m-max` | claude | `claude-opus-4-7[1m]` | `max` |
-| `opus-1m-xhigh` | claude | `claude-opus-4-7[1m]` | `xHigh` |
+| `opus-1m-xhigh` | claude | `claude-opus-4-7[1m]` | `xhigh` |
 | `opus-1m-high` | claude | `claude-opus-4-7[1m]` | `high` |
 | `sonnet-1m-max` | claude | `claude-sonnet-4-6[1m]` | `max` |
 | `sonnet-1m-high` | claude | `claude-sonnet-4-6[1m]` | `high` |
 | `opus-max` | claude | `claude-opus-4-7` | `max` |
-| `opus-xhigh` | claude | `claude-opus-4-7` | `xHigh` |
+| `opus-xhigh` | claude | `claude-opus-4-7` | `xhigh` |
 | `opus-high` | claude | `claude-opus-4-7` | `high` |
 | `sonnet-max` | claude | `claude-sonnet-4-6` | `max` |
 | `sonnet-high` | claude | `claude-sonnet-4-6` | `high` |
-| `codex-high` | codex | `gpt-5.4` | `high` |
-| `codex-medium` | codex | `gpt-5.4` | `medium` |
+| `codex-high` | codex | `gpt-5.5` | `high` |
+| `codex-medium` | codex | `gpt-5.5` | `medium` |
 
 Default assignments:
-- full flow: P1 `opus-1m-high`, P2 `codex-high`, P3 `sonnet-high`, P4 `codex-high`, P5 `sonnet-high`, P7 `codex-high`
-- light flow: P1 `opus-1m-high`, P2 `codex-high`, P5 `sonnet-high`, P7 `codex-high`
+- full flow: P1 `opus-1m-xhigh`, P2 `codex-high`, P3 `sonnet-high`, P4 `codex-high`, P5 `sonnet-high`, P7 `codex-high`
+- light flow: P1 `opus-1m-xhigh`, P2 `codex-high`, P5 `sonnet-high`, P7 `codex-high`
 
 Users can change every non-verify phase preset during `phase-harness start` and `phase-harness resume`.
 Selections persist in `state.phasePresets`.
@@ -126,7 +126,7 @@ When the outer cwd is not a git repo, `--skip-git-repo-check` is automatically a
 
 | Phase | Default preset | Runner type | Main outputs | On reject/fail |
 |---|---|---|---|---|
-| P1 Spec / Design+Plan | `opus-1m-high` | interactive | spec/design doc + decisions + checklist (light only) | Gate 2 reject reopens P1; light-flow P7 design/mixed reject also reopens P1 |
+| P1 Spec / Design+Plan | `opus-1m-xhigh` | interactive | spec/design doc + decisions + checklist (light only) | Gate 2 reject reopens P1; light-flow P7 design/mixed reject also reopens P1 |
 | P2 Spec Gate | `codex-high` | gate | verdict + optional feedback sidecars | reopen P1 |
 | P3 Plan | `sonnet-high` | interactive | plan + checklist | Gate 4 reject reopens P3 |
 | P4 Plan Gate | `codex-high` | gate | verdict + optional feedback sidecars | reopen P3 |

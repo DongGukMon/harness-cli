@@ -107,7 +107,7 @@ describe('light-flow end-to-end (P1 → P5 → P6 → P7)', () => {
       durationMs: 1, tokensTotal: 0, promptBytes: 0,
       codexSessionId: 's-gate2', recoveredFromSidecar: false,
       resumedFrom: null, resumeFallback: false,
-      sourcePreset: { model: 'gpt-5.4', effort: 'high' },
+      sourcePreset: { model: 'gpt-5.5', effort: 'high' },
     } as any);
 
     // Phase 5
@@ -124,7 +124,7 @@ describe('light-flow end-to-end (P1 → P5 → P6 → P7)', () => {
       durationMs: 1, tokensTotal: 0, promptBytes: 0,
       codexSessionId: 's-gate7', recoveredFromSidecar: false,
       resumedFrom: null, resumeFallback: false,
-      sourcePreset: { model: 'gpt-5.4', effort: 'high' },
+      sourcePreset: { model: 'gpt-5.5', effort: 'high' },
     } as any);
 
     const logger = new NoopLogger();
@@ -158,7 +158,7 @@ describe('light-flow end-to-end (P1 → P5 → P6 → P7)', () => {
       durationMs: 1, tokensTotal: 0, promptBytes: 0,
       codexSessionId: 's-gate2', recoveredFromSidecar: false,
       resumedFrom: null, resumeFallback: false,
-      sourcePreset: { model: 'gpt-5.4', effort: 'high' },
+      sourcePreset: { model: 'gpt-5.5', effort: 'high' },
     } as any);
 
     // Phase 5 fails immediately so the loop stops there
@@ -192,7 +192,7 @@ describe('light-flow end-to-end (P1 → P5 → P6 → P7)', () => {
       durationMs: 1, tokensTotal: 0, promptBytes: 0,
       codexSessionId: 's-gate2', recoveredFromSidecar: false,
       resumedFrom: null, resumeFallback: false,
-      sourcePreset: { model: 'gpt-5.4', effort: 'high' },
+      sourcePreset: { model: 'gpt-5.5', effort: 'high' },
     } as any);
 
     const logger = new NoopLogger();
@@ -224,7 +224,7 @@ describe('light-flow end-to-end (P1 → P5 → P6 → P7)', () => {
       durationMs: 1, tokensTotal: 0, promptBytes: 0,
       codexSessionId: 's', recoveredFromSidecar: false,
       resumedFrom: null, resumeFallback: false,
-      sourcePreset: { model: 'gpt-5.4', effort: 'high' },
+      sourcePreset: { model: 'gpt-5.5', effort: 'high' },
     } as any);
 
     const logger = new NoopLogger();

@@ -30,7 +30,7 @@
 - `codex-high`, `codex-medium`
 
 기본 phase 매핑:
-- Phase 1 → `opus-1m-high`
+- Phase 1 → `opus-1m-xhigh`
 - Phase 2 → `codex-high`
 - Phase 3 → `sonnet-high`
 - Phase 4 → `codex-high`

@@ -42,7 +42,7 @@ describe('GateVerdict', () => {
   it('shows runner info when phaseCodexSessions has runner', () => {
     const state = makeState();
     state.phases['4'] = 'failed';
-    state.phaseCodexSessions['4'] = { sessionId: 'sess-1', runner: 'codex', model: 'gpt-5.4', effort: 'high', lastOutcome: 'reject' };
+    state.phaseCodexSessions['4'] = { sessionId: 'sess-1', runner: 'codex', model: 'gpt-5.5', effort: 'high', lastOutcome: 'reject' };
     const { lastFrame } = render(<GateVerdict state={state} />);
     expect(lastFrame()).toContain('codex');
   });
@@ -50,7 +50,7 @@ describe('GateVerdict', () => {
   it('shows runner info for approved gate', () => {
     const state = makeState();
     state.phases['2'] = 'completed';
-    state.phaseCodexSessions['2'] = { sessionId: 'sess-2', runner: 'codex', model: 'gpt-5.4', effort: 'high', lastOutcome: 'approve' };
+    state.phaseCodexSessions['2'] = { sessionId: 'sess-2', runner: 'codex', model: 'gpt-5.5', effort: 'high', lastOutcome: 'approve' };
     const { lastFrame } = render(<GateVerdict state={state} />);
     expect(lastFrame()).toContain('codex');
     expect(lastFrame()).toContain('APPROVED');

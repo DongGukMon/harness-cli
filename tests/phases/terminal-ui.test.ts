@@ -184,7 +184,7 @@ describe('performJump (inner-side)', () => {
     const { runPhaseLoop } = await import('../../src/phases/runner.js');
     vi.mocked(runPhaseLoop).mockClear();
     const state = makeState({ currentPhase: 5, phases: { '1': 'completed', '2': 'completed', '3': 'completed', '4': 'completed', '5': 'failed', '6': 'pending', '7': 'pending' } });
-    state.phaseCodexSessions['7'] = { sessionId: 's7', runner: 'codex', model: 'gpt-5.4', effort: 'high', lastOutcome: 'reject' };
+    state.phaseCodexSessions['7'] = { sessionId: 's7', runner: 'codex', model: 'gpt-5.5', effort: 'high', lastOutcome: 'reject' };
     const runDir = makeTmpDir();
     const input = new MockInput() as unknown as InputManager;
     const logger = makeLogger();

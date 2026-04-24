@@ -58,7 +58,7 @@ function mockVerdict(overrides: Partial<GatePhaseResult> = {}): GatePhaseResult 
     rawOutput: 'session id: aa-11\n## Verdict\nREJECT\n',
     runner: 'codex',
     codexSessionId: 'aa-11',
-    sourcePreset: { model: 'gpt-5.4', effort: 'high' },
+    sourcePreset: { model: 'gpt-5.5', effort: 'high' },
     resumedFrom: null,
     resumeFallback: false,
     ...overrides,
@@ -81,7 +81,7 @@ describe('runGatePhase — first call (fresh)', () => {
     expect(res.type).toBe('verdict');
     expect(vi.mocked(runCodexGate).mock.calls[0][5]).toBeNull();
     expect(state.phaseCodexSessions['2']).toEqual({
-      sessionId: 'aa-11', runner: 'codex', model: 'gpt-5.4', effort: 'high', lastOutcome: 'reject',
+      sessionId: 'aa-11', runner: 'codex', model: 'gpt-5.5', effort: 'high', lastOutcome: 'reject',
     });
   });
 });
@@ -90,7 +90,7 @@ describe('runGatePhase — second call (resume)', () => {
   it('passes stored sessionId on compatible preset', async () => {
     const state = makeState();
     state.phaseCodexSessions['2'] = {
-      sessionId: 'aa-11', runner: 'codex', model: 'gpt-5.4', effort: 'high', lastOutcome: 'reject',
+      sessionId: 'aa-11', runner: 'codex', model: 'gpt-5.5', effort: 'high', lastOutcome: 'reject',
     };
     vi.mocked(runCodexGate).mockResolvedValueOnce(
       mockVerdict({ verdict: 'APPROVE', resumedFrom: 'aa-11', codexSessionId: 'aa-11' }),
@@ -116,7 +116,7 @@ describe('runGatePhase — resumeFallback clears stale id when new id absent', (
   it('clears stale id when fallback fires with no new id', async () => {
     const state = makeState();
     state.phaseCodexSessions['2'] = {
-      sessionId: 'stale-aa', runner: 'codex', model: 'gpt-5.4', effort: 'high', lastOutcome: 'reject',
+      sessionId: 'stale-aa', runner: 'codex', model: 'gpt-5.5', effort: 'high', lastOutcome: 'reject',
     };
     vi.mocked(runCodexGate).mockResolvedValueOnce({
       type: 'error',
@@ -137,7 +137,7 @@ describe('runGatePhase — resumeFallback clears stale id when new id absent', (
   it('§4.4 does not re-save stale sessionId on resumeFallback=true (order: clear → conditional save)', async () => {
     const state = makeState();
     state.phaseCodexSessions['2'] = {
-      sessionId: 'dead-sid', runner: 'codex', model: 'gpt-5.4', effort: 'high', lastOutcome: 'reject',
+      sessionId: 'dead-sid', runner: 'codex', model: 'gpt-5.5', effort: 'high', lastOutcome: 'reject',
     };
     // runCodexGate returns an error where resumeFallback=true but codexSessionId
     // is the DEAD id (worst-case metadata carry-forward).
@@ -157,7 +157,7 @@ describe('runGatePhase — resumeFallback clears stale id when new id absent', (
   it('§4.4 accepts a NEW non-empty id on resumeFallback=true, overwriting the dead lineage', async () => {
     const state = makeState();
     state.phaseCodexSessions['2'] = {
-      sessionId: 'dead-sid', runner: 'codex', model: 'gpt-5.4', effort: 'high', lastOutcome: 'reject',
+      sessionId: 'dead-sid', runner: 'codex', model: 'gpt-5.5', effort: 'high', lastOutcome: 'reject',
     };
     vi.mocked(runCodexGate).mockResolvedValueOnce({
       type: 'verdict', verdict: 'APPROVE', comments: '', rawOutput: '',
@@ -245,7 +245,7 @@ describe('runGatePhase — sidecar replay compatibility gate (§4.7)', () => {
       verdict: 'REJECT',
       runner: 'codex',
       codexSessionId: 'side-aa',
-      sourcePreset: { model: 'gpt-5.4', effort: 'high' },
+      sourcePreset: { model: 'gpt-5.5', effort: 'high' },
     });
     const flag = { value: true };
     const res = await runGatePhase(2, state, runDir, runDir, runDir, flag);
@@ -255,7 +255,7 @@ describe('runGatePhase — sidecar replay compatibility gate (§4.7)', () => {
     expect((res as any).recoveredFromSidecar).toBe(true);
     // Hydration 확인
     expect(state.phaseCodexSessions['2']).toEqual({
-      sessionId: 'side-aa', runner: 'codex', model: 'gpt-5.4', effort: 'high', lastOutcome: 'reject',
+      sessionId: 'side-aa', runner: 'codex', model: 'gpt-5.5', effort: 'high', lastOutcome: 'reject',
     });
   });
 

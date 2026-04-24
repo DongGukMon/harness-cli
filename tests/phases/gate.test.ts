@@ -405,7 +405,7 @@ describe('runGatePhase — one-shot sidecar replay', () => {
         runner: 'codex',
         promptBytes: 1000,
         durationMs: 10000,
-        sourcePreset: { model: 'gpt-5.4', effort: 'high' },
+        sourcePreset: { model: 'gpt-5.5', effort: 'high' },
       }),
     );
     fs.writeFileSync(path.join(runDir, 'gate-2-raw.txt'), '## Verdict\nAPPROVE\n');
