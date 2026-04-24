@@ -105,6 +105,9 @@ describe('(c) assembler diff concat for N=2 repos', () => {
     state.phases['6'] = 'completed';
     state.implCommit = baseA;
     state.evalCommit = baseA;
+    state.phaseAttemptId['2'] = 'test-attempt-2';
+    state.phaseAttemptId['4'] = 'test-attempt-4';
+    state.phaseAttemptId['7'] = 'test-attempt-7';
 
     const prompt = assembleGatePrompt(7, state, '', outer);
     expect(typeof prompt).toBe('string');
@@ -131,6 +134,9 @@ describe('(c) assembler diff concat for N=2 repos', () => {
     state.phases['6'] = 'completed';
     state.implCommit = base;
     state.evalCommit = base;
+    state.phaseAttemptId['2'] = 'test-attempt-2';
+    state.phaseAttemptId['4'] = 'test-attempt-4';
+    state.phaseAttemptId['7'] = 'test-attempt-7';
 
     const prompt = assembleGatePrompt(7, state, '', cwd);
     if (typeof prompt === 'string') {

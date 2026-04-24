@@ -27,7 +27,7 @@ function stubState(tmp: string): HarnessState {
     phasePresets: { '2': 'codex-high', '4': 'codex-high', '7': 'codex-high' },
     phases: { '1': 'pending', '2': 'pending', '3': 'pending', '4': 'pending', '5': 'pending', '6': 'pending', '7': 'pending' },
     phaseCodexSessions: { '2': null, '4': null, '7': null },
-    phaseAttemptId: {},
+    phaseAttemptId: { '2': 'test-attempt-2', '4': 'test-attempt-4', '7': 'test-attempt-7' },
     phaseOpenedAt: {},
     phaseReopenFlags: {},
     gateRetries: { '2': 0, '4': 0, '7': 0 },

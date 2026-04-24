@@ -6,7 +6,7 @@ import { assembleGatePrompt, assembleGateResumePrompt } from '../context/assembl
 import { getPresetById } from '../config.js';
 import type { ModelPreset } from '../config.js';
 import { runClaudeGate } from '../runners/claude.js';
-import { runCodexGate, spawnCodexInPane } from '../runners/codex.js';
+import { spawnCodexInPane } from '../runners/codex.js';
 import { ensureCodexIsolation, CodexIsolationError } from '../runners/codex-isolation.js';
 import { writeState } from '../state.js';
 import { readCodexSessionUsage } from '../runners/codex-usage.js';

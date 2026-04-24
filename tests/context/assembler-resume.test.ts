@@ -36,7 +36,7 @@ function makeState(overrides: Partial<HarnessState> = {}): HarnessState {
     pausedAtHead: null,
     pendingAction: null,
     phaseOpenedAt: { '1': null, '3': null, '5': null },
-    phaseAttemptId: { '1': null, '3': null, '5': null },
+    phaseAttemptId: { '1': null, '3': null, '5': null, '2': 'test-attempt-2', '4': 'test-attempt-4', '7': 'test-attempt-7' },
     phasePresets: { '1': 'opus-xhigh', '2': 'codex-high', '3': 'sonnet-high', '4': 'codex-high', '5': 'sonnet-high', '7': 'codex-high' },
     phaseReopenFlags: { '1': false, '3': false, '5': false },
     phaseCodexSessions: { '2': null, '4': null, '7': null },
