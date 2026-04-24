@@ -10,11 +10,16 @@ function makeState(overrides: Partial<HarnessState> = {}): HarnessState {
 }
 
 describe('ActionMenu', () => {
-  it('shows hint form at non-terminal callsite', () => {
-    const { lastFrame } = render(<ActionMenu state={makeState()} callsite="loop-top" />);
-    expect(lastFrame()).toContain('[R]');
-    expect(lastFrame()).toContain('[J]');
-    expect(lastFrame()).toContain('[Q]');
+  it('does not advertise R/J/Q while the phase loop is running', () => {
+    const state = makeState({ currentPhase: 1 });
+    state.phases['1'] = 'in_progress';
+
+    const { lastFrame } = render(<ActionMenu state={state} callsite="loop-top" />);
+
+    expect(lastFrame()).toContain('Running');
+    expect(lastFrame()).not.toContain('[R]');
+    expect(lastFrame()).not.toContain('[J]');
+    expect(lastFrame()).not.toContain('[Q]');
   });
 
   it('shows prominent form at terminal-failed callsite', () => {
@@ -24,16 +29,18 @@ describe('ActionMenu', () => {
     expect(lastFrame()).toContain('[Q]');
   });
 
-  it('shows hint form (not prominent) at terminal-complete callsite', () => {
+  it('shows Ctrl+C guidance at terminal-complete callsite', () => {
     const { lastFrame } = render(<ActionMenu state={makeState()} callsite="terminal-complete" />);
-    expect(lastFrame()).toContain('[R]');
+    expect(lastFrame()).toContain('Ctrl+C');
+    expect(lastFrame()).not.toContain('[R]');
   });
 
-  it('shows hint form when a phase has failed but callsite is not terminal-failed', () => {
-    const state = makeState();
+  it('does not show R/J/Q when a phase has failed but the terminal key handler is not active yet', () => {
+    const state = makeState({ currentPhase: 3 });
     state.phases['3'] = 'failed';
     const { lastFrame } = render(<ActionMenu state={state} callsite="gate-approve" />);
-    expect(lastFrame()).toContain('[R]');
+    expect(lastFrame()).toContain('Phase stopped');
+    expect(lastFrame()).not.toContain('[R]');
   });
 
   it('renders without crashing at narrow width', () => {
