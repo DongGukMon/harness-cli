@@ -13,8 +13,18 @@ import type { HarnessState } from '../../src/types.js';
 
 // ─── Module mocks for runInteractivePhase ordering test ─────────────────────
 
+vi.mock('chokidar', () => ({
+  default: {
+    watch: vi.fn(() => ({ on: vi.fn().mockReturnThis(), close: vi.fn(async () => undefined) })),
+  },
+}));
+
 vi.mock('../../src/runners/codex.js', () => ({
-  runCodexInteractive: vi.fn(async () => ({ status: 'completed', exitCode: 0 })),
+  spawnCodexInteractiveInPane: vi.fn(async (input: { sentinelPath: string; attemptId: string }) => {
+    // Write sentinel so waitForPhaseCompletion resolves immediately on initial check
+    fs.writeFileSync(input.sentinelPath, `${input.attemptId}\n`);
+    return { pid: 12345 };
+  }),
 }));
 vi.mock('../../src/runners/codex-isolation.js', async () => {
   const actual = await vi.importActual<typeof import('../../src/runners/codex-isolation.js')>(
@@ -839,9 +849,9 @@ describe('validatePhaseArtifacts — light + phase 1 extras (ADR-13)', () => {
 // ─── runInteractivePhase — codex branch + CODEX_HOME isolation (Issue #13) ───
 
 describe('runInteractivePhase — codex-interactive branch invokes codex isolation', () => {
-  it('calls ensureCodexIsolation(runDir) and threads codexHomeFor(runDir) into runCodexInteractive (positive path)', async () => {
+  it('calls ensureCodexIsolation(runDir) and threads codexHome into spawnCodexInteractiveInPane (positive path)', async () => {
     const { runInteractivePhase } = await import('../../src/phases/interactive.js');
-    const { runCodexInteractive } = await import('../../src/runners/codex.js');
+    const { spawnCodexInteractiveInPane } = await import('../../src/runners/codex.js');
     const { ensureCodexIsolation } = await import('../../src/runners/codex-isolation.js');
 
     const runDir = makeTmpDir();
@@ -857,20 +867,19 @@ describe('runInteractivePhase — codex-interactive branch invokes codex isolati
     });
 
     vi.mocked(ensureCodexIsolation).mockClear();
-    vi.mocked(runCodexInteractive).mockClear();
+    vi.mocked(spawnCodexInteractiveInPane).mockClear();
 
     await runInteractivePhase(1, state, harnessDir, runDir, repoDir, 'attempt-1');
 
     expect(vi.mocked(ensureCodexIsolation)).toHaveBeenCalledWith(runDir);
-    // runCodexInteractive signature: phase, state, preset, harnessDir, runDir, promptFile, cwd, codexHome
-    const call = vi.mocked(runCodexInteractive).mock.calls[0];
+    const call = vi.mocked(spawnCodexInteractiveInPane).mock.calls[0];
     expect(call).toBeDefined();
-    expect(call[7]).toBe(`${runDir}/codex-home`);
+    expect(call[0].codexHome).toBe(`${runDir}/codex-home`);
   });
 
-  it('codexNoIsolate=true: ensureCodexIsolation NOT called; runCodexInteractive receives codexHome=null', async () => {
+  it('codexNoIsolate=true: ensureCodexIsolation NOT called; spawnCodexInteractiveInPane receives codexHome=null', async () => {
     const { runInteractivePhase } = await import('../../src/phases/interactive.js');
-    const { runCodexInteractive } = await import('../../src/runners/codex.js');
+    const { spawnCodexInteractiveInPane } = await import('../../src/runners/codex.js');
     const { ensureCodexIsolation } = await import('../../src/runners/codex-isolation.js');
 
     const runDir = makeTmpDir();
@@ -886,18 +895,18 @@ describe('runInteractivePhase — codex-interactive branch invokes codex isolati
     });
 
     vi.mocked(ensureCodexIsolation).mockClear();
-    vi.mocked(runCodexInteractive).mockClear();
+    vi.mocked(spawnCodexInteractiveInPane).mockClear();
 
     await runInteractivePhase(1, state, harnessDir, runDir, repoDir, 'attempt-2');
 
     expect(vi.mocked(ensureCodexIsolation)).not.toHaveBeenCalled();
-    const call = vi.mocked(runCodexInteractive).mock.calls[0];
-    expect(call[7]).toBeNull();
+    const call = vi.mocked(spawnCodexInteractiveInPane).mock.calls[0];
+    expect(call[0].codexHome).toBeNull();
   });
 
   it('CodexIsolationError → phase fails with isolation error sidecar (no runner call)', async () => {
     const { runInteractivePhase } = await import('../../src/phases/interactive.js');
-    const { runCodexInteractive } = await import('../../src/runners/codex.js');
+    const { spawnCodexInteractiveInPane } = await import('../../src/runners/codex.js');
     const isolationMod = await import('../../src/runners/codex-isolation.js');
     const { CodexIsolationError } = isolationMod;
 
@@ -913,7 +922,7 @@ describe('runInteractivePhase — codex-interactive branch invokes codex isolati
       codexNoIsolate: false,
     });
 
-    vi.mocked(runCodexInteractive).mockClear();
+    vi.mocked(spawnCodexInteractiveInPane).mockClear();
     vi.mocked(isolationMod.ensureCodexIsolation).mockImplementationOnce(() => {
       throw new CodexIsolationError('fake: auth.json missing');
     });
@@ -922,7 +931,7 @@ describe('runInteractivePhase — codex-interactive branch invokes codex isolati
 
     expect(result.status).toBe('failed');
     // Runner NEVER called once bootstrap fails.
-    expect(vi.mocked(runCodexInteractive)).not.toHaveBeenCalled();
+    expect(vi.mocked(spawnCodexInteractiveInPane)).not.toHaveBeenCalled();
     // Isolation failure captured as a sidecar for post-mortem debugging.
     const errorSidecar = path.join(runDir, 'codex-1-error.md');
     expect(fs.existsSync(errorSidecar)).toBe(true);

@@ -3,7 +3,7 @@ import { EventEmitter } from 'events';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
-import { runCodexGate, runCodexInteractive, stderrTail, spawnCodexInPane } from '../../src/runners/codex.js';
+import { runCodexGate, spawnCodexInteractiveInPane, stderrTail, spawnCodexInPane } from '../../src/runners/codex.js';
 import { sendKeysToPane } from '../../src/tmux.js';
 import { type ModelPreset } from '../../src/config.js';
 import type { HarnessState } from '../../src/types.js';
@@ -68,9 +68,9 @@ const SUCCESS_STDOUT =
 afterEach(() => { vi.clearAllMocks(); });
 
 describe('Codex Runner — module exports', () => {
-  it('module exports runCodexInteractive and runCodexGate', async () => {
+  it('module exports spawnCodexInteractiveInPane and runCodexGate', async () => {
     const mod = await import('../../src/runners/codex.js');
-    expect(typeof mod.runCodexInteractive).toBe('function');
+    expect(typeof mod.spawnCodexInteractiveInPane).toBe('function');
     expect(typeof mod.runCodexGate).toBe('function');
   });
 });
@@ -125,25 +125,81 @@ describe('runCodexGate — CODEX_HOME env plumbing (BUG-C isolation)', () => {
   });
 });
 
-describe('runCodexInteractive — CODEX_HOME env plumbing', () => {
-  it('spawn env.CODEX_HOME matches provided path', async () => {
-    const cp = await import('child_process');
-    (cp.spawn as any).mockImplementationOnce(() => makeMockChild({ stdout: 'ok\n' }));
-
-    const state = { lastWorkspacePid: null, lastWorkspacePidStartTime: null } as unknown as HarnessState;
-
+describe('spawnCodexInteractiveInPane — pane injection', () => {
+  it('sends a codex exec command to the workspace pane with correct sandbox and CODEX_HOME', async () => {
     const fs = await import('fs');
     const os = await import('os');
     const path = await import('path');
-    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-iso-ci-'));
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-pane-ci-'));
+    const promptPath = path.join(tmp, 'p.txt');
+    fs.writeFileSync(promptPath, 'hi');
+    const runDir = path.join(tmp, 'run');
+    fs.mkdirSync(runDir);
+    const sentinelPath = path.join(runDir, 'phase-1.done');
+
+    const state: HarnessState = {
+      lastWorkspacePid: null,
+      lastWorkspacePidStartTime: null,
+      tmuxSession: 'sess',
+      tmuxWorkspacePane: '%1',
+    } as unknown as HarnessState;
+
+    await spawnCodexInteractiveInPane({
+      phase: 1,
+      state,
+      preset,
+      harnessDir: '/tmp/h',
+      runDir,
+      promptFile: promptPath,
+      cwd: '/tmp/c',
+      codexHome: '/iso/interactive',
+      attemptId: 'atmp-1',
+      sentinelPath,
+    });
+
+    expect(vi.mocked(sendKeysToPane)).toHaveBeenCalled();
+    const cmd: string = vi.mocked(sendKeysToPane).mock.calls.at(-1)![2];
+    expect(cmd).toContain('CODEX_HOME="/iso/interactive"');
+    expect(cmd).toContain('--sandbox workspace-write');
+    expect(cmd).toContain('--full-auto');
+    expect(cmd).toContain(`echo "atmp-1" > "${sentinelPath}"`);
+
+    fs.rmSync(tmp, { recursive: true, force: true });
+  });
+
+  it('uses danger-full-access sandbox for phase 5', async () => {
+    const fs = await import('fs');
+    const os = await import('os');
+    const path = await import('path');
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-pane-p5-'));
     const promptPath = path.join(tmp, 'p.txt');
     fs.writeFileSync(promptPath, 'hi');
     const runDir = path.join(tmp, 'run');
     fs.mkdirSync(runDir);
 
-    await runCodexInteractive(1, state, preset, '/tmp/h', runDir, promptPath, '/tmp/c', '/iso/interactive');
-    const spawnOpts = (cp.spawn as any).mock.calls[0][2];
-    expect(spawnOpts.env.CODEX_HOME).toBe('/iso/interactive');
+    const state: HarnessState = {
+      lastWorkspacePid: null,
+      lastWorkspacePidStartTime: null,
+      tmuxSession: 'sess',
+      tmuxWorkspacePane: '%1',
+    } as unknown as HarnessState;
+
+    await spawnCodexInteractiveInPane({
+      phase: 5,
+      state,
+      preset,
+      harnessDir: '/tmp/h',
+      runDir,
+      promptFile: promptPath,
+      cwd: '/tmp/c',
+      codexHome: null,
+      attemptId: 'atmp-5',
+      sentinelPath: path.join(runDir, 'phase-5.done'),
+    });
+
+    const cmd: string = vi.mocked(sendKeysToPane).mock.calls.at(-1)![2];
+    expect(cmd).toContain('--sandbox danger-full-access');
+    expect(cmd).not.toContain('CODEX_HOME');
 
     fs.rmSync(tmp, { recursive: true, force: true });
   });

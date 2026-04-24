@@ -9,6 +9,7 @@ import { getHead } from '../git.js';
 import { isPidAlive } from '../process.js';
 import { assembleInteractivePrompt } from '../context/assembler.js';
 import { runClaudeInteractive } from '../runners/claude.js';
+import { clearLockChild } from '../lock.js';
 import { isValidChecklistSchema } from './checklist.js';
 import { resolveArtifact } from '../artifact.js';
 
@@ -261,7 +262,7 @@ export async function runInteractivePhase(
     );
     return { ...result, attemptId };
   } else {
-    const { runCodexInteractive } = await import('../runners/codex.js');
+    const { spawnCodexInteractiveInPane } = await import('../runners/codex.js');
     const { ensureCodexIsolation, CodexIsolationError } =
       await import('../runners/codex-isolation.js');
 
@@ -286,15 +287,30 @@ export async function runInteractivePhase(
       }
     }
 
-    const result = await runCodexInteractive(
-      phase, updatedState, preset, harnessDir, runDir, promptFile, cwd, codexHome,
+    const sentinelPath = path.join(runDir, `phase-${phase}.done`);
+    const { pid: codexPid } = await spawnCodexInteractiveInPane({
+      phase,
+      state: updatedState,
+      preset,
+      harnessDir,
+      runDir,
+      promptFile,
+      cwd,
+      codexHome,
+      attemptId,
+      sentinelPath,
+    });
+
+    const result = await waitForPhaseCompletion(
+      sentinelPath, attemptId, codexPid, phase, updatedState, cwd, runDir,
     );
-    if (result.status === 'failed') {
-      return { status: 'failed', attemptId };
-    }
-    // Validate artifacts after Codex completes
-    const valid = validatePhaseArtifacts(phase, updatedState, cwd, runDir);
-    return { status: valid ? 'completed' : 'failed', attemptId };
+
+    try { clearLockChild(harnessDir); } catch { /* best-effort */ }
+    updatedState.lastWorkspacePid = null;
+    updatedState.lastWorkspacePidStartTime = null;
+    writeState(runDir, updatedState);
+
+    return { ...result, attemptId };
   }
 }
 
