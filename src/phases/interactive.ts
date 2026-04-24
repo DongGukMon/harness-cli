@@ -315,6 +315,7 @@ export async function waitForPhaseCompletion(
   return new Promise<InteractiveResult>((resolve) => {
     let settled = false;
     let watcher: ReturnType<typeof chokidar.watch> | null = null;
+    let sentinelPollInterval: ReturnType<typeof setInterval> | null = null;
     let pidPollInterval: ReturnType<typeof setInterval> | null = null;
     let interruptPollInterval: ReturnType<typeof setInterval> | null = null;
     let nullPidTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -325,6 +326,10 @@ export async function waitForPhaseCompletion(
       if (watcher) {
         void watcher.close();
         watcher = null;
+      }
+      if (sentinelPollInterval !== null) {
+        clearInterval(sentinelPollInterval);
+        sentinelPollInterval = null;
       }
       if (pidPollInterval !== null) {
         clearInterval(pidPollInterval);
@@ -362,6 +367,12 @@ export async function waitForPhaseCompletion(
 
     watcher.on('add', onSentinelDetected);
     watcher.on('change', onSentinelDetected);
+
+    // Backstop for watcher misses. In tmux-based interactive phases Claude
+    // normally stays alive after writing phase-N.done, so PID death is not a
+    // completion signal. Polling the sentinel path keeps the harness advancing
+    // even if a chokidar event is missed or delayed for a newly-created file.
+    sentinelPollInterval = setInterval(onSentinelDetected, 500);
 
     // PID death polling (1s): when Claude exits, check sentinel one last time
     if (claudePid !== null) {
