@@ -563,8 +563,13 @@ export function assembleInteractivePrompt(
 ): string {
   const phaseAttemptId = state.phaseAttemptId[String(phase)] ?? '';
 
-  // Phase 1 uses task.md file path (not raw task string) per spec
-  const taskMdPath = path.join('.harness', state.runId, 'task.md');
+  // Prompt-visible run artifacts must point at the same runDir watched by
+  // the harness. Use path.resolve so even a relative --root cannot render
+  // cwd-relative `.harness/<runId>/...` instructions (issue #75).
+  const promptRunDir = path.resolve(harnessDir, state.runId);
+  // Phase 1 uses task.md file path (not raw task string) per spec.
+  const taskMdPath = path.join(promptRunDir, 'task.md');
+  const sentinelPath = path.join(promptRunDir, `phase-${phase}.done`);
 
   // Merge pendingAction.feedbackPaths with carryoverFeedback.paths when the
   // carryover targets this phase. Carryover paths are dropped with a warning
@@ -633,6 +638,7 @@ export function assembleInteractivePrompt(
     phaseAttemptId,
     feedback_path: feedbackPath,
     feedback_paths: feedbackPathsList.length > 0 ? feedbackPathsList : undefined,
+    sentinel_path: sentinelPath,
     harnessDir,
     playbookDir,
     complexity_directive: complexityDirective,
@@ -724,6 +730,25 @@ function buildResumeSections(
   return body;
 }
 
+function buildEscalationResetNotice(
+  phase: 2 | 4 | 7,
+  state: HarnessState,
+): string {
+  const phaseKey = String(phase) as '2' | '4' | '7';
+  const cycle = state.gateEscalationCycles?.[phaseKey] ?? 0;
+  if (cycle <= 0) return '';
+
+  return [
+    '## Escalation Cycle Reset Notice',
+    '',
+    `Escalation cycle ${cycle}: the developer chose Continue after the gate retry limit. ` +
+      'Prior feedback is reference only, not an anchor. ' +
+      'Re-read the current artifacts from scratch; ' +
+      'approve if the current artifacts now satisfy the gate contract, and reject only for issues still present in the current artifacts.',
+    '',
+  ].join('\n');
+}
+
 export function assembleGateResumePrompt(
   phase: 2 | 4 | 7,
   state: HarnessState,
@@ -755,6 +780,7 @@ export function assembleGateResumePrompt(
       ? previousFeedback
       : '(feedback file missing despite lastOutcome=reject — spec anomaly)';
     prompt =
+      buildEscalationResetNotice(phase, state) +
       '## Updated Artifacts (Re-Review Requested)\n\n' +
       'The artifacts have been updated based on your previous feedback. Re-review the new versions and verify your prior concerns were addressed.\n\n' +
       sections +

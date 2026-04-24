@@ -119,7 +119,7 @@ describe('wrapper contract invariants — literal (per spec §4/§5)', () => {
     expect(prompt).toContain('/abs/spec-out.md');
     expect(prompt).toContain('/abs/decisions-out.md');
     // sentinel literal path + run-scoped
-    expect(prompt).toMatch(/\.harness\/rid-1\/phase-1\.done/);
+    expect(prompt).toContain(path.join('/tmp/harness', 'rid-1', 'phase-1.done'));
     // "sentinel 생성 후 추가 작업 금지" invariant literal
     expect(prompt).toMatch(/sentinel.*추가 작업 금지/);
     // Context & Decisions section requirement surfaced
@@ -134,7 +134,7 @@ describe('wrapper contract invariants — literal (per spec §4/§5)', () => {
     const prompt = assembleInteractivePrompt(3, state, '/tmp/harness');
     expect(prompt).toContain('/abs/plan-out.md');
     expect(prompt).toContain('/abs/checklist-out.json');
-    expect(prompt).toMatch(/\.harness\/rid-3\/phase-3\.done/);
+    expect(prompt).toContain(path.join('/tmp/harness', 'rid-3', 'phase-3.done'));
     // checklist schema literal (checks / name / command keys)
     expect(prompt).toMatch(/"checks"\s*:/);
     expect(prompt).toMatch(/"name"/);
@@ -147,7 +147,7 @@ describe('wrapper contract invariants — literal (per spec §4/§5)', () => {
     const state = stubState(tmp);
     state.runId = 'rid-5';
     const prompt = assembleInteractivePrompt(5, state, '/tmp/harness');
-    expect(prompt).toMatch(/\.harness\/rid-5\/phase-5\.done/);
+    expect(prompt).toContain(path.join('/tmp/harness', 'rid-5', 'phase-5.done'));
     // D3: standalone git-commit override removed — harness auto-commits
     expect(prompt).not.toMatch(/After each task completes, git commit/);
     // Pre-sentinel self-audit (step 3) still present

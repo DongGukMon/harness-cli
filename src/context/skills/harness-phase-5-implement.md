@@ -38,7 +38,7 @@ superpowers가 커버하지 않는 두 원칙을 지킨다:
 ## Process
 0. **(Scaffolding only — prevention-first gitignore)** 구현을 시작하기 전에 대상 언어·프레임워크의 표준 `.gitignore` 엔트리(예: `__pycache__/`, `.pytest_cache/`, `.venv/`, `node_modules/`, `dist/`, `build/`, `.DS_Store`)를 프로젝트 루트 `.gitignore`에 보강한다. 기존 `.gitignore`가 이미 해당 엔트리를 포함하면 no-op. 이 변경은 `chore: add standard gitignore entries` 등 **독립된 scaffolding commit**으로 두고, impl 커밋과 섞지 않는다. Sentinel 직전에 `git status --porcelain`을 셀프 체크해 tracked 파일이 전부 커밋된 상태인지 확인한다. 하네스에 자동 recovery가 있어도 이 단계는 효율성과 로그 가독성 측면에서 값어치가 있다.
 1. 기본 sub-skill로 `superpowers:subagent-driven-development`를 invoke한다. 단일 세션 구현이 plan에서 적합하다고 판단되면 `superpowers:executing-plans`를 대안으로 쓸 수 있다. 어느 경우든 다음 오버라이드를 전달한다:
-   - `"Do NOT create .harness/{{runId}}/phase-5.done until ALL tasks in the plan are committed."`
+   - `"Do NOT create {{sentinel_path}} until ALL tasks in the plan are committed."`
    - `"If Content Filter rejects a subagent dispatch, fall back to direct in-session implementation and record the fallback in the task note."`
 2. 구현 중 위 Auxiliary playbooks의 원칙(원자적 커밋, 수직 슬라이스, 컨텍스트 prune)을 적용한다.
 3. **Pre-sentinel self-audit** — sentinel 쓰기 직전, 이번 phase의 commits 합집합을 다시 확인한다.
@@ -47,7 +47,7 @@ superpowers가 커버하지 않는 두 원칙을 지킨다:
    - 검증 원천은 두 가지다. (a) spec의 `## Success Criteria` / `## Invariants` 섹션에 적힌 grep/정규식 규칙은 직접 실행한다. (b) plan의 eval checklist `checks[].command`는 inspect-only로 다루고 실행하지 않는다. 대신 해당 command들이 spec의 grep/regex 규칙을 빠짐없이 커버하는지만 정적으로 검토한다.
    - hit이 구현 수정으로 해결 가능하면 이번 pass에서 바로 수정하고, 수정이 있었다면 한 번 더 같은 검증을 반복(rerun)한 뒤 clean 상태를 확인하고 넘어간다. 각 gate round는 대략 40× local grep 비용이므로 gate로 넘기기 전에 여기서 정리한다.
    - hit이 구현 수정만으로 해결 불가하면 **plan 문서 하단 `## Deferred` 섹션**에 `spec-bug: <detail>` 또는 `plan-bug: <detail>`를 append하고 `plan: append deferred item` 커밋으로 escalation한다. 해당 plan 문서에 `## Deferred` 섹션이 없으면 파일 끝에 새로 헤딩을 만든 뒤 append한다. 이 escalation 경로는 feedback 블록과 독립적이며 첫 패스에서도 동일하게 적용된다. 해결 불가 항목은 reviewer가 참고할 signal이지만 자동 완화는 없다.
-4. 모든 태스크 구현 + 커밋 완료 후 **가장 마지막에** `.harness/{{runId}}/phase-5.done`을 생성하고 `{{phaseAttemptId}}` 한 줄만 기록.
+4. 모든 태스크 구현 + 커밋 완료 후 **가장 마지막에** `{{sentinel_path}}`을 생성하고 `{{phaseAttemptId}}` 한 줄만 기록.
 
 ## Invariants
 - sentinel 이전에 모든 변경사항이 **git에 커밋**되어야 한다. Phase 7 eval은 diff 기반이므로 uncommitted 변경은 보이지 않음.

@@ -49,7 +49,7 @@ Phase 4에서 Codex가 다음 축으로 평가한다:
    - 각 `command`는 **격리된 셸 환경에서 실행**된다. 절대경로 바이너리(`.venv/bin/pytest`) 또는 env-aware 래퍼(`make test`)를 사용할 것. 글로벌 PATH에만 있는 도구는 피함 (qa-observations #4 대응).
    - UI/시각적 변경이 있는 태스크가 있다면 스크린샷/시각 검증 항목을 적어도 한 건 추가.
 3. **Pre-sentinel self-audit** — sentinel 쓰기 직전, 방금 작성한 plan을 다시 읽고 spec의 `## Success Criteria` / `## Invariants` 섹션과 대조한다. eval checklist도 함께 읽어 spec의 grep-rule / 정규식 규칙이 빠짐없이 들어갔는지 확인한다. hit이 있으면 gate로 넘기지 말고 이번 pass에서 바로 수정한다. 각 gate round는 대략 40× local grep 비용이므로 여기서 먼저 정리한다. 수정이 있었다면 한 번 더 같은 검증을 반복(rerun)하고 clean 상태를 확인한 뒤에만 sentinel 단계로 이동한다.
-4. **가장 마지막에** `.harness/{{runId}}/phase-3.done`을 생성하고 `{{phaseAttemptId}}` 한 줄만 기록.
+4. **가장 마지막에** `{{sentinel_path}}`을 생성하고 `{{phaseAttemptId}}` 한 줄만 기록.
 
 ## Invariants
 - sentinel 이후 추가 작업 금지.
