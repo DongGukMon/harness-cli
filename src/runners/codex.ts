@@ -456,11 +456,16 @@ export async function spawnCodexInPane(input: SpawnCodexInPaneInput): Promise<Co
 
   // codex-cli 0.124.0: top-level `codex` refuses stdin redirect ("stdin is not
   // a terminal") and drops `--skip-git-repo-check`. Both flags/flow were moved
-  // under the `exec` subcommand. Mirror runCodexExecRaw's argument structure so
-  // the pane path stays aligned with the headless path on a single source of
-  // truth. The trade-off vs PR #74 is loss of TUI chat visualization in the
-  // workspace pane — exec streams plain progress output instead. Still visible
-  // in the pane, just not interactive.
+  // under the `exec` subcommand. The trade-off vs PR #74 is loss of TUI chat
+  // visualization in the workspace pane — exec streams plain progress output
+  // instead. Still visible in the pane, just not interactive.
+  //
+  // `--full-auto` is required: the gate prompt instructs Codex to write
+  // `gate-N-verdict.md` and `phase-N.done` (see assembler.ts buildGateOutputProtocol),
+  // but `codex exec`'s default sandbox is read-only. `--full-auto` grants
+  // workspace-write implicitly and is accepted by BOTH `codex exec` and
+  // `codex exec resume` (unlike `-s workspace-write`, which `exec resume`
+  // rejects).
   let codexCmd: string;
   if (mode === 'resume' && sessionId) {
     codexCmd =
@@ -468,7 +473,7 @@ export async function spawnCodexInPane(input: SpawnCodexInPaneInput): Promise<Co
       `${skipGitFlag}` +
       `--model ${preset.model} ` +
       `-c model_reasoning_effort="${preset.effort}" ` +
-      `- ` +
+      `--full-auto - ` +
       `< "${promptFile}"`;
   } else {
     codexCmd =
@@ -476,7 +481,7 @@ export async function spawnCodexInPane(input: SpawnCodexInPaneInput): Promise<Co
       `${skipGitFlag}` +
       `--model ${preset.model} ` +
       `-c model_reasoning_effort="${preset.effort}" ` +
-      `- ` +
+      `--full-auto - ` +
       `< "${promptFile}"`;
   }
 

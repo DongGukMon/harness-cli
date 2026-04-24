@@ -353,6 +353,9 @@ describe('spawnCodexInPane — fresh', () => {
     expect(wrappedCmd).toMatch(/\bcodex\s+exec\b/);
     expect(wrappedCmd).not.toMatch(/\s-s\s+workspace-write\b/);
     expect(wrappedCmd).not.toMatch(/\s-a\s+never\b/);
+    // --full-auto required: gate prompt instructs codex to write verdict +
+    // sentinel files; codex exec's default sandbox is read-only.
+    expect(wrappedCmd).toMatch(/--full-auto/);
     expect(wrappedCmd).toMatch(/- < ".*prompt\.md"/);
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
@@ -379,10 +382,11 @@ describe('spawnCodexInPane — resume', () => {
     const wrappedCmd = cmds.find(c => c.includes('resume'));
     expect(wrappedCmd).toBeDefined();
     expect(wrappedCmd).toMatch(/\bcodex\s+exec\s+resume\s+sess-abc-123\b/);
-    // codex exec resume does NOT accept -s / -a / --full-auto.
+    // codex exec resume rejects -s / -a, but accepts --full-auto (required to
+    // let codex write the verdict + sentinel files).
     expect(wrappedCmd).not.toMatch(/\s-s\s+workspace-write\b/);
     expect(wrappedCmd).not.toMatch(/\s-a\s+never\b/);
-    expect(wrappedCmd).not.toMatch(/--full-auto/);
+    expect(wrappedCmd).toMatch(/--full-auto/);
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 });
