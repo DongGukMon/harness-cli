@@ -38,7 +38,19 @@ function makeState(overrides: Partial<HarnessState> = {}): HarnessState {
     'deadbeef',
     false
   );
-  return { ...base, ...overrides };
+  // Ensure phaseAttemptId is initialized with a sensible default for testing
+  const withPhaseIds = {
+    ...base,
+    phaseAttemptId: {
+      '1': 'test-attempt-id-1',
+      '2': 'test-attempt-id-2',
+      '3': 'test-attempt-id-3',
+      '4': 'test-attempt-id-4',
+      '5': 'test-attempt-id-5',
+      '7': 'test-attempt-id-7',
+    }
+  };
+  return { ...withPhaseIds, ...overrides };
 }
 
 function writeEvalFixtures(dir: string): void {
@@ -59,6 +71,14 @@ function makeLightEvalState(overrides: Partial<HarnessState> = {}): HarnessState
               '5': 'completed', '6': 'completed', '7': 'pending' },
     implCommit: 'impl-sha',
     evalCommit: 'eval-sha',
+    phaseAttemptId: {
+      '1': 'test-attempt-id-1',
+      '2': 'test-attempt-id-2',
+      '3': 'test-attempt-id-3',
+      '4': 'test-attempt-id-4',
+      '5': 'test-attempt-id-5',
+      '7': 'test-attempt-id-7',
+    },
     ...overrides,
   };
 }
@@ -72,6 +92,14 @@ function makeFullEvalState(overrides: Partial<HarnessState> = {}): HarnessState 
               '5': 'completed', '6': 'completed', '7': 'pending' },
     implCommit: 'impl-sha',
     evalCommit: 'eval-sha',
+    phaseAttemptId: {
+      '1': 'test-attempt-id-1',
+      '2': 'test-attempt-id-2',
+      '3': 'test-attempt-id-3',
+      '4': 'test-attempt-id-4',
+      '5': 'test-attempt-id-5',
+      '7': 'test-attempt-id-7',
+    },
     ...overrides,
   };
 }

@@ -670,7 +670,10 @@ export function assembleGatePrompt(
   if (typeof result === 'string') {
     // Append Output Protocol block (R3: verdict file + sentinel write instructions)
     const runDir = path.join(harnessDir, state.runId);
-    const attemptId = state.phaseAttemptId[String(phase)] ?? '';
+    const attemptId = state.phaseAttemptId[String(phase)];
+    if (!attemptId) {
+      return { error: `assembleGatePrompt: phaseAttemptId not set for phase ${phase}` };
+    }
     result = result + buildGateOutputProtocol(phase, runDir, attemptId);
   }
 
@@ -772,7 +775,11 @@ export function assembleGateResumePrompt(
   }
 
   // Append Output Protocol block (same requirement on resume path)
-  prompt = prompt + buildGateOutputProtocol(phase, runDir, state.phaseAttemptId[String(phase)] ?? '');
+  const attemptId = state.phaseAttemptId[String(phase)];
+  if (!attemptId) {
+    return { error: `assembleGateResumePrompt: phaseAttemptId not set for phase ${phase}` };
+  }
+  prompt = prompt + buildGateOutputProtocol(phase, runDir, attemptId);
 
   if (prompt.length > MAX_PROMPT_SIZE_KB * 1024) {
     return {
