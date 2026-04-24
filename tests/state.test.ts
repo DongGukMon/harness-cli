@@ -25,10 +25,10 @@ describe('phaseCodexSessions (spec §4.1 / §5)', () => {
     tmpDirs.push(dir);
     const state = makeState();
     state.phaseCodexSessions['2'] = {
-      sessionId: 'sess-gate2', runner: 'codex', model: 'gpt-5.4', effort: 'high', lastOutcome: 'reject',
+      sessionId: 'sess-gate2', runner: 'codex', model: 'gpt-5.5', effort: 'high', lastOutcome: 'reject',
     };
     state.phaseCodexSessions['7'] = {
-      sessionId: 'sess-gate7', runner: 'codex', model: 'gpt-5.4', effort: 'high', lastOutcome: 'approve',
+      sessionId: 'sess-gate7', runner: 'codex', model: 'gpt-5.5', effort: 'high', lastOutcome: 'approve',
     };
     writeState(dir, state);
     const restored = readState(dir);
@@ -216,7 +216,7 @@ describe('createInitialState (updated)', () => {
 
   it('initializes phasePresets from PHASE_DEFAULTS', () => {
     const state = createInitialState('run-1', 'task', 'abc123', false);
-    expect(state.phasePresets['1']).toBe('opus-1m-high');
+    expect(state.phasePresets['1']).toBe('opus-1m-xhigh');
     expect(state.phasePresets['5']).toBe('sonnet-high');
   });
 

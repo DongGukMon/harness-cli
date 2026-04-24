@@ -42,7 +42,7 @@ function makeMockChild(opts: {
 const preset: ModelPreset = {
   id: 'codex-high',
   runner: 'codex',
-  model: 'gpt-5.4',
+  model: 'gpt-5.5',
   effort: 'high',
   label: 'codex-high',
 };
@@ -60,7 +60,7 @@ describe('runCodexGate — fresh path', () => {
     expect(result.type).toBe('verdict');
     if (result.type === 'verdict') {
       expect(result.codexSessionId).toBe('abc-123-def');
-      expect(result.sourcePreset).toEqual({ model: 'gpt-5.4', effort: 'high' });
+      expect(result.sourcePreset).toEqual({ model: 'gpt-5.5', effort: 'high' });
       expect(result.resumedFrom).toBeNull();
       expect(result.resumeFallback).toBe(false);
     }

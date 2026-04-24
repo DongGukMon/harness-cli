@@ -223,8 +223,8 @@ describe('inner.ts: consumePendingAction behavior', () => {
       phasePresets: { '1': 'opus-xhigh', '2': 'codex-high', '3': 'sonnet-high', '4': 'codex-high', '5': 'sonnet-high', '7': 'codex-high' },
       phaseReopenFlags: { '1': false, '3': false, '5': false },
       phaseCodexSessions: {
-        '2': { sessionId: 'sess-aa', runner: 'codex', model: 'gpt-5.4', effort: 'high', lastOutcome: 'reject' },
-        '4': { sessionId: 'sess-bb', runner: 'codex', model: 'gpt-5.4', effort: 'high', lastOutcome: 'reject' },
+        '2': { sessionId: 'sess-aa', runner: 'codex', model: 'gpt-5.5', effort: 'high', lastOutcome: 'reject' },
+        '4': { sessionId: 'sess-bb', runner: 'codex', model: 'gpt-5.5', effort: 'high', lastOutcome: 'reject' },
         '7': null,
       },
       phaseReopenSource: { '1': null, '3': null, '5': null },

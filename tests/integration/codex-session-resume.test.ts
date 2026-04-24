@@ -28,7 +28,7 @@ function verdictResult(overrides: Partial<GatePhaseResult> = {}): GatePhaseResul
     rawOutput: 'session id: aa-11\n## Verdict\nAPPROVE\n',
     runner: 'codex',
     codexSessionId: 'aa-11',
-    sourcePreset: { model: 'gpt-5.4', effort: 'high' },
+    sourcePreset: { model: 'gpt-5.5', effort: 'high' },
     resumedFrom: null,
     resumeFallback: false,
     ...overrides,
@@ -47,7 +47,7 @@ describe('Integration §5: persisted session drives resume dispatch after state 
     state.phaseCodexSessions['2'] = {
       sessionId: 'persisted-aa',
       runner: 'codex',
-      model: 'gpt-5.4',
+      model: 'gpt-5.5',
       effort: 'high',
       lastOutcome: 'reject',
     };
@@ -105,7 +105,7 @@ describe('Integration Task 8: session_missing fallback updates stored session id
     state.currentPhase = 2; // required for session-persist stillActivePhase guard
     state.artifacts = { spec: 'spec.md', plan: 'plan.md', evalReport: 'eval.md', decisionLog: 'd.md', checklist: 'c.json' };
     state.phaseCodexSessions['2'] = {
-      sessionId: 'dead-sid', runner: 'codex', model: 'gpt-5.4', effort: 'high', lastOutcome: 'reject',
+      sessionId: 'dead-sid', runner: 'codex', model: 'gpt-5.5', effort: 'high', lastOutcome: 'reject',
     };
     writeState(runDir, state);
 
@@ -125,7 +125,7 @@ describe('Integration Task 8: preset-change invalidation nulls session and delet
     const state = createInitialState('run-int-preset', 'task', 'base', false);
     state.artifacts = { spec: 'spec.md', plan: 'plan.md', evalReport: 'eval.md', decisionLog: 'd.md', checklist: 'c.json' };
     state.phaseCodexSessions['2'] = {
-      sessionId: 'pre-sid', runner: 'codex', model: 'gpt-5.4', effort: 'high', lastOutcome: 'reject',
+      sessionId: 'pre-sid', runner: 'codex', model: 'gpt-5.5', effort: 'high', lastOutcome: 'reject',
     };
     // Replay sidecars pre-existing
     fs.writeFileSync(path.join(runDir, 'gate-2-raw.txt'), 'raw');
@@ -151,7 +151,7 @@ describe('Integration Task 8: preset-change invalidation nulls session and delet
     const { invalidatePhaseSessionsOnPresetChange } = await import('../../src/state.js');
     const state = createInitialState('run-int-noop', 'task', 'base', false);
     state.phaseCodexSessions['2'] = {
-      sessionId: 'keep-sid', runner: 'codex', model: 'gpt-5.4', effort: 'high', lastOutcome: 'reject',
+      sessionId: 'keep-sid', runner: 'codex', model: 'gpt-5.5', effort: 'high', lastOutcome: 'reject',
     };
     // Snapshot prev, reassign the same preset id (simulates idempotent config re-apply)
     const prev = { ...state.phasePresets };
@@ -167,13 +167,13 @@ describe('Integration Task 8: jump invalidation nulls target+later phases, prese
     const { invalidatePhaseSessionsOnJump } = await import('../../src/state.js');
     const state = createInitialState('run-int-jump', 'task', 'base', false);
     state.phaseCodexSessions['2'] = {
-      sessionId: 'sid-2', runner: 'codex', model: 'gpt-5.4', effort: 'high', lastOutcome: 'approve',
+      sessionId: 'sid-2', runner: 'codex', model: 'gpt-5.5', effort: 'high', lastOutcome: 'approve',
     };
     state.phaseCodexSessions['4'] = {
-      sessionId: 'sid-4', runner: 'codex', model: 'gpt-5.4', effort: 'high', lastOutcome: 'reject',
+      sessionId: 'sid-4', runner: 'codex', model: 'gpt-5.5', effort: 'high', lastOutcome: 'reject',
     };
     state.phaseCodexSessions['7'] = {
-      sessionId: 'sid-7', runner: 'codex', model: 'gpt-5.4', effort: 'high', lastOutcome: 'reject',
+      sessionId: 'sid-7', runner: 'codex', model: 'gpt-5.5', effort: 'high', lastOutcome: 'reject',
     };
     for (const p of [2, 4, 7]) {
       fs.writeFileSync(path.join(runDir, `gate-${p}-raw.txt`), 'raw');

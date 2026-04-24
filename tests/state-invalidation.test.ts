@@ -48,9 +48,9 @@ beforeEach(() => { runDir = fs.mkdtempSync(path.join(os.tmpdir(), 'state-inv-'))
 describe('invalidatePhaseSessionsOnPresetChange', () => {
   it('nulls sessions and deletes replay sidecars for changed phases only', () => {
     const state = makeState();
-    state.phaseCodexSessions['2'] = makeSession('gpt-5.4', 'high');
-    state.phaseCodexSessions['4'] = makeSession('gpt-5.4', 'high');
-    state.phaseCodexSessions['7'] = makeSession('gpt-5.4', 'high');
+    state.phaseCodexSessions['2'] = makeSession('gpt-5.5', 'high');
+    state.phaseCodexSessions['4'] = makeSession('gpt-5.5', 'high');
+    state.phaseCodexSessions['7'] = makeSession('gpt-5.5', 'high');
     const prev = { ...state.phasePresets };
     // phase 2 preset 변경
     state.phasePresets['2'] = 'sonnet-high';
@@ -72,7 +72,7 @@ describe('invalidatePhaseSessionsOnPresetChange', () => {
 
   it('is no-op when no preset changed', () => {
     const state = makeState();
-    state.phaseCodexSessions['2'] = makeSession('gpt-5.4', 'high');
+    state.phaseCodexSessions['2'] = makeSession('gpt-5.5', 'high');
     const prev = { ...state.phasePresets };
     invalidatePhaseSessionsOnPresetChange(state, prev, runDir);
     expect(state.phaseCodexSessions['2']).not.toBeNull();
@@ -91,9 +91,9 @@ describe('invalidatePhaseSessionsOnPresetChange', () => {
 describe('invalidatePhaseSessionsOnJump', () => {
   it('nulls sessions and deletes replay sidecars at or after targetPhase', () => {
     const state = makeState();
-    state.phaseCodexSessions['2'] = makeSession('gpt-5.4', 'high');
-    state.phaseCodexSessions['4'] = makeSession('gpt-5.4', 'high');
-    state.phaseCodexSessions['7'] = makeSession('gpt-5.4', 'high');
+    state.phaseCodexSessions['2'] = makeSession('gpt-5.5', 'high');
+    state.phaseCodexSessions['4'] = makeSession('gpt-5.5', 'high');
+    state.phaseCodexSessions['7'] = makeSession('gpt-5.5', 'high');
     for (const p of [2, 4, 7]) {
       fs.writeFileSync(path.join(runDir, `gate-${p}-raw.txt`), 'x');
       fs.writeFileSync(path.join(runDir, `gate-${p}-result.json`), '{}');
@@ -114,9 +114,9 @@ describe('invalidatePhaseSessionsOnJump', () => {
 
   it('targetPhase=2: all gate sessions invalidated', () => {
     const state = makeState();
-    state.phaseCodexSessions['2'] = makeSession('gpt-5.4', 'high');
-    state.phaseCodexSessions['4'] = makeSession('gpt-5.4', 'high');
-    state.phaseCodexSessions['7'] = makeSession('gpt-5.4', 'high');
+    state.phaseCodexSessions['2'] = makeSession('gpt-5.5', 'high');
+    state.phaseCodexSessions['4'] = makeSession('gpt-5.5', 'high');
+    state.phaseCodexSessions['7'] = makeSession('gpt-5.5', 'high');
     invalidatePhaseSessionsOnJump(state, 2, runDir);
     expect(state.phaseCodexSessions).toEqual({ '2': null, '4': null, '7': null });
   });

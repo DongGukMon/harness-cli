@@ -3,6 +3,8 @@ import {
   getGateRetryLimit,
   LIGHT_PHASE_DEFAULTS,
   LIGHT_REQUIRED_PHASE_KEYS,
+  MODEL_PRESETS,
+  PHASE_DEFAULTS,
   getPhaseDefaults,
 } from '../src/config.js';
 
@@ -29,6 +31,26 @@ describe('getGateRetryLimit', () => {
 });
 
 describe('light flow phase config', () => {
+  it('defaults Phase 1 to Opus 4.7 xhigh for full and light flows', () => {
+    expect(PHASE_DEFAULTS[1]).toBe('opus-1m-xhigh');
+    expect(LIGHT_PHASE_DEFAULTS[1]).toBe('opus-1m-xhigh');
+    expect(MODEL_PRESETS.find(p => p.id === 'opus-1m-xhigh')).toMatchObject({
+      model: 'claude-opus-4-7[1m]',
+      effort: 'xhigh',
+    });
+  });
+
+  it('uses GPT-5.5 for Codex presets', () => {
+    expect(MODEL_PRESETS.find(p => p.id === 'codex-high')).toMatchObject({
+      model: 'gpt-5.5',
+      effort: 'high',
+    });
+    expect(MODEL_PRESETS.find(p => p.id === 'codex-medium')).toMatchObject({
+      model: 'gpt-5.5',
+      effort: 'medium',
+    });
+  });
+
   it('LIGHT_PHASE_DEFAULTS includes phase 2 as codex-high', () => {
     expect(LIGHT_PHASE_DEFAULTS[2]).toBe('codex-high');
   });

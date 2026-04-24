@@ -411,7 +411,7 @@ describe('handleGateReject scope-aware reopen routing', () => {
       phaseCodexSessions: {
         '2': null,
         '4': null,
-        '7': { sessionId: 'sess-7', runner: 'codex', model: 'gpt-5.4', effort: 'high', lastOutcome: 'reject' },
+        '7': { sessionId: 'sess-7', runner: 'codex', model: 'gpt-5.5', effort: 'high', lastOutcome: 'reject' },
       },
     });
 
@@ -1986,7 +1986,7 @@ describe('light flow — runPhaseLoop (spec §4 + ADR-1/ADR-4/ADR-14)', () => {
                 '5': 'completed', '6': 'completed', '7': 'pending' },
     });
     state.phaseCodexSessions['7'] = {
-      sessionId: 'stale-7', runner: 'codex', model: 'gpt-5.4', effort: 'high',
+      sessionId: 'stale-7', runner: 'codex', model: 'gpt-5.5', effort: 'high',
       lastOutcome: 'reject',
     };
     fs.writeFileSync(path.join(runDir, 'gate-7-raw.txt'), 'stale');

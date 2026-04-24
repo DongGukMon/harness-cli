@@ -13,29 +13,29 @@ export interface PhasePresetMap {
 }
 
 // Model effort axes (per Anthropic 2026-04 guidance):
-//   - Opus 4.7: high < xHigh < max (three distinct tiers)
-//   - Sonnet 4.6: high < max (two tiers; no xHigh)
+//   - Opus 4.7: high < xhigh < max (three distinct tiers)
+//   - Sonnet 4.6: high < max (two tiers; no xhigh)
 // The catalog registers both the legacy tiers and explicit 1M-context tiers so
 // users can choose compatibility vs. long-context defaults via
-// `promptModelConfig`. New runs prefer the conservative 1M tiers; legacy tiers
+// `promptModelConfig`. New runs prefer the explicit 1M tiers; legacy tiers
 // remain available as manual fallback choices.
 export const MODEL_PRESETS: ModelPreset[] = [
   { id: 'opus-1m-max',   label: 'Claude Opus 4.7 1M / max',    runner: 'claude', model: 'claude-opus-4-7[1m]',   effort: 'max'    },
-  { id: 'opus-1m-xhigh', label: 'Claude Opus 4.7 1M / xHigh',  runner: 'claude', model: 'claude-opus-4-7[1m]',   effort: 'xHigh'  },
+  { id: 'opus-1m-xhigh', label: 'Claude Opus 4.7 1M / xhigh',  runner: 'claude', model: 'claude-opus-4-7[1m]',   effort: 'xhigh'  },
   { id: 'opus-1m-high',  label: 'Claude Opus 4.7 1M / high',   runner: 'claude', model: 'claude-opus-4-7[1m]',   effort: 'high'   },
   { id: 'sonnet-1m-max', label: 'Claude Sonnet 4.6 1M / max',  runner: 'claude', model: 'claude-sonnet-4-6[1m]', effort: 'max'    },
   { id: 'sonnet-1m-high',label: 'Claude Sonnet 4.6 1M / high', runner: 'claude', model: 'claude-sonnet-4-6[1m]', effort: 'high'   },
   { id: 'opus-max',     label: 'Claude Opus 4.7 / max',    runner: 'claude', model: 'claude-opus-4-7',   effort: 'max'    },
-  { id: 'opus-xhigh',   label: 'Claude Opus 4.7 / xHigh',  runner: 'claude', model: 'claude-opus-4-7',   effort: 'xHigh'  },
+  { id: 'opus-xhigh',   label: 'Claude Opus 4.7 / xhigh',  runner: 'claude', model: 'claude-opus-4-7',   effort: 'xhigh'  },
   { id: 'opus-high',    label: 'Claude Opus 4.7 / high',   runner: 'claude', model: 'claude-opus-4-7',   effort: 'high'   },
   { id: 'sonnet-max',   label: 'Claude Sonnet 4.6 / max',  runner: 'claude', model: 'claude-sonnet-4-6', effort: 'max'    },
   { id: 'sonnet-high',  label: 'Claude Sonnet 4.6 / high', runner: 'claude', model: 'claude-sonnet-4-6', effort: 'high'   },
-  { id: 'codex-high',   label: 'Codex / high',             runner: 'codex',  model: 'gpt-5.4',           effort: 'high'   },
-  { id: 'codex-medium', label: 'Codex / medium',           runner: 'codex',  model: 'gpt-5.4',           effort: 'medium' },
+  { id: 'codex-high',   label: 'Codex / high',             runner: 'codex',  model: 'gpt-5.5',           effort: 'high'   },
+  { id: 'codex-medium', label: 'Codex / medium',           runner: 'codex',  model: 'gpt-5.5',           effort: 'medium' },
 ];
 
 export const PHASE_DEFAULTS: PhasePresetMap = {
-  1: 'opus-1m-high',
+  1: 'opus-1m-xhigh',
   2: 'codex-high',
   3: 'sonnet-high',
   4: 'codex-high',
@@ -96,7 +96,7 @@ export const PHASE_ARTIFACT_FILES: Record<number, string[]> = {
 export const LIGHT_REQUIRED_PHASE_KEYS = ['1', '2', '5', '7'] as const;
 
 export const LIGHT_PHASE_DEFAULTS: PhasePresetMap = {
-  1: 'opus-1m-high',
+  1: 'opus-1m-xhigh',
   2: 'codex-high',
   5: 'sonnet-high',
   7: 'codex-high',

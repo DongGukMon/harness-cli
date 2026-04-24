@@ -759,9 +759,9 @@ describe('runInteractivePhase — Claude dispatch command shape', () => {
 
     expect(command).toContain('--dangerously-skip-permissions');
     expect(command).toContain('--effort');
-    // Phase 1 default preset is opus-high (effort=high). Pin the exact effort
+    // Phase 1 default preset is opus-1m-xhigh (effort=xhigh). Pin the exact effort
     // here so a future preset change trips this test on purpose.
-    expect(command).toContain('--effort high');
+    expect(command).toContain('--effort xhigh');
   });
 });
 

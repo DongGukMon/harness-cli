@@ -91,7 +91,7 @@ export function migrateState(raw: any, cwd?: string): HarnessState {
   // when the catalog re-introduced a real `opus-max` preset pinned to Opus 4.7
   // effort=`max`. Any state.json from before PR #22 that stored `opus-max`
   // now resolves to that real max-effort preset (i.e. resume cost may increase
-  // vs. the PR #22 intent of xHigh). Users who want the old xHigh behavior on
+  // vs. the PR #22 intent of xhigh). Users who want the old xhigh behavior on
   // resume must explicitly re-select `opus-xhigh` via `promptModelConfig`.
   for (const phase of REQUIRED_PHASE_KEYS) {
     const presetId = raw.phasePresets[phase];
