@@ -6,7 +6,10 @@ import type { HarnessState, GatePhaseResult } from '../../src/types.js';
 import { writeState, readState, createInitialState } from '../../src/state.js';
 
 // Mocks: Codex runner returns fixed results; assembler returns fixed strings
-vi.mock('../../src/runners/codex.js', () => ({ runCodexGate: vi.fn() }));
+vi.mock('../../src/runners/codex.js', () => ({
+  runCodexGate: vi.fn(),
+  spawnCodexInPane: vi.fn().mockResolvedValue({ pid: null }),
+}));
 vi.mock('../../src/runners/claude.js', () => ({ runClaudeGate: vi.fn() }));
 vi.mock('../../src/context/assembler.js', async (importOriginal) => {
   const actual = await importOriginal<any>();
@@ -16,27 +19,34 @@ vi.mock('../../src/context/assembler.js', async (importOriginal) => {
     assembleGateResumePrompt: vi.fn(() => 'RESUME_PROMPT'),
   };
 });
+vi.mock('../../src/runners/codex-usage.js', () => ({
+  readCodexSessionUsage: vi.fn().mockResolvedValue(null),
+}));
+vi.mock('../../src/phases/interactive.js', () => ({
+  waitForPhaseCompletion: vi.fn().mockResolvedValue({ status: 'completed' }),
+}));
 
 import { runGatePhase } from '../../src/phases/gate.js';
-import { runCodexGate } from '../../src/runners/codex.js';
+import { spawnCodexInPane } from '../../src/runners/codex.js';
+import { readCodexSessionUsage } from '../../src/runners/codex-usage.js';
+import { waitForPhaseCompletion } from '../../src/phases/interactive.js';
 
-function verdictResult(overrides: Partial<GatePhaseResult> = {}): GatePhaseResult {
-  return {
-    type: 'verdict',
-    verdict: 'APPROVE',
-    comments: '',
-    rawOutput: 'session id: aa-11\n## Verdict\nAPPROVE\n',
-    runner: 'codex',
-    codexSessionId: 'aa-11',
-    sourcePreset: { model: 'gpt-5.5', effort: 'high' },
-    resumedFrom: null,
-    resumeFallback: false,
-    ...overrides,
-  } as GatePhaseResult;
+function writeVerdictFile(dir: string, phase: number, verdict: 'APPROVE' | 'REJECT', comments = ''): void {
+  fs.writeFileSync(
+    path.join(dir, `gate-${phase}-verdict.md`),
+    `## Verdict\n${verdict}\n\n## Comments\n${comments}\n\n## Summary\nOk.\n`,
+  );
 }
 
 let runDir: string;
-beforeEach(() => { runDir = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-int-')); });
+beforeEach(() => {
+  runDir = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-int-'));
+  vi.clearAllMocks();
+  // Reset default mocks
+  vi.mocked(waitForPhaseCompletion).mockResolvedValue({ status: 'completed' });
+  vi.mocked(readCodexSessionUsage).mockResolvedValue(null);
+  vi.mocked(spawnCodexInPane).mockResolvedValue({ pid: null });
+});
 afterEach(() => { vi.clearAllMocks(); });
 
 // §5 end-to-end crash recovery: state with saved sessionId persists via writeState,
@@ -44,6 +54,8 @@ afterEach(() => { vi.clearAllMocks(); });
 describe('Integration §5: persisted session drives resume dispatch after state round-trip', () => {
   it('writeState → readState preserves session; subsequent runGatePhase resumes with saved id', async () => {
     const state = createInitialState('run-int-1', 'task', 'basecommit', false);
+    state.currentPhase = 2;
+    state.phaseAttemptId['2'] = 'attempt-int-1';
     state.phaseCodexSessions['2'] = {
       sessionId: 'persisted-aa',
       runner: 'codex',
@@ -51,7 +63,7 @@ describe('Integration §5: persisted session drives resume dispatch after state 
       effort: 'high',
       lastOutcome: 'reject',
     };
-    // artifacts 경로를 실제 존재하는 가짜 파일로 맞춤 — assembler가 mock이라 내용 무관
+    // artifacts paths — assembler is mocked so content doesn't matter
     state.artifacts = {
       spec: 'spec.md', plan: 'plan.md', evalReport: 'eval.md',
       decisionLog: 'd.md', checklist: 'c.json',
@@ -61,14 +73,21 @@ describe('Integration §5: persisted session drives resume dispatch after state 
     const restored = readState(runDir);
     expect(restored).not.toBeNull();
     expect(restored!.phaseCodexSessions['2']?.sessionId).toBe('persisted-aa');
+    restored!.phaseAttemptId['2'] = 'attempt-int-1';
 
-    vi.mocked(runCodexGate).mockResolvedValueOnce(
-      verdictResult({ resumedFrom: 'persisted-aa', codexSessionId: 'persisted-aa' }),
-    );
+    vi.mocked(spawnCodexInPane).mockImplementationOnce(async () => {
+      writeVerdictFile(runDir, 2, 'APPROVE', '');
+      return { pid: null };
+    });
+    vi.mocked(readCodexSessionUsage).mockResolvedValueOnce({
+      sessionId: 'persisted-aa',
+      tokens: { input: 10, output: 5, cacheRead: 0, cacheCreate: 0, total: 15 },
+    });
 
     await runGatePhase(2, restored!, runDir, runDir, runDir);
-    // 6th argument (resumeSessionId) should carry the persisted id
-    expect(vi.mocked(runCodexGate).mock.calls[0][5]).toBe('persisted-aa');
+    const spawnCall = vi.mocked(spawnCodexInPane).mock.calls[0][0];
+    expect(spawnCall.mode).toBe('resume');
+    expect(spawnCall.sessionId).toBe('persisted-aa');
   });
 });
 
@@ -78,41 +97,62 @@ describe('Integration §5: persisted session drives resume dispatch after state 
 describe('Integration Task 8: reject-loop reuses session across retries', () => {
   it('first call saves sessionId fresh; second call passes that id back as resume', async () => {
     const state = createInitialState('run-int-loop', 'task', 'base', false);
-    state.currentPhase = 2; // required for session-persist stillActivePhase guard
+    state.currentPhase = 2;
+    state.phaseAttemptId['2'] = 'attempt-loop-1';
     state.artifacts = { spec: 'spec.md', plan: 'plan.md', evalReport: 'eval.md', decisionLog: 'd.md', checklist: 'c.json' };
     writeState(runDir, state);
 
-    vi.mocked(runCodexGate)
-      .mockResolvedValueOnce(verdictResult({
-        verdict: 'REJECT', codexSessionId: 'loop-sid', resumedFrom: null, resumeFallback: false,
-      }))
-      .mockResolvedValueOnce(verdictResult({
-        verdict: 'APPROVE', codexSessionId: 'loop-sid', resumedFrom: 'loop-sid', resumeFallback: false,
-      }));
+    // First call: fresh → saves loop-sid
+    vi.mocked(spawnCodexInPane).mockImplementationOnce(async () => {
+      writeVerdictFile(runDir, 2, 'REJECT', 'P1 issue');
+      return { pid: null };
+    });
+    vi.mocked(readCodexSessionUsage).mockResolvedValueOnce({
+      sessionId: 'loop-sid',
+      tokens: { input: 10, output: 5, cacheRead: 0, cacheCreate: 0, total: 15 },
+    });
 
     await runGatePhase(2, state, runDir, runDir, runDir);
     expect(state.phaseCodexSessions['2']?.sessionId).toBe('loop-sid');
-    expect(vi.mocked(runCodexGate).mock.calls[0][5]).toBeNull();
+    expect(vi.mocked(spawnCodexInPane).mock.calls[0][0].mode).toBe('fresh');
+
+    // Second call: should resume with loop-sid
+    state.phaseAttemptId['2'] = 'attempt-loop-2';
+    vi.mocked(spawnCodexInPane).mockImplementationOnce(async () => {
+      writeVerdictFile(runDir, 2, 'APPROVE', '');
+      return { pid: null };
+    });
+    vi.mocked(readCodexSessionUsage).mockResolvedValueOnce({
+      sessionId: 'loop-sid',
+      tokens: { input: 10, output: 5, cacheRead: 0, cacheCreate: 0, total: 15 },
+    });
 
     await runGatePhase(2, state, runDir, runDir, runDir);
-    expect(vi.mocked(runCodexGate).mock.calls[1][5]).toBe('loop-sid');
+    expect(vi.mocked(spawnCodexInPane).mock.calls[1][0].mode).toBe('resume');
+    expect(vi.mocked(spawnCodexInPane).mock.calls[1][0].sessionId).toBe('loop-sid');
   });
 });
 
 describe('Integration Task 8: session_missing fallback updates stored session id', () => {
-  it('on fallback with new fresh id, state.phaseCodexSessions is rewritten to the new id', async () => {
+  it('incompatible session cleared; new JSONL session id persisted (replaces session_missing fallback)', async () => {
     const state = createInitialState('run-int-fallback', 'task', 'base', false);
-    state.currentPhase = 2; // required for session-persist stillActivePhase guard
+    state.currentPhase = 2;
+    state.phaseAttemptId['2'] = 'attempt-fallback-1';
     state.artifacts = { spec: 'spec.md', plan: 'plan.md', evalReport: 'eval.md', decisionLog: 'd.md', checklist: 'c.json' };
+    // dead-sid is incompatible (different model)
     state.phaseCodexSessions['2'] = {
-      sessionId: 'dead-sid', runner: 'codex', model: 'gpt-5.5', effort: 'high', lastOutcome: 'reject',
+      sessionId: 'dead-sid', runner: 'codex', model: 'wrong-model', effort: 'high', lastOutcome: 'reject',
     };
     writeState(runDir, state);
 
-    vi.mocked(runCodexGate).mockResolvedValueOnce(verdictResult({
-      verdict: 'APPROVE', codexSessionId: 'fresh-sid',
-      resumedFrom: 'dead-sid', resumeFallback: true,
-    }));
+    vi.mocked(spawnCodexInPane).mockImplementationOnce(async () => {
+      writeVerdictFile(runDir, 2, 'APPROVE', '');
+      return { pid: null };
+    });
+    vi.mocked(readCodexSessionUsage).mockResolvedValueOnce({
+      sessionId: 'fresh-sid',
+      tokens: { input: 10, output: 5, cacheRead: 0, cacheCreate: 0, total: 15 },
+    });
 
     await runGatePhase(2, state, runDir, runDir, runDir);
     expect(state.phaseCodexSessions['2']?.sessionId).toBe('fresh-sid');
