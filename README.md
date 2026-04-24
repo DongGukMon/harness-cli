@@ -71,6 +71,8 @@ Harness runs the workflow inside tmux with a split-pane control surface:
 - **control pane**: current phase, retries, gate/verify output, escalation menus
 - **workspace pane**: the active interactive agent session
 
+Gate phases (2, 4, 7) run Codex CLI as an interactive TUI in the workspace pane (the same pane used by interactive phases). Codex writes its verdict to `<runDir>/gate-N-verdict.md` and harness detects completion via `<runDir>/phase-N.done`. While a gate is running, the footer shows `attach: tmux attach -t <session>` so you can watch the review live.
+
 Behavior depends on where you launch it:
 - **outside tmux**: creates a dedicated session named `harness-<runId>`
 - **inside tmux**: reuses the current tmux session and creates a `harness-ctrl` window

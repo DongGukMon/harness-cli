@@ -71,6 +71,8 @@ Harness는 tmux 안에 **pane 기반 control surface**를 만듭니다:
 - **control pane**: 현재 phase, retry, gate/verify 출력, escalation 메뉴
 - **workspace pane**: 현재 interactive agent 세션
 
+Gate phase(2, 4, 7)는 interactive phase와 동일한 workspace pane에서 Codex CLI를 대화형 TUI로 실행합니다. Codex는 판정 결과를 `<runDir>/gate-N-verdict.md`에 기록하고, harness는 `<runDir>/phase-N.done`으로 완료를 감지합니다. gate 실행 중에는 footer에 `attach: tmux attach -t <session>`이 표시되므로 실시간으로 리뷰를 확인할 수 있습니다.
+
 실행 위치에 따라 동작이 달라집니다:
 - **tmux 밖에서 시작**: `harness-<runId>` 이름의 dedicated session 생성
 - **tmux 안에서 시작**: 현재 tmux session을 재사용하고 `harness-ctrl` window 생성

@@ -181,6 +181,8 @@ codex exec --model <model> -c model_reasoning_effort="<effort>" -
 
 gate phase를 Claude preset으로 강제로 매핑한 경우에만 `claude --print` gate subprocess를 사용합니다.
 
+Gate phase(2, 4, 7)는 interactive phase와 **동일한 tmux workspace pane**에서 Codex CLI를 대화형 TUI로 실행합니다. Codex는 `<runDir>/gate-N-verdict.md`에 판정 결과를 기록하고, harness는 `<runDir>/phase-N.done` sentinel 파일로 완료를 감지합니다. gate 실행 중에는 control pane footer에 `attach: tmux attach -t <session>`이 표시되므로 workspace pane으로 이동해 실시간으로 리뷰 진행 상황을 확인할 수 있습니다.
+
 ### Codex isolation
 
 기본적으로 Codex subprocess는 `<runDir>/codex-home/` 안에서 실행되고, 그 안에는 `auth.json`만 symlink됩니다.
