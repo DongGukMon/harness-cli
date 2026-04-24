@@ -1699,3 +1699,7 @@ See spec `## Acceptance` criteria:
 - E5: `pnpm tsc --noEmit`, `pnpm vitest run`, `pnpm build` all green
 - E6: README/HOW-IT-WORKS gate section updated
 - E7: `tests/phases/gate-resume.test.ts` all green
+
+## Deferred
+
+- defer: E1/E3 live tmux capture evidence in eval report — requires running a real harness session with tmux attached; cannot be automated in CI. Reviewer should treat test-suite + grep coverage as the verifiable proxy for now.
