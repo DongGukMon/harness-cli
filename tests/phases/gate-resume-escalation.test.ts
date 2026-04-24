@@ -131,3 +131,38 @@ describe('resume gate escalation replay', () => {
     expect(resumedArchive).not.toContain('# Gate 2 Feedback\n\n## Reviewer Comments\n\n# Gate 2 Feedback');
   });
 });
+
+describe('gate escalation Continue policy', () => {
+  it('increments escalation cycle but preserves the affected Codex session for reset-notice resume', async () => {
+    const runDir = makeTmpDir('gate-continue-');
+    const state = makeState({
+      currentPhase: 4,
+      gateRetries: { '2': 0, '4': GATE_RETRY_LIMIT, '7': 0 },
+    });
+    state.phaseCodexSessions['4'] = {
+      sessionId: 'reviewer-session-4',
+      runner: 'codex',
+      model: 'gpt-5.5',
+      effort: 'high',
+      lastOutcome: 'reject',
+    };
+
+    vi.mocked(promptChoice).mockResolvedValueOnce('C');
+    await handleGateEscalation(
+      4,
+      'P1: continue with a reset notice, not a fresh session yet',
+      undefined,
+      2,
+      state,
+      runDir,
+      runDir,
+      createNoOpInputManager(),
+      new NoopLogger(),
+    );
+
+    expect(state.gateEscalationCycles?.['4']).toBe(1);
+    expect(state.phaseCodexSessions['4']?.sessionId).toBe('reviewer-session-4');
+    expect(state.pendingAction?.type).toBe('reopen_phase');
+    expect(state.gateRetries['4']).toBe(0);
+  });
+});

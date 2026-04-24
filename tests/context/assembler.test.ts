@@ -107,16 +107,17 @@ function makeFullEvalState(overrides: Partial<HarnessState> = {}): HarnessState 
 // ─── Interactive Phase Tests ───────────────────────────────────────────────
 
 describe('Phase 1 interactive prompt', () => {
-  it('includes task.md path from runId dir and phaseAttemptId sentinel instruction', () => {
+  it('includes absolute task.md and sentinel paths from runDir plus phaseAttemptId', () => {
     const state = makeState({
       phaseAttemptId: { '1': 'uuid-phase-1-attempt', '3': null, '5': null },
     });
-    const prompt = assembleInteractivePrompt(1, state, '/tmp/harness');
+    const harnessDir = '/tmp/harness';
+    const prompt = assembleInteractivePrompt(1, state, harnessDir);
 
-    // Phase 1 injects .harness/<runId>/task.md, not the raw task string
-    expect(prompt).toContain('.harness/my-run/task.md');
+    // Phase 1 injects the runDir task.md path, not the raw task string.
+    expect(prompt).toContain(path.join(harnessDir, 'my-run', 'task.md'));
+    expect(prompt).toContain(path.join(harnessDir, 'my-run', 'phase-1.done'));
     expect(prompt).toContain('uuid-phase-1-attempt');
-    expect(prompt).toContain('phase-1.done');
   });
 
   it('includes feedback path when pendingAction has feedbackPaths', () => {
@@ -346,6 +347,51 @@ describe('Gate size limits', () => {
 
     expect(typeof result).toBe('object');
     expect((result as { error: string }).error).toMatch(/Gate input too large/);
+  });
+});
+
+
+describe('assembleInteractivePrompt — absolute runDir paths', () => {
+  it('uses harnessDir/runId task and sentinel paths when harnessDir differs from cwd/.harness', () => {
+    const outer = makeTmpDir();
+    const cwd = path.join(outer, 'child-workspace');
+    const harnessDir = path.join(outer, '.harness');
+    fs.mkdirSync(cwd, { recursive: true });
+
+    const phases: Array<{ phase: 1 | 3 | 5; flow?: 'full' | 'light'; attempt: string }> = [
+      { phase: 1, flow: 'full', attempt: 'attempt-p1-full' },
+      { phase: 1, flow: 'light', attempt: 'attempt-p1-light' },
+      { phase: 3, flow: 'full', attempt: 'attempt-p3-full' },
+      { phase: 5, flow: 'full', attempt: 'attempt-p5-full' },
+      { phase: 5, flow: 'light', attempt: 'attempt-p5-light' },
+    ];
+
+    for (const { phase, flow, attempt } of phases) {
+      const state = makeState({
+        flow: flow ?? 'full',
+        phaseAttemptId: { '1': null, '3': null, '5': null, [String(phase)]: attempt },
+      });
+      const prompt = assembleInteractivePrompt(phase, state, harnessDir, cwd);
+      const expectedRunDir = path.join(harnessDir, state.runId);
+
+      if (phase === 1) {
+        expect(prompt).toContain(path.join(expectedRunDir, 'task.md'));
+      }
+      expect(prompt).toContain(path.join(expectedRunDir, `phase-${phase}.done`));
+      expect(prompt).not.toContain('`.harness/my-run/phase-');
+    }
+  });
+
+  it('normalizes relative harnessDir to absolute prompt paths', () => {
+    const state = makeState({
+      phaseAttemptId: { '1': 'attempt-relative-root', '3': null, '5': null },
+    });
+    const prompt = assembleInteractivePrompt(1, state, 'relative-root/.harness', process.cwd());
+    const expectedRunDir = path.resolve('relative-root/.harness', state.runId);
+
+    expect(prompt).toContain(path.join(expectedRunDir, 'task.md'));
+    expect(prompt).toContain(path.join(expectedRunDir, 'phase-1.done'));
+    expect(prompt).not.toContain('`relative-root/.harness');
   });
 });
 

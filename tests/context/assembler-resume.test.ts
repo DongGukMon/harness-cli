@@ -168,3 +168,20 @@ describe('buildResumeSections — Phase 7 flow-aware (ADR-12)', () => {
     expect(prompt).toContain('<plan>\n');
   });
 });
+
+
+describe('assembleGateResumePrompt — escalation reset notice', () => {
+  it('subordinates prior feedback after an escalation Continue cycle', () => {
+    const cwd = 'tests/context/fixtures';
+    const state = makeState({ gateEscalationCycles: { '4': 1 } });
+    const res = assembleGateResumePrompt(4, state, cwd, 'reject', 'P1: old concern', '/tmp/harness/r1');
+
+    expect(typeof res).toBe('string');
+    if (typeof res === 'string') {
+      expect(res).toContain('Escalation cycle 1');
+      expect(res).toContain('reference only, not an anchor');
+      expect(res).toContain('Re-read the current artifacts from scratch');
+      expect(res).toContain('P1: old concern');
+    }
+  });
+});
