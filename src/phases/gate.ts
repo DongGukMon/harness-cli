@@ -140,6 +140,7 @@ async function _persistSidecars(
   promptBytes: number,
   durationMs: number,
   preset: ModelPreset,
+  codexSessionIdOverride?: string,
 ): Promise<void> {
   const rawPath = path.join(runDir, `gate-${phase}-raw.txt`);
   const resultPath = path.join(runDir, `gate-${phase}-result.json`);
@@ -147,6 +148,7 @@ async function _persistSidecars(
 
   const stdout = result.type === 'verdict' ? result.rawOutput : (result.rawOutput ?? '');
   const exitCode = result.type === 'verdict' ? 0 : 1;
+  const effectiveSessionId = codexSessionIdOverride ?? result.codexSessionId;
   const gateResult: GateResult = {
     exitCode,
     timestamp: Date.now(),
@@ -154,7 +156,7 @@ async function _persistSidecars(
     promptBytes,
     durationMs,
     ...(result.tokensTotal !== undefined ? { tokensTotal: result.tokensTotal } : {}),
-    ...(result.codexSessionId !== undefined ? { codexSessionId: result.codexSessionId } : {}),
+    ...(effectiveSessionId !== undefined ? { codexSessionId: effectiveSessionId } : {}),
     ...(runner === 'codex' ? { sourcePreset: { model: preset.model, effort: preset.effort } } : {}),
   };
   try {
@@ -381,6 +383,7 @@ export async function runGatePhaseInteractive(
   // Step 11: Collect codexTokens from JSONL
   const effectiveCodexHome = codexHome ?? process.env.CODEX_HOME ?? path.join(os.homedir(), '.codex');
   let codexTokens: ClaudeTokens | null | undefined;
+  let discoveredSessionId: string | undefined = gateResult.codexSessionId;
   try {
     const usageResult = await readCodexSessionUsage({
       sessionId: resumeSessionId,
@@ -390,7 +393,7 @@ export async function runGatePhaseInteractive(
     if (usageResult !== null) {
       codexTokens = usageResult.tokens;
       if (!resumeSessionId && usageResult.sessionId) {
-        (gateResult as any).codexSessionId = usageResult.sessionId;
+        discoveredSessionId = usageResult.sessionId;
       }
     } else {
       codexTokens = null;
@@ -401,9 +404,8 @@ export async function runGatePhaseInteractive(
 
   // Step 12: Persist session + sidecars
   if (state.currentPhase === phase) {
-    const codexSessionId = (gateResult as any).codexSessionId as string | undefined;
-    _persistCodexSession(state, phase, gateResult, resumeSessionId, codexSessionId, preset, runDir);
-    await _persistSidecars(gateResult, runDir, phase, 'codex', promptBytes, durationMs, preset);
+    _persistCodexSession(state, phase, gateResult, resumeSessionId, discoveredSessionId, preset, runDir);
+    await _persistSidecars(gateResult, runDir, phase, 'codex', promptBytes, durationMs, preset, discoveredSessionId);
   }
 
   return { ...gateResult, codexTokens };
