@@ -30,6 +30,7 @@ vi.mock('../../src/process.js', () => ({
 vi.mock('../../src/tmux.js', () => ({
   sendKeysToPane: vi.fn(),
   pollForPidFile: vi.fn().mockResolvedValue(12345),
+  respawnPane: vi.fn(),
 }));
 vi.mock('../../src/state.js', () => ({
   writeState: vi.fn(),

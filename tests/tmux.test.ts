@@ -9,7 +9,7 @@ vi.mock('child_process', async (importActual) => {
 });
 
 import { execSync } from 'child_process';
-import { createSession, sessionExists, createWindow, killWindow, killSession, sendKeys, isInsideTmux, getCurrentSessionName, getActiveWindowId, windowExists, selectWindow, splitPane, sendKeysToPane, selectPane, paneExists, getDefaultPaneId, pollForPidFile } from '../src/tmux.js';
+import { createSession, sessionExists, createWindow, killWindow, killSession, sendKeys, isInsideTmux, getCurrentSessionName, getActiveWindowId, windowExists, selectWindow, splitPane, sendKeysToPane, selectPane, paneExists, getDefaultPaneId, pollForPidFile, respawnPane } from '../src/tmux.js';
 
 describe('tmux utilities', () => {
   beforeEach(() => {
@@ -166,6 +166,17 @@ describe('tmux utilities', () => {
     expect(cmd).toContain('send-keys');
     expect(cmd).toContain('echo hello');
     expect(cmd).toContain('Enter');
+  });
+
+  it('respawnPane uses tmux respawn-pane -k with cwd and pane ID', () => {
+    respawnPane('sess', '%7', '/tmp/repo');
+    const cmd = vi.mocked(execSync).mock.calls[0][0] as string;
+    expect(cmd).toContain('respawn-pane');
+    expect(cmd).toContain('-k');
+    expect(cmd).toContain('%7');
+    expect(cmd).toContain('/tmp/repo');
+    // No shell-command argument — defaults to user shell (preserves pane).
+    expect(cmd).not.toMatch(/sh\s+-c/);
   });
 
   it('selectPane is best-effort (no throw on error)', () => {
