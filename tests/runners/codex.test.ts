@@ -164,8 +164,9 @@ describe('spawnCodexInteractiveInPane — pane injection', () => {
     expect(cmd).not.toMatch(/\bcodex\s+exec\b/);
     expect(cmd).not.toMatch(/--skip-git-repo-check/);
     expect(cmd).toContain('CODEX_HOME="/iso/interactive"');
-    expect(cmd).toContain('--sandbox workspace-write');
-    expect(cmd).toContain('--full-auto');
+    expect(cmd).toContain('--dangerously-bypass-approvals-and-sandbox');
+    expect(cmd).not.toMatch(/--sandbox\s+workspace-write/);
+    expect(cmd).not.toMatch(/--full-auto/);
     // Prompt as cat-substitution positional arg, not stdin redirect.
     expect(cmd).toContain(`"$(cat "${promptPath}")"`);
     expect(cmd).not.toMatch(/<\s+"[^"]*p\.txt"/);
@@ -176,7 +177,7 @@ describe('spawnCodexInteractiveInPane — pane injection', () => {
     fs.rmSync(tmp, { recursive: true, force: true });
   });
 
-  it('uses danger-full-access sandbox for phase 5', async () => {
+  it('uses --dangerously-bypass-approvals-and-sandbox for phase 5', async () => {
     const fs = await import('fs');
     const os = await import('os');
     const path = await import('path');
@@ -209,7 +210,9 @@ describe('spawnCodexInteractiveInPane — pane injection', () => {
     const cmd: string = vi.mocked(sendKeysToPane).mock.calls.at(-1)![2];
     expect(cmd).toMatch(/\bcodex\s+--model\b/);
     expect(cmd).not.toMatch(/\bcodex\s+exec\b/);
-    expect(cmd).toContain('--sandbox danger-full-access');
+    expect(cmd).toContain('--dangerously-bypass-approvals-and-sandbox');
+    expect(cmd).not.toMatch(/--sandbox\s+/);
+    expect(cmd).not.toMatch(/--full-auto/);
     expect(cmd).not.toContain('CODEX_HOME');
 
     fs.rmSync(tmp, { recursive: true, force: true });
@@ -423,9 +426,11 @@ describe('spawnCodexInPane — fresh', () => {
     expect(wrappedCmd).toMatch(/\bcodex\s+--model\b/);
     expect(wrappedCmd).not.toMatch(/\bcodex\s+exec\b/);
     expect(wrappedCmd).not.toMatch(/--skip-git-repo-check/);
-    // Sandbox + auto-approval still required so codex can write verdict + sentinel.
-    expect(wrappedCmd).toMatch(/-s\s+workspace-write/);
-    expect(wrappedCmd).toMatch(/--full-auto/);
+    // Yolo flag (sandbox + approval bypass) so codex can write verdict +
+    // sentinel and reach across worktrees without prompting.
+    expect(wrappedCmd).toMatch(/--dangerously-bypass-approvals-and-sandbox/);
+    expect(wrappedCmd).not.toMatch(/-s\s+workspace-write/);
+    expect(wrappedCmd).not.toMatch(/--full-auto/);
     // Prompt is injected via shell command substitution at execution time so
     // tmux send-keys carries only the short wrapper, not the 40+ KB prompt.
     expect(wrappedCmd).toContain(`"$(cat "${promptFile}")"`);
@@ -486,13 +491,14 @@ describe('spawnCodexInPane — resume', () => {
     const wrappedCmd = cmds.find(c => c.includes('resume'));
     expect(wrappedCmd).toBeDefined();
     // Top-level `codex resume <id>`, NOT `codex exec resume`. Top-level resume
-    // accepts -s and --full-auto (unlike exec resume), so fresh and resume
-    // share the same flag set.
+    // accepts the yolo flag (unlike exec resume), so fresh and resume share
+    // the same flag set.
     expect(wrappedCmd).toMatch(/\bcodex\s+resume\s+sess-abc-123\b/);
     expect(wrappedCmd).not.toMatch(/\bcodex\s+exec\s+resume\b/);
     expect(wrappedCmd).not.toMatch(/--skip-git-repo-check/);
-    expect(wrappedCmd).toMatch(/-s\s+workspace-write/);
-    expect(wrappedCmd).toMatch(/--full-auto/);
+    expect(wrappedCmd).toMatch(/--dangerously-bypass-approvals-and-sandbox/);
+    expect(wrappedCmd).not.toMatch(/-s\s+workspace-write/);
+    expect(wrappedCmd).not.toMatch(/--full-auto/);
     expect(wrappedCmd).toContain(`"$(cat "${promptFile}")"`);
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });

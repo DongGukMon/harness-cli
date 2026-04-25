@@ -170,21 +170,19 @@ claude --session-id <attemptId> --model <model> --effort <effort> @<prompt-file>
 선택된 preset의 runner가 `codex`이면 harness는 workspace pane에 top-level `codex` TUI를 띄웁니다. Claude와 동일한 UX(입력 라인 + reasoning stream 가시화 + 실시간 개입 가능):
 
 ```bash
-codex --model <model> -c model_reasoning_effort="<effort>" --sandbox <level> --full-auto "$(cat <prompt-file>)"
+codex --model <model> -c model_reasoning_effort="<effort>" --dangerously-bypass-approvals-and-sandbox "$(cat <prompt-file>)"
 ```
 
 프롬프트는 셸 command-substitution(`$(cat ...)`)을 통해 실행 시점에 positional CLI argument로 주입됩니다. tmux send-keys가 운반하는 건 짧은 wrapper뿐이라 프롬프트 크기가 수십 KB가 되어도 문제없습니다. agent 자신이 phase 프롬프트의 지시에 따라 tool use로 `phase-N.done` sentinel을 작성하며, 이는 Claude의 동작 패턴과 일치합니다.
 
-sandbox 레벨:
-- phase 1, 3 → `workspace-write`
-- phase 5 → `danger-full-access`
+승인/샌드박스: 모든 Codex interactive phase(1/3/5)에 `--dangerously-bypass-approvals-and-sandbox`(yolo)를 적용합니다. 신뢰 경계는 harness 호출 시점이며, codex는 샌드박스/승인 프롬프트 없이 실행되므로 워크트리 간 쓰기·git 조작이 자율 루프를 yes/no 프롬프트로 막지 않습니다.
 
 ### Gate phase
 
 gate phase도 preset 기반입니다. Codex gate는 interactive phase와 **동일한 tmux workspace pane**에서 top-level `codex` TUI로 실행됩니다.
 
 ```bash
-codex --model <model> -c model_reasoning_effort="<effort>" -s workspace-write --full-auto "$(cat <prompt-file>)"
+codex --model <model> -c model_reasoning_effort="<effort>" --dangerously-bypass-approvals-and-sandbox "$(cat <prompt-file>)"
 ```
 
 reopen 시에는 동일한 플래그로 `codex resume <session_id>`를 사용합니다. gate phase를 Claude preset으로 강제로 매핑한 경우에만 `claude --print` gate subprocess를 사용합니다.
