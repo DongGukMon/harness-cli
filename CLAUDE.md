@@ -65,7 +65,7 @@ pnpm build          # tsc + scripts/copy-assets.mjs (dist 생성)
 |---|---|
 | `session_start` | `task`, `autoMode`, `baseCommit`, `harnessVersion` |
 | `phase_start` | `phase`, `attemptId`, **`preset: { id, runner, model, effort }`** (PR #11 — phase 6 제외) |
-| `phase_end` | `phase`, `attemptId`, `status`, `durationMs`, **`claudeTokens?: { input, output, cacheRead, cacheCreate, total } \| null`** (PR #16 — interactive 1/3/5 + `preset.runner === 'claude'` 실자 페이즈만; codex/redirect-by-signal 분기는 필드 자체 생략) |
+| `phase_end` | `phase`, `attemptId`, `status`, `durationMs`, **`claudeTokens?: { input, output, cacheRead, cacheCreate, total } \| null`** (PR #16 — interactive 1/3/5 + `preset.runner === 'claude'` 실자 페이즈만; codex/redirect-by-signal 분기는 필드 자체 생략), **`uncommittedRepos?: Array<{ path: string; count: number }>`** (#84 — Phase 5 + codex runner + sentinel fresh + dirty tree에서만 발현; 그 외 분기는 필드 자체 생략) |
 | `gate_verdict` | `phase`, `retryIndex`, `runner`, `verdict`, `durationMs`, `tokensTotal`, `promptBytes`, `codexSessionId`, `resumedFrom`, `resumeFallback`, `preset` |
 | `gate_retry` | `phase`, `retryIndex`, `retryCount`, `retryLimit`, `feedbackPath`, `feedbackBytes`, `feedbackPreview` |
 | `gate_error` | `preset` (PR #11) |

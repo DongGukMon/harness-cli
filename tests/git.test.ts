@@ -14,6 +14,7 @@ import {
   getStagedFiles,
   generateRunId,
   isPathGitignored,
+  detectUncommittedChanges,
 } from '../src/git.js';
 
 describe('getGitRoot', () => {
@@ -256,6 +257,53 @@ describe('isPathGitignored', () => {
       expect(isPathGitignored('anything.md', tmpDir)).toBe(false);
     } finally {
       rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('detectUncommittedChanges', () => {
+  let repo: { path: string; cleanup: () => void };
+
+  beforeEach(() => {
+    repo = createTestRepo();
+  });
+
+  afterEach(() => {
+    repo.cleanup();
+  });
+
+  it('returns [] for a clean repo', () => {
+    expect(detectUncommittedChanges([repo.path])).toEqual([]);
+  });
+
+  it('reports dirty repo with line count', () => {
+    writeFileSync(join(repo.path, 'a.txt'), 'a');
+    writeFileSync(join(repo.path, 'b.txt'), 'b');
+    const result = detectUncommittedChanges([repo.path]);
+    expect(result).toHaveLength(1);
+    expect(result[0].path).toBe(repo.path);
+    expect(result[0].count).toBe(2);
+  });
+
+  it('returns [] for a non-git path without throwing', () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), 'no-git-uncommit-'));
+    try {
+      expect(detectUncommittedChanges([tmpDir])).toEqual([]);
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it('reports each dirty repo separately when given multiple paths', () => {
+    const repo2 = createTestRepo();
+    try {
+      writeFileSync(join(repo.path, 'x.txt'), 'x');
+      writeFileSync(join(repo2.path, 'y.txt'), 'y');
+      const result = detectUncommittedChanges([repo.path, repo2.path]);
+      expect(result).toHaveLength(2);
+      expect(result.map(r => r.count)).toEqual([1, 1]);
+    } finally {
+      repo2.cleanup();
     }
   });
 });

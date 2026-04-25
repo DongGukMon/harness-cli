@@ -55,6 +55,30 @@ export function isWorkingTreeClean(cwd?: string): boolean {
   }
 }
 
+export interface UncommittedRepo {
+  path: string;
+  count: number;
+}
+
+// Returns an entry for each repoPath whose `git status --porcelain` is non-empty.
+// Non-git paths and exec failures are silently treated as clean (entry omitted).
+export function detectUncommittedChanges(repoPaths: string[]): UncommittedRepo[] {
+  const out: UncommittedRepo[] = [];
+  for (const p of repoPaths) {
+    try {
+      const raw = exec('git status --porcelain', p);
+      if (raw === '') continue;
+      const count = raw.split('\n').filter((line) => line.length > 0).length;
+      if (count > 0) {
+        out.push({ path: p, count });
+      }
+    } catch {
+      // Non-git path or git failure → treat as clean.
+    }
+  }
+  return out;
+}
+
 // Returns true if any files are staged.
 export function hasStagedChanges(cwd?: string): boolean {
   try {

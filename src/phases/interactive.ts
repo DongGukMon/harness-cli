@@ -5,7 +5,7 @@ import chokidar from 'chokidar';
 import type { HarnessState, InteractivePhase, Artifacts } from '../types.js';
 import { getPhaseArtifactFiles, getPresetById } from '../config.js';
 import { writeState, syncLegacyMirror } from '../state.js';
-import { getHead } from '../git.js';
+import { getHead, detectUncommittedChanges, type UncommittedRepo } from '../git.js';
 import { isPidAlive } from '../process.js';
 import { assembleInteractivePrompt } from '../context/assembler.js';
 import { runClaudeInteractive } from '../runners/claude.js';
@@ -38,6 +38,27 @@ function specHasValidComplexity(specBody: string): boolean {
 
 export interface InteractiveResult {
   status: 'completed' | 'failed';
+  /**
+   * Populated by the Codex P5 branch when (a) result.status === 'failed',
+   * (b) the sentinel is fresh (Codex declared completion), and (c) the
+   * working tree is dirty in any tracked repo. See issue #84.
+   */
+  uncommittedRepos?: UncommittedRepo[];
+}
+
+function formatUncommittedWarn(dirty: UncommittedRepo[]): string {
+  const lines = dirty.map((d) => `    ${d.path} — ${d.count} files`);
+  return [
+    '',
+    '⚠️  Phase 5 failed: Codex completed (sentinel fresh) but left uncommitted changes:',
+    ...lines,
+    '',
+    '  Resolve by:',
+    '    • Commit the changes manually, then Resume; or',
+    '    • Re-run with a Claude preset for phase 5 (e.g. claude-sonnet-default).',
+    '',
+    '',
+  ].join('\n');
 }
 
 /**
@@ -301,9 +322,25 @@ export async function runInteractivePhase(
       sentinelPath,
     });
 
-    const result = await waitForPhaseCompletion(
+    const result: InteractiveResult = await waitForPhaseCompletion(
       sentinelPath, attemptId, codexPid, phase, updatedState, cwd, runDir,
     );
+
+    // Issue #84 — when Phase 5 fails under a Codex preset and Codex itself
+    // declared completion (fresh sentinel) but the working tree is dirty in
+    // any tracked repo, surface that exact state so the operator can commit
+    // manually or switch the P5 preset to a Claude variant.
+    if (
+      phase === 5 &&
+      result.status === 'failed' &&
+      checkSentinelFreshness(sentinelPath, attemptId) === 'fresh'
+    ) {
+      const dirty = detectUncommittedChanges(updatedState.trackedRepos.map((r) => r.path));
+      if (dirty.length > 0) {
+        process.stderr.write(formatUncommittedWarn(dirty));
+        result.uncommittedRepos = dirty;
+      }
+    }
 
     try { clearLockChild(harnessDir); } catch { /* best-effort */ }
     updatedState.lastWorkspacePid = null;
