@@ -343,9 +343,14 @@ export async function runInteractivePhase(
     }
 
     try { clearLockChild(harnessDir); } catch { /* best-effort */ }
-    updatedState.lastWorkspacePid = null;
-    updatedState.lastWorkspacePidStartTime = null;
-    writeState(runDir, updatedState);
+    // NOTE: lastWorkspacePid is intentionally NOT cleared here. PR #85
+    // switched the Codex runner to a TUI that stays in REPL mode after
+    // writing the sentinel (it does NOT auto-exit like the prior `codex
+    // exec`). Clearing the PID here would orphan the still-live process
+    // from harness-exit cleanup. The next phase's runner calls respawnPane
+    // first, which atomically kills the leaked process and then re-zeroes
+    // these fields before the new spawn — so this PID never confuses the
+    // next phase. (See issue #90 for the original send-keys leak.)
 
     return { ...result, attemptId };
   }

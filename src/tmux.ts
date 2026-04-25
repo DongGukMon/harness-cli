@@ -124,6 +124,27 @@ export function sendKeysToPane(_session: string, paneTarget: string, keys: strin
 }
 
 /**
+ * Atomically reset a pane: kill any process currently running in it (-k) and
+ * start a fresh default shell with the given cwd. Restores a clean TTY (raw
+ * mode cleared, foreground process is a shell prompt) so the next
+ * sendKeysToPane lands on a shell rather than a prior runner's REPL input.
+ *
+ * Used between phase boundaries because Codex CLI / Claude Code TUI do NOT
+ * exit after writing the phase sentinel — they stay in REPL mode holding the
+ * pane, and Ctrl-C alone does not reliably terminate them. respawn-pane
+ * sidesteps both pitfalls atomically. Required tmux ≥ 2.4 for `-k`.
+ */
+export function respawnPane(_session: string, paneTarget: string, cwd: string): void {
+  // Pane IDs (%N) are globally unique — target directly, no session prefix needed.
+  // No shell-command argument: tmux uses the default shell, so the pane stays
+  // open after the runner exits (preserving state.tmuxWorkspacePane validity).
+  execSync(
+    `tmux respawn-pane -k -t ${escSmart(paneTarget)} -c ${esc(cwd)}`,
+    { stdio: 'pipe' },
+  );
+}
+
+/**
  * Focus a specific pane.
  */
 export function selectPane(_session: string, paneTarget: string): void {
