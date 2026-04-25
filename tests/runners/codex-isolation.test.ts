@@ -42,7 +42,7 @@ describe('codexHomeFor', () => {
 
 describe('ensureCodexIsolation', () => {
   it('creates <runDir>/codex-home/ with auth.json symlink', () => {
-    const returned = ensureCodexIsolation(runDir);
+    const returned = ensureCodexIsolation(runDir, tmpRoot);
     const codexHome = path.join(runDir, 'codex-home');
     expect(returned).toBe(codexHome);
     expect(fs.existsSync(codexHome)).toBe(true);
@@ -55,22 +55,22 @@ describe('ensureCodexIsolation', () => {
   });
 
   it('is idempotent on second call', () => {
-    const first = ensureCodexIsolation(runDir);
+    const first = ensureCodexIsolation(runDir, tmpRoot);
     const authDst = path.join(first, 'auth.json');
     const firstStat = fs.lstatSync(authDst);
     // Re-run: must succeed and refresh the symlink without throwing.
-    const second = ensureCodexIsolation(runDir);
+    const second = ensureCodexIsolation(runDir, tmpRoot);
     expect(second).toBe(first);
     expect(fs.lstatSync(authDst).isSymbolicLink()).toBe(true);
     expect(firstStat.isSymbolicLink()).toBe(true);
   });
 
   it('refreshes symlink when real auth.json rotates (unlink+symlink pattern)', () => {
-    ensureCodexIsolation(runDir);
+    ensureCodexIsolation(runDir, tmpRoot);
     const authDst = path.join(runDir, 'codex-home', 'auth.json');
     // Simulate rotated real auth
     fs.writeFileSync(path.join(fakeRealHome, 'auth.json'), '{"fake":"rotated"}');
-    ensureCodexIsolation(runDir);
+    ensureCodexIsolation(runDir, tmpRoot);
     expect(fs.readFileSync(authDst, 'utf-8')).toBe('{"fake":"rotated"}');
   });
 
@@ -80,7 +80,7 @@ describe('ensureCodexIsolation', () => {
     // will likely not have the fake auth; assert the error message targets
     // the homedir path to prove fallback logic is wired.
     try {
-      ensureCodexIsolation(runDir);
+      ensureCodexIsolation(runDir, tmpRoot);
       // On the off-chance the tester has a real ~/.codex/auth.json, the call
       // succeeds — that's still a valid fallback demonstration: the symlink
       // target must be under os.homedir()/.codex.
@@ -95,9 +95,9 @@ describe('ensureCodexIsolation', () => {
 
   it('throws CodexIsolationError when real auth.json is missing', () => {
     fs.unlinkSync(path.join(fakeRealHome, 'auth.json'));
-    expect(() => ensureCodexIsolation(runDir)).toThrow(CodexIsolationError);
+    expect(() => ensureCodexIsolation(runDir, tmpRoot)).toThrow(CodexIsolationError);
     try {
-      ensureCodexIsolation(runDir);
+      ensureCodexIsolation(runDir, tmpRoot);
     } catch (err) {
       expect((err as Error).message).toMatch(/auth.*not found/i);
       expect((err as Error).message).toMatch(/codex login/i);
@@ -108,16 +108,40 @@ describe('ensureCodexIsolation', () => {
     // Create a FILE at codex-home path so mkdir(recursive:true) errors with EEXIST-not-dir
     const codexHome = path.join(runDir, 'codex-home');
     fs.writeFileSync(codexHome, 'not a dir');
-    expect(() => ensureCodexIsolation(runDir)).toThrow(CodexIsolationError);
+    expect(() => ensureCodexIsolation(runDir, tmpRoot)).toThrow(CodexIsolationError);
     try {
-      ensureCodexIsolation(runDir);
+      ensureCodexIsolation(runDir, tmpRoot);
     } catch (err) {
       expect(err).toBeInstanceOf(CodexIsolationError);
       expect((err as CodexIsolationError).code).toBe('CODEX_ISOLATION_FAILED');
     }
   });
 
-  it('bootstraps ONLY auth.json — absent: AGENTS.md, config.toml, agents/, prompts/, skills/, rules/, memories/, hooks.json', () => {
+  it('writes config.toml with [projects."<canonical-cwd>"] trust_level="trusted"', () => {
+    // cwd must be canonicalized so codex's path-comparison succeeds even when
+    // the caller passes a symlink (e.g. /tmp → /private/tmp on macOS).
+    const codexHome = ensureCodexIsolation(runDir, tmpRoot);
+    const tomlPath = path.join(codexHome, 'config.toml');
+    expect(fs.existsSync(tomlPath)).toBe(true);
+    const canonical = fs.realpathSync(tmpRoot);
+    const content = fs.readFileSync(tomlPath, 'utf-8');
+    expect(content).toContain(`[projects."${canonical}"]`);
+    expect(content).toContain('trust_level = "trusted"');
+  });
+
+  it('uses canonical (realpath) cwd in the trust entry, not the raw input path', () => {
+    // Set up a symlink that points at the actual cwd
+    const symlinkCwd = path.join(tmpRoot, 'cwd-symlink');
+    fs.symlinkSync(tmpRoot, symlinkCwd);
+    const codexHome = ensureCodexIsolation(runDir, symlinkCwd);
+    const content = fs.readFileSync(path.join(codexHome, 'config.toml'), 'utf-8');
+    const realCwd = fs.realpathSync(symlinkCwd);
+    expect(content).toContain(`[projects."${realCwd}"]`);
+    // Negative: must NOT use the symlink path verbatim
+    expect(content).not.toContain(`[projects."${symlinkCwd}"]`);
+  });
+
+  it('bootstraps auth.json + a harness-controlled config.toml; nothing else from the real home leaks', () => {
     // Pre-populate the REAL codex home with everything a user might have
     fs.writeFileSync(path.join(fakeRealHome, 'AGENTS.md'), '# user conventions\n');
     fs.writeFileSync(path.join(fakeRealHome, 'config.toml'), '[profile]\nname="me"\n');
@@ -127,17 +151,23 @@ describe('ensureCodexIsolation', () => {
       fs.writeFileSync(path.join(fakeRealHome, d, 'leak.md'), 'do not leak');
     }
 
-    const codexHome = ensureCodexIsolation(runDir);
+    const codexHome = ensureCodexIsolation(runDir, tmpRoot);
 
+    // Harness manages: auth.json (symlink) + config.toml (trust entry)
     expect(fs.existsSync(path.join(codexHome, 'auth.json'))).toBe(true);
+    expect(fs.existsSync(path.join(codexHome, 'config.toml'))).toBe(true);
+    // The isolated config.toml must be the harness-built trust entry, NOT the
+    // real-home profile config — so user's [profile] settings must not leak.
+    const tomlContent = fs.readFileSync(path.join(codexHome, 'config.toml'), 'utf-8');
+    expect(tomlContent).not.toContain('[profile]');
+    expect(tomlContent).not.toContain('name="me"');
+    // Other user-home files still must NOT leak
     expect(fs.existsSync(path.join(codexHome, 'AGENTS.md'))).toBe(false);
-    expect(fs.existsSync(path.join(codexHome, 'config.toml'))).toBe(false);
     expect(fs.existsSync(path.join(codexHome, 'hooks.json'))).toBe(false);
     for (const d of ['agents', 'prompts', 'skills', 'rules', 'memories']) {
       expect(fs.existsSync(path.join(codexHome, d))).toBe(false);
     }
-
-    const entries = fs.readdirSync(codexHome);
-    expect(entries).toEqual(['auth.json']);
+    const entries = fs.readdirSync(codexHome).sort();
+    expect(entries).toEqual(['auth.json', 'config.toml']);
   });
 });

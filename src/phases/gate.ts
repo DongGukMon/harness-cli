@@ -302,7 +302,7 @@ export async function runGatePhaseInteractive(
   // Step 6: Codex isolation setup
   let codexHome: string | null = null;
   if (preset.runner === 'codex' && !state.codexNoIsolate) {
-    try { codexHome = ensureCodexIsolation(runDir); }
+    try { codexHome = ensureCodexIsolation(runDir, cwd); }
     catch (err) {
       if (err instanceof CodexIsolationError) return { type: 'error', error: err.message, runner: 'codex' };
       throw err;

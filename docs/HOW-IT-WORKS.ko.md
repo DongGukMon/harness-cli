@@ -127,7 +127,7 @@ Claude 브랜치는 wrapper skill에서 commit을 강제하므로 이 함정에 
 
 ### Codex (outer-cwd gate)
 
-outer cwd가 git 레포가 아니면 gate가 실행될 수 있도록 Codex 호출에 `--skip-git-repo-check`가 자동으로 추가됩니다.
+outer cwd가 git 레포가 아니어도 codex가 trust 프롬프트나 git-repo 안전 거절 없이 진입할 수 있도록, `ensureCodexIsolation`이 `<runDir>/codex-home/config.toml`에 `[projects."<realpath cwd>"] trust_level = "trusted"` 엔트리를 자동으로 기록합니다. (codex 0.124.0에서 top-level `--skip-git-repo-check` 플래그가 제거됐기 때문에 trust-entry 방식이 정식 대체 경로입니다.)
 
 ---
 
@@ -167,35 +167,37 @@ claude --session-id <attemptId> --model <model> --effort <effort> @<prompt-file>
 
 ### Codex interactive phase
 
-선택된 preset의 runner가 `codex`이면 다음 형태로 실행합니다.
+선택된 preset의 runner가 `codex`이면 harness는 workspace pane에 top-level `codex` TUI를 띄웁니다. Claude와 동일한 UX(입력 라인 + reasoning stream 가시화 + 실시간 개입 가능):
 
 ```bash
-codex exec --model <model> -c model_reasoning_effort="<effort>" --sandbox <level> --full-auto -
+codex --model <model> -c model_reasoning_effort="<effort>" --sandbox <level> --full-auto "$(cat <prompt-file>)"
 ```
+
+프롬프트는 셸 command-substitution(`$(cat ...)`)을 통해 실행 시점에 positional CLI argument로 주입됩니다. tmux send-keys가 운반하는 건 짧은 wrapper뿐이라 프롬프트 크기가 수십 KB가 되어도 문제없습니다. agent 자신이 phase 프롬프트의 지시에 따라 tool use로 `phase-N.done` sentinel을 작성하며, 이는 Claude의 동작 패턴과 일치합니다.
 
 sandbox 레벨:
 - phase 1, 3 → `workspace-write`
 - phase 5 → `danger-full-access`
 
-Codex interactive phase는 sentinel 파일을 쓰지 않고, subprocess 종료 후 harness가 산출물을 직접 검증합니다.
-
 ### Gate phase
 
-gate phase도 preset 기반입니다.
-기본적으로는 예전 companion 경로가 아니라 실제 `codex` CLI를 사용합니다.
+gate phase도 preset 기반입니다. Codex gate는 interactive phase와 **동일한 tmux workspace pane**에서 top-level `codex` TUI로 실행됩니다.
 
 ```bash
-codex exec --model <model> -c model_reasoning_effort="<effort>" -
+codex --model <model> -c model_reasoning_effort="<effort>" -s workspace-write --full-auto "$(cat <prompt-file>)"
 ```
 
-gate phase를 Claude preset으로 강제로 매핑한 경우에만 `claude --print` gate subprocess를 사용합니다.
+reopen 시에는 동일한 플래그로 `codex resume <session_id>`를 사용합니다. gate phase를 Claude preset으로 강제로 매핑한 경우에만 `claude --print` gate subprocess를 사용합니다.
 
-Gate phase(2, 4, 7)는 interactive phase와 **동일한 tmux workspace pane**에서 Codex CLI를 대화형 TUI로 실행합니다. Codex는 `<runDir>/gate-N-verdict.md`에 판정 결과를 기록하고, harness는 `<runDir>/phase-N.done` sentinel 파일로 완료를 감지합니다. gate 실행 중에는 control pane footer에 `attach: tmux attach -t <session>`이 표시되므로 workspace pane으로 이동해 실시간으로 리뷰 진행 상황을 확인할 수 있습니다.
+Codex는 `<runDir>/gate-N-verdict.md`에 판정 결과를 기록하고, harness는 `<runDir>/phase-N.done` sentinel 파일로 완료를 감지합니다. gate 실행 중에는 control pane footer에 `attach: tmux attach -t <session>`이 표시되므로 workspace pane으로 이동해 실시간으로 리뷰 진행 상황을 확인할 수 있습니다.
 
 ### Codex isolation
 
-기본적으로 Codex subprocess는 `<runDir>/codex-home/` 안에서 실행되고, 그 안에는 `auth.json`만 symlink됩니다.
-이렇게 해야 사용자 전역 `CODEX_HOME` 규칙이 런타임에 섞여들지 않습니다.
+기본적으로 Codex subprocess는 `<runDir>/codex-home/` 안에서 실행되며, 다음 두 가지를 harness가 채워 넣습니다:
+- 사용자의 실제 `~/.codex/` (또는 `$CODEX_HOME`)에서 `auth.json` symlink
+- `[projects."<realpath cwd>"] trust_level = "trusted"` 단일 엔트리만 담은 harness 제어용 `config.toml` — codex TUI가 trust 프롬프트나 git-repo 거절 없이 cwd를 받아들이도록 함
+
+이렇게 해야 사용자 전역 `CODEX_HOME` 규약이 런타임에 섞여들지 않고, cwd trust도 사용자 글로벌 config을 변경하지 않은 채 per-run으로만 적용됩니다. `--codex-no-isolate`로 isolation을 끄면 사용자의 `~/.codex/config.toml` 및 trust 캐시가 그대로 사용되며, 이 모드에서는 비-git cwd에 처음 들어갈 때 trust 프롬프트가 뜹니다.
 `--codex-no-isolate`는 이 안전장치를 끕니다.
 
 Claude Code 환경에서 1M context를 사용할 수 없다면, 모델 선택기에서 기존 non-1M Claude preset을 계속 사용하거나 자체 포크의 `src/config.ts` 기본값을 바꾸면 됩니다.

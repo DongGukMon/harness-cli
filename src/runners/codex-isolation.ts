@@ -18,7 +18,7 @@ function resolveRealCodexHome(): string {
   return process.env.CODEX_HOME || path.join(os.homedir(), '.codex');
 }
 
-export function ensureCodexIsolation(runDir: string): string {
+export function ensureCodexIsolation(runDir: string, cwd: string): string {
   const codexHome = codexHomeFor(runDir);
 
   try {
@@ -45,6 +45,22 @@ export function ensureCodexIsolation(runDir: string): string {
   } catch (err) {
     throw new CodexIsolationError(
       `Failed to symlink codex auth into ${authDst}: ${(err as Error).message}`,
+    );
+  }
+
+  // Pre-trust the cwd so codex TUI doesn't refuse non-git directories or pop a
+  // trust prompt. Codex matches by canonical (realpath) path — on macOS `/tmp`
+  // is a symlink to `/private/tmp`, so the entry must use the resolved path or
+  // it won't match codex's runtime cwd lookup.
+  let trustedPath = cwd;
+  try { trustedPath = fs.realpathSync(cwd); } catch { /* best-effort */ }
+  const tomlPath = path.join(codexHome, 'config.toml');
+  const tomlEntry = `[projects."${trustedPath}"]\ntrust_level = "trusted"\n`;
+  try {
+    fs.writeFileSync(tomlPath, tomlEntry, 'utf-8');
+  } catch (err) {
+    throw new CodexIsolationError(
+      `Failed to write codex trust config at ${tomlPath}: ${(err as Error).message}`,
     );
   }
 

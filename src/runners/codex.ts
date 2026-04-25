@@ -323,38 +323,38 @@ export async function spawnCodexInPane(input: SpawnCodexInPaneInput): Promise<Co
   if (fs.existsSync(pidFile)) fs.unlinkSync(pidFile);
 
   const codexBin = resolveCodexBin();
-  const skipGitFlag = !isInGitRepo(cwd) ? '--skip-git-repo-check ' : '';
   const codexHomeEnv = codexHome ? `CODEX_HOME="${codexHome}" ` : '';
 
-  // codex-cli 0.124.0: top-level `codex` refuses stdin redirect ("stdin is not
-  // a terminal") and drops `--skip-git-repo-check`. Both flags/flow were moved
-  // under the `exec` subcommand. The trade-off vs PR #74 is loss of TUI chat
-  // visualization in the workspace pane — exec streams plain progress output
-  // instead. Still visible in the pane, just not interactive.
+  // Spawn the top-level `codex` TUI (not `codex exec`) so the workspace pane
+  // shows the live reasoning + input line — restoring PR #74's intent.
   //
-  // `--full-auto` is required: the gate prompt instructs Codex to write
-  // `gate-N-verdict.md` and `phase-N.done` (see assembler.ts buildGateOutputProtocol),
-  // but `codex exec`'s default sandbox is read-only. `--full-auto` grants
-  // workspace-write implicitly and is accepted by BOTH `codex exec` and
-  // `codex exec resume` (unlike `-s workspace-write`, which `exec resume`
-  // rejects).
+  // codex-cli 0.124.0 made stdin redirect impossible with TUI ("stdin is not a
+  // terminal"), so the prompt is injected via shell command-substitution as a
+  // positional CLI argument instead. tmux send-keys carries only the short
+  // wrapper; `cat` runs at execution time on the pane shell.
+  //
+  // `--skip-git-repo-check` was removed from top-level codex in 0.124.0; we
+  // pre-trust the cwd via codex config (ensureCodexIsolation writes
+  // `[projects."<realpath cwd>"] trust_level = "trusted"` into the isolated
+  // CODEX_HOME), which bypasses both the trust prompt and the git-repo check.
+  //
+  // `-s workspace-write --full-auto` lets codex write gate-N-verdict.md and
+  // phase-N.done as instructed by buildGateOutputProtocol (assembler.ts).
   let codexCmd: string;
   if (mode === 'resume' && sessionId) {
     codexCmd =
-      `${codexBin} exec resume ${sessionId} ` +
-      `${skipGitFlag}` +
+      `${codexBin} resume ${sessionId} ` +
       `--model ${preset.model} ` +
       `-c model_reasoning_effort="${preset.effort}" ` +
-      `--full-auto - ` +
-      `< "${promptFile}"`;
+      `-s workspace-write --full-auto ` +
+      `"$(cat "${promptFile}")"`;
   } else {
     codexCmd =
-      `${codexBin} exec ` +
-      `${skipGitFlag}` +
+      `${codexBin} ` +
       `--model ${preset.model} ` +
       `-c model_reasoning_effort="${preset.effort}" ` +
-      `--full-auto - ` +
-      `< "${promptFile}"`;
+      `-s workspace-write --full-auto ` +
+      `"$(cat "${promptFile}")"`;
   }
 
   const wrappedCmd = `sh -c 'cd "${cwd}" && echo $$ > ${pidFile} && ${codexHomeEnv}exec ${codexCmd}'`;
@@ -382,7 +382,9 @@ export interface SpawnCodexInteractiveInPaneInput {
   promptFile: string;
   cwd: string;
   codexHome: string | null;
+  /** @deprecated Vestigial since the TUI switch — codex now writes the sentinel via tool use per the phase prompt. Kept for caller compatibility; safe to remove once `interactive.ts` stops passing it. */
   attemptId: string;
+  /** @deprecated See `attemptId`. */
   sentinelPath: string;
 }
 
@@ -395,7 +397,12 @@ export interface SpawnCodexInteractiveInPaneInput {
 export async function spawnCodexInteractiveInPane(
   input: SpawnCodexInteractiveInPaneInput,
 ): Promise<CodexSpawnResult> {
-  const { phase, state, preset, harnessDir, runDir, promptFile, cwd, codexHome, attemptId, sentinelPath } = input;
+  const { phase, state, preset, harnessDir, runDir, promptFile, cwd, codexHome } = input;
+  // attemptId / sentinelPath used to drive a shell-level sentinel write when
+  // the runner was `codex exec` (auto-exits). With TUI mode, codex itself
+  // writes the sentinel via tool use per the phase-N prompt — same as Claude
+  // TUI. Kept in the input type for caller compatibility.
+  void input.attemptId; void input.sentinelPath;
 
   const sessionName = state.tmuxSession;
   const workspacePane = state.tmuxWorkspacePane;
@@ -428,17 +435,17 @@ export async function spawnCodexInteractiveInPane(
   const sandbox = phase === 5 ? 'danger-full-access' : 'workspace-write';
   const codexHomeEnv = codexHome ? `CODEX_HOME="${codexHome}" ` : '';
 
-  // No `exec`: sh must survive codex exit to write the sentinel.
+  // Top-level `codex` TUI (matches gate pane spawn pattern). Trust entry in
+  // the isolated CODEX_HOME (ensureCodexIsolation) bypasses git-repo check.
+  // Prompt injected as positional arg via `cat` substitution at exec time.
   const wrappedCmd =
     `sh -c 'cd "${cwd}" && echo $$ > "${pidFile}" && ` +
-    `${codexHomeEnv}${codexBin} exec ` +
+    `${codexHomeEnv}exec ${codexBin} ` +
     `--model ${preset.model} ` +
     `-c model_reasoning_effort="${preset.effort}" ` +
     `--sandbox ${sandbox} ` +
-    `--full-auto - ` +
-    `< "${promptFile}"; ` +
-    `RC=$?; if [ $RC -eq 0 ]; then echo "${attemptId}" > "${sentinelPath}"; fi; ` +
-    `exit $RC'`;
+    `--full-auto ` +
+    `"$(cat "${promptFile}")"'`;
 
   sendKeysToPane(sessionName, workspacePane, wrappedCmd);
 

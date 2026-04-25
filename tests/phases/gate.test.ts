@@ -473,7 +473,7 @@ describe('runGatePhase — one-shot sidecar replay', () => {
 
     await runGatePhase(2, state, '/fake-harness', runDir, '/cwd');
 
-    expect(vi.mocked(ensureCodexIsolation)).toHaveBeenCalledWith(runDir);
+    expect(vi.mocked(ensureCodexIsolation)).toHaveBeenCalledWith(runDir, '/cwd');
     const call = vi.mocked(mockSpawn).mock.calls[0];
     expect(call[0].codexHome).toBe(`${runDir}/codex-home`);
   });
