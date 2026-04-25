@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Box, Text } from 'ink';
 import { subscribe, getSnapshot } from './store.js';
 import type { StoreSnapshot } from './store.js';
-import { useTerminalSize, GLYPHS } from './theme.js';
+import { useTerminalSize } from './theme.js';
 import { Header } from './components/Header.js';
 import { PhaseTimeline } from './components/PhaseTimeline.js';
 import { CurrentPhase } from './components/CurrentPhase.js';
@@ -24,22 +24,22 @@ export function App(): React.ReactElement {
   }
 
   const { state, callsite, footerSummary } = snap;
-  const separator = GLYPHS.bullet.repeat(Math.max(16, Math.min(64, columns - 2)));
-
   return (
     <Box flexDirection="column">
-      <Header state={state} elapsedMs={footerSummary?.phaseRunningElapsedMs ?? null} />
-      <Text dimColor>{separator}</Text>
+      <Header state={state} elapsedMs={footerSummary?.phaseRunningElapsedMs ?? null} columns={columns} />
+      <Box marginTop={1}>
+        <Text dimColor>Progress</Text>
+      </Box>
       <PhaseTimeline state={state} columns={columns} />
-      <Text dimColor>{separator}</Text>
-      <CurrentPhase state={state} />
+      <Box marginTop={1}>
+        <CurrentPhase state={state} columns={columns} />
+      </Box>
       <GateVerdict state={state} />
       <ActionMenu state={state} callsite={callsite} />
       {footerSummary !== null && (
-        <>
-          <Text dimColor>{separator}</Text>
+        <Box marginTop={1}>
           <Footer summary={footerSummary} columns={columns} />
-        </>
+        </Box>
       )}
     </Box>
   );

@@ -1,6 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import React from 'react';
+import { render } from 'ink-testing-library';
 import type { HarnessState, SessionLogger, RenderCallsite } from '../../src/types.js';
 import { createInitialState } from '../../src/state.js';
+import { App } from '../../src/ink/App.js';
+import { dispatch, dispatchFooter } from '../../src/ink/store.js';
 
 function makeState(): HarnessState {
   return createInitialState('run', 'task', 'base', false);
@@ -49,5 +53,43 @@ describe('render facade — ui_render emission', () => {
     const logger = makeLogger();
     renderInkControlPanel(makeState(), logger);
     expect(logger.logEvent).not.toHaveBeenCalled();
+  });
+});
+
+describe('App layout', () => {
+  it('renders header, progress, current phase, outcome, action row, and footer in order', () => {
+    const state = makeState();
+    state.currentPhase = 5;
+    state.phases['2'] = 'completed';
+    state.phases['5'] = 'in_progress';
+
+    dispatch({ state, callsite: 'loop-top' });
+    dispatchFooter({
+      currentPhase: 5,
+      attempt: 1,
+      phaseRunningElapsedMs: 12_000,
+      sessionElapsedMs: 60_000,
+      claudeTokens: 100,
+      gateTokens: 25,
+      totalTokens: 125,
+      tmuxSession: 'harness-run',
+    });
+
+    const { lastFrame } = render(React.createElement(App));
+    const frame = lastFrame() ?? '';
+    const header = frame.indexOf('Harness Control Panel');
+    const progress = frame.indexOf('Progress');
+    const current = frame.indexOf('Current');
+    const outcome = frame.indexOf('Outcome');
+    const status = frame.indexOf('Status');
+    const footer = frame.indexOf('attach: tmux attach -t harness-run');
+
+    expect(header).toBeGreaterThanOrEqual(0);
+    expect(progress).toBeGreaterThan(header);
+    expect(current).toBeGreaterThan(progress);
+    expect(outcome).toBeGreaterThan(current);
+    expect(status).toBeGreaterThan(outcome);
+    expect(footer).toBeGreaterThan(status);
+    expect(frame).not.toMatch(/····/);
   });
 });
