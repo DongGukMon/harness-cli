@@ -17,6 +17,12 @@ function makeSummary(overrides: Partial<FooterSummary> = {}): FooterSummary {
   };
 }
 
+function expectLinesWithin(frame: string | undefined, columns: number): void {
+  for (const line of (frame ?? '').split('\n')) {
+    expect(line.length).toBeLessThanOrEqual(columns);
+  }
+}
+
 describe('Footer', () => {
   it('renders nothing when summary is null', () => {
     const { lastFrame } = render(<Footer summary={null} columns={80} />);
@@ -43,5 +49,15 @@ describe('Footer', () => {
       <Footer summary={makeSummary({ tmuxSession: 'grove-abc123' })} columns={80} />
     );
     expect(lastFrame()).toContain('attach: tmux attach -t grove-abc123');
+  });
+
+  it('truncates long attach hints at narrow width', () => {
+    const { lastFrame } = render(
+      <Footer summary={makeSummary({ tmuxSession: 'grove-this-session-name-is-too-long' })} columns={32} />
+    );
+    const frame = lastFrame();
+    expect(frame).toContain('attach: tmux attach -t grove-th…');
+    expect(frame).not.toContain('too-long');
+    expectLinesWithin(frame, 32);
   });
 });

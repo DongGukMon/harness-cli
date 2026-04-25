@@ -67,9 +67,9 @@ In light flow:
 
 ## Runtime layout inside tmux
 
-Harness runs the workflow inside tmux with a split-pane control surface:
-- **control pane**: current phase, retries, gate/verify output, escalation menus
-- **workspace pane**: the active interactive agent session
+Harness runs the workflow inside tmux with a top-bottom split-pane control surface:
+- **top control pane**: current phase, retries, gate/verify output, escalation menus
+- **bottom workspace pane**: the active interactive agent session, with most of the terminal height
 
 Gate phases (2, 4, 7) run Codex CLI as an interactive TUI in the workspace pane (the same pane used by interactive phases). Codex writes its verdict to `<runDir>/gate-N-verdict.md` and harness detects completion via `<runDir>/phase-N.done`. While a gate is running, the footer shows `attach: tmux attach -t <session>` so you can watch the review live.
 
