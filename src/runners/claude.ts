@@ -4,8 +4,8 @@ import path from 'path';
 import type { HarnessState, GatePhaseResult } from '../types.js';
 import type { ModelPreset } from '../config.js';
 import { GATE_TIMEOUT_MS, SIGTERM_WAIT_MS } from '../config.js';
-import { sendKeysToPane, pollForPidFile } from '../tmux.js';
-import { isPidAlive, getProcessStartTime, killProcessGroup } from '../process.js';
+import { sendKeysToPane, pollForPidFile, respawnPane } from '../tmux.js';
+import { getProcessStartTime, killProcessGroup } from '../process.js';
 import { updateLockChild, clearLockChild } from '../lock.js';
 import { writeState } from '../state.js';
 import { buildGateResult } from '../phases/verdict.js';
@@ -27,31 +27,18 @@ export async function runClaudeInteractive(
   const sessionName = state.tmuxSession;
   const workspacePane = state.tmuxWorkspacePane;
 
-  // Kill previous workspace process if alive (and matches saved start-time).
-  // Claude Code does not exit after writing the sentinel — it stays idle awaiting input.
-  // If we don't kill it, the next sendKeysToPane below types the wrapper command INTO
-  // Claude's input box (not a shell prompt), the PID file never appears, and phase reopen fails.
-  if (state.lastWorkspacePid !== null && isPidAlive(state.lastWorkspacePid)) {
-    const savedStart = state.lastWorkspacePidStartTime;
-    const actualStart = getProcessStartTime(state.lastWorkspacePid);
-    if (savedStart !== null && actualStart !== null && Math.abs(actualStart - savedStart) <= 2) {
-      sendKeysToPane(sessionName, workspacePane, 'C-c');
-      const deadline = Date.now() + 5000;
-      while (isPidAlive(state.lastWorkspacePid) && Date.now() < deadline) {
-        await new Promise<void>((r) => setTimeout(r, 200));
-      }
-      if (isPidAlive(state.lastWorkspacePid)) {
-        await killProcessGroup(state.lastWorkspacePid, SIGTERM_WAIT_MS);
-      }
-    }
-    state.lastWorkspacePid = null;
-    state.lastWorkspacePidStartTime = null;
-    writeState(runDir, state);
-  }
-
-  // Safety: Ctrl+C + wait
-  sendKeysToPane(sessionName, workspacePane, 'C-c');
-  await new Promise<void>((r) => setTimeout(r, 500));
+  // Atomically reset the workspace pane before spawning the new runner.
+  // Claude Code does not exit after writing the sentinel — it stays idle
+  // awaiting input. send-keys to such a pane lands inside Claude's input
+  // box (not a shell prompt), the PID file never appears, and phase reopen
+  // fails. respawn-pane -k kills whatever is running and starts a fresh
+  // shell with clean TTY state, eliminating the race window. The 300 ms
+  // delay lets the new shell finish initialising before sendKeysToPane.
+  respawnPane(sessionName, workspacePane, cwd);
+  await new Promise<void>((r) => setTimeout(r, 300));
+  state.lastWorkspacePid = null;
+  state.lastWorkspacePidStartTime = null;
+  writeState(runDir, state);
 
   // PID file (phase/attempt scoped)
   const attemptId = state.phaseAttemptId[String(phase)] ?? '';

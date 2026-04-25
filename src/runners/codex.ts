@@ -5,8 +5,8 @@ import type { HarnessState, GatePhaseResult } from '../types.js';
 import type { ModelPreset } from '../config.js';
 import { GATE_TIMEOUT_MS, SIGTERM_WAIT_MS } from '../config.js';
 import { updateLockChild, clearLockChild } from '../lock.js';
-import { getProcessStartTime, killProcessGroup, isPidAlive } from '../process.js';
-import { sendKeysToPane, pollForPidFile } from '../tmux.js';
+import { getProcessStartTime, killProcessGroup } from '../process.js';
+import { sendKeysToPane, pollForPidFile, respawnPane } from '../tmux.js';
 import { writeState } from '../state.js';
 import { buildGateResult, extractCodexMetadata } from '../phases/verdict.js';
 import { isInGitRepo } from '../git.js';
@@ -297,27 +297,18 @@ export async function spawnCodexInPane(input: SpawnCodexInPaneInput): Promise<Co
   const sessionName = state.tmuxSession;
   const workspacePane = state.tmuxWorkspacePane;
 
-  // Kill previous workspace process if alive (same guard as runClaudeInteractive)
-  if (state.lastWorkspacePid !== null && isPidAlive(state.lastWorkspacePid)) {
-    const savedStart = state.lastWorkspacePidStartTime;
-    const actualStart = getProcessStartTime(state.lastWorkspacePid);
-    if (savedStart !== null && actualStart !== null && Math.abs(actualStart - savedStart) <= 2) {
-      sendKeysToPane(sessionName, workspacePane, 'C-c');
-      const deadline = Date.now() + 5000;
-      while (isPidAlive(state.lastWorkspacePid) && Date.now() < deadline) {
-        await new Promise<void>((r) => setTimeout(r, 200));
-      }
-      if (isPidAlive(state.lastWorkspacePid)) {
-        await killProcessGroup(state.lastWorkspacePid, SIGTERM_WAIT_MS);
-      }
-    }
-    state.lastWorkspacePid = null;
-    state.lastWorkspacePidStartTime = null;
-    writeState(runDir, state);
-  }
-
-  sendKeysToPane(sessionName, workspacePane, 'C-c');
-  await new Promise<void>((r) => setTimeout(r, 500));
+  // Atomically reset the workspace pane before spawning the new runner.
+  // Codex CLI TUI / Claude TUI do not exit after writing the sentinel — they
+  // stay in REPL mode holding the pane. send-keys to such a pane lands in the
+  // REPL's input field, not a shell prompt (issue #90). respawn-pane -k
+  // kills whatever is running and starts a fresh shell with clean TTY state
+  // (issue #88). The 300 ms delay lets the new shell finish initialising
+  // before sendKeysToPane below.
+  respawnPane(sessionName, workspacePane, cwd);
+  await new Promise<void>((r) => setTimeout(r, 300));
+  state.lastWorkspacePid = null;
+  state.lastWorkspacePidStartTime = null;
+  writeState(runDir, state);
 
   const pidFile = path.join(runDir, `codex-gate-${phase}.pid`);
   if (fs.existsSync(pidFile)) fs.unlinkSync(pidFile);
@@ -415,26 +406,12 @@ export async function spawnCodexInteractiveInPane(
   const sessionName = state.tmuxSession;
   const workspacePane = state.tmuxWorkspacePane;
 
-  if (state.lastWorkspacePid !== null && isPidAlive(state.lastWorkspacePid)) {
-    const savedStart = state.lastWorkspacePidStartTime;
-    const actualStart = getProcessStartTime(state.lastWorkspacePid);
-    if (savedStart !== null && actualStart !== null && Math.abs(actualStart - savedStart) <= 2) {
-      sendKeysToPane(sessionName, workspacePane, 'C-c');
-      const deadline = Date.now() + 5000;
-      while (isPidAlive(state.lastWorkspacePid) && Date.now() < deadline) {
-        await new Promise<void>((r) => setTimeout(r, 200));
-      }
-      if (isPidAlive(state.lastWorkspacePid)) {
-        await killProcessGroup(state.lastWorkspacePid, SIGTERM_WAIT_MS);
-      }
-    }
-    state.lastWorkspacePid = null;
-    state.lastWorkspacePidStartTime = null;
-    writeState(runDir, state);
-  }
-
-  sendKeysToPane(sessionName, workspacePane, 'C-c');
-  await new Promise<void>((r) => setTimeout(r, 500));
+  // See spawnCodexInPane above — same rationale (issues #88, #90).
+  respawnPane(sessionName, workspacePane, cwd);
+  await new Promise<void>((r) => setTimeout(r, 300));
+  state.lastWorkspacePid = null;
+  state.lastWorkspacePidStartTime = null;
+  writeState(runDir, state);
 
   const pidFile = path.join(runDir, `codex-interactive-${phase}.pid`);
   if (fs.existsSync(pidFile)) fs.unlinkSync(pidFile);

@@ -7,6 +7,7 @@ import type { ModelPreset } from '../../src/config.js';
 vi.mock('../../src/tmux.js', () => ({
   sendKeysToPane: vi.fn(),
   pollForPidFile: vi.fn().mockResolvedValue(null),
+  respawnPane: vi.fn(),
 }));
 
 vi.mock('../../src/process.js', () => ({
