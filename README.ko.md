@@ -356,6 +356,7 @@ logging이 켜져 있으면 control pane footer에 다음 정보가 표시됩니
 - Harness는 **atomic state write**와 **outer/inner lock handoff**를 사용합니다.
 - interactive phase 완료는 `.harness/<runId>/phase-1.done` 같은 sentinel 파일로 검증합니다.
 - phase 5는 기본적으로 clean tree와 `implRetryBase` 이후 최소 1개 commit이 필요합니다. 단, reopen 경로에서 commit 없는 artifact 수정만 필요한 경우는 예외가 있습니다.
+- Phase 5에 Codex 프리셋을 쓰면 commit 누락 함정(sentinel fresh + uncommitted = silent failed 루프)에 빠질 수 있습니다. 이 경우 하네스가 stderr 경고 블록 + `phase_end.uncommittedRepos` 필드로 안내합니다. 자세한 내용은 `docs/HOW-IT-WORKS.ko.md` 참고 (#84).
 - `skip`과 `jump`는 control-plane 연산이므로 main run lock을 직접 잡지 않습니다.
 - 모델 preset을 다시 고르면 effective runner/model lineage가 바뀐 gate replay sidecar는 무효화될 수 있습니다.
 

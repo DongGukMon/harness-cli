@@ -111,6 +111,15 @@ light flow 특이사항:
 
 tracked 레포 중 **하나 이상**이 `implRetryBase`를 넘어 진행되면 Phase 5가 성공합니다. 수정되지 않은 레포는 `implHead = null`으로 유지됩니다.
 
+#### Codex 프리셋 + Phase 5 — commit 누락 함정 (issue #84)
+
+Phase 5는 적어도 하나의 tracked 레포의 HEAD가 `implRetryBase`를 넘어 진전했을 때만 완료로 간주합니다. Codex가 구현은 마치고 sentinel은 남겼지만 commit을 빠뜨리는 경우가 있는데, validator 입장에서는 "진전 없음 = failed"로 보입니다. 하네스는 이 케이스(Codex 프리셋 + sentinel fresh + working tree dirty)를 정확히 검출하면 stderr에 `⚠️  Phase 5 failed: Codex completed (sentinel fresh) but left uncommitted changes` 블록을 출력하고, `phase_end` 이벤트에 `uncommittedRepos: [{ path, count }, …]` 필드를 부착해 operator가 다음 중 하나를 선택할 수 있게 안내합니다:
+
+- 변경분을 직접 commit한 뒤 Resume, 또는
+- Phase 5 프리셋을 Claude 계열(예: `claude-sonnet-default`)로 전환 — `superpowers:subagent-driven-development`가 commit 규율을 강제하므로 안전합니다.
+
+Claude 브랜치는 wrapper skill에서 commit을 강제하므로 이 함정에 빠지지 않습니다.
+
 ### Gate diff (Phase 2/4/7)
 
 - **N=1이고 `trackedRepos[0].path === cwd`**: diff 출력이 멀티 워크트리 이전 형식과 바이트 단위로 동일합니다 (레이블 없음).

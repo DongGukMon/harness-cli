@@ -111,6 +111,15 @@ A legacy mirror (`state.baseCommit`, `state.implRetryBase`, `state.implCommit`) 
 
 Phase 5 succeeds when **at least one** tracked repo has advanced past its `implRetryBase`. Repos that were not modified are left with `implHead = null`.
 
+#### Codex preset on Phase 5 — commit-discipline trap (issue #84)
+
+Phase 5 only treats an attempt as completed when at least one tracked repo's HEAD advances past `implRetryBase`. Codex sometimes finishes the work and writes the sentinel but forgets to commit, leaving the validator to read "no advance" and report `failed`. When the harness detects this exact case (Codex preset + sentinel fresh + working tree dirty in any tracked repo), it writes a `⚠️  Phase 5 failed: Codex completed (sentinel fresh) but left uncommitted changes` block to stderr and attaches `uncommittedRepos: [{ path, count }, …]` on the `phase_end` log event so operators can either:
+
+- commit the dirty changes manually and Resume, or
+- switch the Phase 5 preset to a Claude variant (e.g. `claude-sonnet-default`), which has commit-discipline guards via `superpowers:subagent-driven-development`.
+
+The Claude branch does not have this trap — its commit guard is enforced by the wrapper skill, so HEAD always advances on a successful attempt.
+
 ### Gate diff (Phase 2/4/7)
 
 - **N=1 and `trackedRepos[0].path === cwd`**: diff output is byte-identical to the pre-multi-worktree format (no label).
