@@ -67,8 +67,13 @@ describe('PhaseTimeline — light flow', () => {
 });
 
 describe('PhaseTimeline — narrow width', () => {
-  it('renders without crashing at columns=40', () => {
+  it('collapses labels to phase numbers at columns=40', () => {
     const state = makeState({ flow: 'full', currentPhase: 1 });
-    expect(() => render(<PhaseTimeline state={state} columns={40} />)).not.toThrow();
+    const { lastFrame } = render(<PhaseTimeline state={state} columns={40} />);
+    const frame = lastFrame();
+    expect(frame).toContain('P1');
+    expect(frame).toContain('P7');
+    expect(frame).not.toContain('Spec 작성');
+    expect(frame).not.toContain('Eval Gate');
   });
 });
