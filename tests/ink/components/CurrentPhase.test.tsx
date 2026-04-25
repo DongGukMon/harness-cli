@@ -10,6 +10,12 @@ function makeState(overrides: Partial<HarnessState> = {}): HarnessState {
   return { ...base, ...overrides };
 }
 
+function expectLinesWithin(frame: string | undefined, columns: number): void {
+  for (const line of (frame ?? '').split('\n')) {
+    expect(line.length).toBeLessThanOrEqual(columns);
+  }
+}
+
 describe('CurrentPhase', () => {
   it('shows phase number and label (full flow)', () => {
     const state = makeState({ currentPhase: 3, flow: 'full' });
@@ -31,6 +37,7 @@ describe('CurrentPhase', () => {
     state.phases['5'] = 'in_progress';
     const { lastFrame } = render(<CurrentPhase state={state} />);
     expect(lastFrame()).toContain('in_progress');
+    expect(lastFrame()).toContain('Waiting for phase completion.');
   });
 
   it('shows completed status', () => {
@@ -73,7 +80,22 @@ describe('CurrentPhase', () => {
     expect(frame).toContain('high');
   });
 
-  it('renders without crashing at narrow width', () => {
-    expect(() => render(<CurrentPhase state={makeState({ currentPhase: 1 })} />)).not.toThrow();
+  it('truncates long preset details at narrow width', () => {
+    const state = makeState({ currentPhase: 3, phasePresets: { '3': 'sonnet-high' } });
+    const { lastFrame } = render(<CurrentPhase state={state} columns={30} />);
+    const frame = lastFrame();
+    expect(frame).toContain('claude-sonnet-4-6');
+    expect(frame).toContain('…');
+    expectLinesWithin(frame, 30);
+  });
+
+  it('compacts the current phase summary at narrow width', () => {
+    const state = makeState({ currentPhase: 5 });
+    state.phases['5'] = 'in_progress';
+    const { lastFrame } = render(<CurrentPhase state={state} columns={30} />);
+    const frame = lastFrame();
+    expect(frame).toContain('Current P5');
+    expect(frame).not.toContain('Current Phase');
+    expectLinesWithin(frame, 30);
   });
 });

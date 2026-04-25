@@ -16,7 +16,7 @@ describe('ActionMenu', () => {
 
     const { lastFrame } = render(<ActionMenu state={state} callsite="loop-top" />);
 
-    expect(lastFrame()).toContain('Running');
+    expect(lastFrame()).toContain('Waiting for phase completion.');
     expect(lastFrame()).not.toContain('[R]');
     expect(lastFrame()).not.toContain('[J]');
     expect(lastFrame()).not.toContain('[Q]');
@@ -39,7 +39,7 @@ describe('ActionMenu', () => {
     const state = makeState({ currentPhase: 3 });
     state.phases['3'] = 'failed';
     const { lastFrame } = render(<ActionMenu state={state} callsite="gate-approve" />);
-    expect(lastFrame()).toContain('Phase stopped');
+    expect(lastFrame()).toContain('Phase stopped.');
     expect(lastFrame()).not.toContain('[R]');
   });
 

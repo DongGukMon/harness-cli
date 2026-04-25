@@ -20,6 +20,7 @@ describe('GateVerdict', () => {
     state.phases['2'] = 'completed';
     const { lastFrame } = render(<GateVerdict state={state} />);
     expect(lastFrame()).toContain('APPROVED');
+    expect(lastFrame()).toContain('Outcome');
     expect(lastFrame()).toContain('P2');
   });
 

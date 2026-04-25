@@ -28,7 +28,8 @@ export function GateVerdict({ state }: Props): React.ReactElement | null {
 
   return (
     <Box>
-      <Text>  Gate P{lastPhase}: </Text>
+      <Text dimColor>Outcome </Text>
+      <Text>Gate P{lastPhase}: </Text>
       <Text color={color}>{verdict}</Text>
       {runner && <Text dimColor> [{runner}]</Text>}
       {retries > 0 && <Text dimColor> (retry {retries})</Text>}

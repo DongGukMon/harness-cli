@@ -41,7 +41,7 @@ export function PhaseTimeline({ state, columns = 80 }: Props): React.ReactElemen
         const icon = statusIcon(status);
         const color = statusColor(status);
         const isCurrent = String(state.currentPhase) === slot.key;
-        const label = narrow ? slot.key : slot.label;
+        const label = narrow ? `P${slot.key}` : slot.label;
 
         return (
           <Box key={slot.key} marginRight={1}>

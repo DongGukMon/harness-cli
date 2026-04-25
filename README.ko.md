@@ -67,9 +67,9 @@ light flow에서는:
 
 ## tmux 안에서의 실행 구조
 
-Harness는 tmux 안에 **pane 기반 control surface**를 만듭니다:
-- **control pane**: 현재 phase, retry, gate/verify 출력, escalation 메뉴
-- **workspace pane**: 현재 interactive agent 세션
+Harness는 tmux 안에 **상하 분할 pane 기반 control surface**를 만듭니다:
+- **상단 control pane**: 현재 phase, retry, gate/verify 출력, escalation 메뉴
+- **하단 workspace pane**: 현재 interactive agent 세션이며, 터미널 높이 대부분을 사용합니다
 
 Gate phase(2, 4, 7)는 interactive phase와 동일한 workspace pane에서 Codex CLI를 대화형 TUI로 실행합니다. Codex는 판정 결과를 `<runDir>/gate-N-verdict.md`에 기록하고, harness는 `<runDir>/phase-N.done`으로 완료를 감지합니다. gate 실행 중에는 footer에 `attach: tmux attach -t <session>`이 표시되므로 실시간으로 리뷰를 확인할 수 있습니다.
 

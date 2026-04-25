@@ -281,6 +281,106 @@ describe('inner.ts: tmux cleanup on completion', () => {
   });
 });
 
+describe('inner.ts: tmux top-bottom workspace pane setup', () => {
+  let tmpDir: string;
+
+  function makePaneState(overrides: Partial<HarnessState> = {}): HarnessState {
+    return {
+      runId: 'pane-run',
+      flow: 'full',
+      carryoverFeedback: null,
+      currentPhase: 7,
+      status: 'completed',
+      autoMode: false,
+      task: 'test task',
+      baseCommit: 'abc123',
+      implRetryBase: 'abc123',
+      trackedRepos: [{ path: tmpDir, baseCommit: 'abc123', implRetryBase: 'abc123', implHead: null }],
+      codexPath: null,
+      codexNoIsolate: false,
+      externalCommitsDetected: false,
+      artifacts: { spec: 's', plan: 'p', decisionLog: 'd', checklist: 'c', evalReport: 'e' },
+      phases: { '1': 'completed', '2': 'completed', '3': 'completed', '4': 'completed', '5': 'completed', '6': 'completed', '7': 'completed' },
+      gateRetries: { '2': 0, '4': 0, '7': 0 },
+      verifyRetries: 0,
+      pauseReason: null,
+      specCommit: null,
+      planCommit: null,
+      implCommit: null,
+      evalCommit: null,
+      verifiedAtHead: null,
+      pausedAtHead: null,
+      pendingAction: null,
+      phaseOpenedAt: { '1': null, '3': null, '5': null },
+      phaseAttemptId: { '1': null, '3': null, '5': null },
+      phasePresets: {},
+      phaseReopenFlags: { '1': false, '3': false, '5': false },
+      phaseReopenSource: { '1': null, '3': null, '5': null },
+      phaseCodexSessions: { '2': null, '4': null, '7': null },
+      phaseClaudeSessions: { '1': null, '3': null, '5': null },
+      lastWorkspacePid: null,
+      lastWorkspacePidStartTime: null,
+      tmuxSession: 'test-sess',
+      tmuxMode: 'dedicated',
+      tmuxWindows: [],
+      tmuxControlWindow: '',
+      tmuxWorkspacePane: '',
+      tmuxControlPane: '',
+      loggingEnabled: false,
+      dirtyBaseline: [],
+      ...overrides,
+    };
+  }
+
+  function writeRun(state: HarnessState): string {
+    const runDir = path.join(tmpDir, state.runId);
+    fs.mkdirSync(runDir, { recursive: true });
+    fs.writeFileSync(path.join(runDir, 'task.md'), state.task);
+    fs.writeFileSync(path.join(runDir, 'state.json'), JSON.stringify(state));
+    return runDir;
+  }
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'inner-pane-'));
+    vi.mocked(findHarnessRoot).mockReturnValue(tmpDir);
+    vi.mocked(splitPane).mockReset();
+    vi.mocked(splitPane).mockReturnValue('%9');
+    vi.mocked(paneExists).mockReset();
+    vi.mocked(runPhaseLoop).mockReset();
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('creates a bottom workspace pane with a vertical split and persists the pane id', async () => {
+    const state = makePaneState({
+      runId: 'pane-run',
+    });
+    const runDir = writeRun(state);
+    vi.mocked(paneExists).mockReturnValue(true);
+
+    await innerCommand(state.runId, { root: tmpDir, controlPane: '%0' });
+
+    expect(splitPane).toHaveBeenCalledWith('test-sess', '%0', 'v', 70, tmpDir);
+    const persisted = JSON.parse(fs.readFileSync(path.join(runDir, 'state.json'), 'utf-8'));
+    expect(persisted.tmuxWorkspacePane).toBe('%9');
+  });
+
+  it('reuses a valid distinct stored workspace pane without creating a split', async () => {
+    const state = makePaneState({
+      runId: 'reuse-run',
+      tmuxWorkspacePane: '%8',
+    });
+    writeRun(state);
+    vi.mocked(paneExists).mockReturnValue(true);
+
+    await innerCommand(state.runId, { root: tmpDir, controlPane: '%0' });
+
+    expect(splitPane).not.toHaveBeenCalled();
+  });
+});
+
 describe('bootstrapSessionLogger', () => {
   function tempHarnessDir(): string {
     return fs.mkdtempSync(path.join(os.tmpdir(), 'bootstrap-'));

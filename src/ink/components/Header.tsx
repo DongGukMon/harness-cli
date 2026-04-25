@@ -1,11 +1,12 @@
 import React from 'react';
 import { Box, Text } from 'ink';
 import type { HarnessState } from '../../types.js';
-import { COLORS, GLYPHS } from '../theme.js';
+import { COLORS, GLYPHS, truncateEnd } from '../theme.js';
 
 interface Props {
   state: HarnessState;
   elapsedMs?: number | null;
+  columns?: number;
 }
 
 function fmtMs(ms: number): string {
@@ -13,9 +14,10 @@ function fmtMs(ms: number): string {
   return `${Math.floor(s / 60)}m${String(s % 60).padStart(2, '0')}s`;
 }
 
-export function Header({ state, elapsedMs }: Props): React.ReactElement {
+export function Header({ state, elapsedMs, columns = 80 }: Props): React.ReactElement {
   const id = state.runId;
-  const runIdShort = id.length > 32 ? id.slice(0, 32) + '…' : id;
+  const runLabelBudget = Math.max(12, Math.min(36, columns - 12));
+  const runIdShort = truncateEnd(id, runLabelBudget);
   const badge = state.flow === 'light' ? '[light]' : '[full]';
   return (
     <Box flexDirection="column">
@@ -25,7 +27,7 @@ export function Header({ state, elapsedMs }: Props): React.ReactElement {
         <Text color={COLORS.accent}>{badge}</Text>
         {elapsedMs != null && <Text dimColor> · {fmtMs(elapsedMs)}</Text>}
       </Box>
-      <Text dimColor>  Run: {runIdShort}</Text>
+      <Text dimColor>Run {runIdShort}</Text>
     </Box>
   );
 }

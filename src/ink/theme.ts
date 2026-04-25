@@ -18,6 +18,13 @@ export const GLYPHS = {
   bullet: '·',
 } as const;
 
+export function truncateEnd(value: string, maxColumns: number): string {
+  if (maxColumns <= 0) return '';
+  if (value.length <= maxColumns) return value;
+  if (maxColumns === 1) return '…';
+  return `${value.slice(0, maxColumns - 1)}…`;
+}
+
 export function useTerminalSize(): { columns: number; rows: number } {
   const { stdout } = useStdout();
   return {

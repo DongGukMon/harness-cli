@@ -1,7 +1,11 @@
 node_modules/
 dist/
+build/
 .harness/
 *.tsbuildinfo
+__pycache__/
+.pytest_cache/
+.venv/
 .idea/
 .omx/
 .DS_Store

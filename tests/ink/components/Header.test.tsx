@@ -9,6 +9,12 @@ function makeState(overrides: Partial<HarnessState> = {}): HarnessState {
   return { ...createInitialState('run-2026-04-23-test', 'task', 'abc123', false), ...overrides };
 }
 
+function expectLinesWithin(frame: string | undefined, columns: number): void {
+  for (const line of (frame ?? '').split('\n')) {
+    expect(line.length).toBeLessThanOrEqual(columns);
+  }
+}
+
 describe('Header', () => {
   it('shows "Harness Control Panel" title', () => {
     const { lastFrame } = render(<Header state={makeState()} />);
@@ -42,7 +48,12 @@ describe('Header', () => {
     expect(lastFrame()).not.toMatch(/\d+m\d+s/);
   });
 
-  it('renders without crashing at narrow width', () => {
-    expect(() => render(<Header state={makeState()} />)).not.toThrow();
+  it('truncates long run IDs at narrow width', () => {
+    const state = makeState({ runId: '2026-04-23-this-run-id-is-far-too-long-for-a-top-pane' });
+    const { lastFrame } = render(<Header state={state} columns={36} />);
+    const frame = lastFrame();
+    expect(frame).toContain('2026-04-23-this-run-id-…');
+    expect(frame).not.toContain('far-too-long');
+    expectLinesWithin(frame, 36);
   });
 });

@@ -14,7 +14,8 @@ export function ActionMenu({ state, callsite }: Props): React.ReactElement {
     if (callsite === 'terminal-complete' || state.status === 'completed') {
       return (
         <Box>
-          <Text dimColor>  Run complete — press Ctrl+C to exit</Text>
+          <Text dimColor>Status </Text>
+          <Text>Run complete. Press Ctrl+C to exit.</Text>
         </Box>
       );
     }
@@ -23,7 +24,8 @@ export function ActionMenu({ state, callsite }: Props): React.ReactElement {
     if (phaseStatus === 'in_progress') {
       return (
         <Box>
-          <Text dimColor>  Running — waiting for phase completion</Text>
+          <Text dimColor>Status </Text>
+          <Text>Waiting for phase completion.</Text>
         </Box>
       );
     }
@@ -31,20 +33,22 @@ export function ActionMenu({ state, callsite }: Props): React.ReactElement {
     if (phaseStatus === 'failed' || phaseStatus === 'error') {
       return (
         <Box>
-          <Text dimColor>  Phase stopped — terminal actions will appear below</Text>
+          <Text dimColor>Status </Text>
+          <Text>Phase stopped. Terminal actions will appear below.</Text>
         </Box>
       );
     }
 
     return (
       <Box>
-        <Text dimColor>  Starting phase…</Text>
+        <Text dimColor>Status </Text>
+        <Text>Starting phase…</Text>
       </Box>
     );
   }
   return (
     <Box>
-      <Text>  </Text>
+      <Text dimColor>Actions </Text>
       <Text bold color={COLORS.ok}>[R]</Text>
       <Text> Resume  </Text>
       <Text bold color={COLORS.accent}>[J]</Text>
