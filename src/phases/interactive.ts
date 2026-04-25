@@ -271,7 +271,7 @@ export async function runInteractivePhase(
     let codexHome: string | null = null;
     if (!updatedState.codexNoIsolate) {
       try {
-        codexHome = ensureCodexIsolation(runDir);
+        codexHome = ensureCodexIsolation(runDir, cwd);
       } catch (err) {
         if (err instanceof CodexIsolationError) {
           const errorPath = path.join(runDir, `codex-${phase}-error.md`);

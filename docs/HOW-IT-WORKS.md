@@ -118,7 +118,7 @@ Phase 5 succeeds when **at least one** tracked repo has advanced past its `implR
 
 ### Codex (outer-cwd gate)
 
-When the outer cwd is not a git repo, `--skip-git-repo-check` is automatically added to the Codex invocation so the gate can still run.
+When the outer cwd is not a git repo, `ensureCodexIsolation` writes a `[projects."<realpath cwd>"] trust_level = "trusted"` entry into the isolated `<runDir>/codex-home/config.toml` so codex skips the trust prompt and the git-repo safety refusal. (`--skip-git-repo-check` was removed from top-level codex in 0.124.0; the trust-entry is the supported replacement.)
 
 ---
 
@@ -176,36 +176,37 @@ Other behavior:
 
 ### Codex interactive phases
 
-When the selected preset runner is `codex`, harness runs:
+When the selected preset runner is `codex`, harness launches the top-level `codex` TUI in the workspace pane — same UX as Claude (input line + reasoning stream visible, intervention possible):
 
 ```bash
-codex exec --model <model> -c model_reasoning_effort="<effort>" --sandbox <level> --full-auto -
+codex --model <model> -c model_reasoning_effort="<effort>" --sandbox <level> --full-auto "$(cat <prompt-file>)"
 ```
+
+The prompt is injected as a positional CLI argument via shell command substitution at execution time, so tmux send-keys carries only the short wrapper (the prompt itself can exceed tens of KB). The agent itself writes the `phase-N.done` sentinel via tool use per the phase prompt's instructions, matching Claude's pattern.
 
 Sandbox level:
 - phases 1 and 3 → `workspace-write`
 - phase 5 → `danger-full-access`
 
-Codex interactive phases do not use sentinel files; harness validates artifacts after the subprocess exits.
-
 ### Gate phases
 
-Gate phases are preset-driven too.
-By default they run through the real `codex` CLI, not the older companion-path flow:
+Gate phases are preset-driven too. Codex gates run through the top-level `codex` TUI in the **same tmux workspace pane** as interactive phases:
 
 ```bash
-codex exec --model <model> -c model_reasoning_effort="<effort>" -
+codex --model <model> -c model_reasoning_effort="<effort>" -s workspace-write --full-auto "$(cat <prompt-file>)"
 ```
 
-If a gate phase is explicitly mapped to a Claude preset, harness instead runs a `claude --print` gate subprocess.
+For reopens, harness uses `codex resume <session_id>` with the same flags. If a gate phase is explicitly mapped to a Claude preset, harness instead runs a `claude --print` gate subprocess.
 
-Gate phases (2, 4, 7) run Codex CLI as an interactive TUI in the **same tmux workspace pane** used by interactive phases. Codex writes its verdict to `<runDir>/gate-N-verdict.md`, and harness detects completion via a sentinel file `<runDir>/phase-N.done`. While a gate is running, the control-pane footer shows `attach: tmux attach -t <session>` so you can switch to the workspace pane and watch the review in real time.
+Codex writes its verdict to `<runDir>/gate-N-verdict.md`, and harness detects completion via a sentinel file `<runDir>/phase-N.done`. While a gate is running, the control-pane footer shows `attach: tmux attach -t <session>` so you can switch to the workspace pane and watch the review in real time.
 
 ### Codex isolation
 
-By default, Codex subprocesses run inside `<runDir>/codex-home/` with only `auth.json` symlinked in.
-This avoids inheriting unrelated user-level `CODEX_HOME` conventions.
-`--codex-no-isolate` disables that safeguard.
+By default, Codex subprocesses run inside `<runDir>/codex-home/` with:
+- `auth.json` symlinked from the user's real `~/.codex/` (or `$CODEX_HOME`)
+- a harness-controlled `config.toml` containing a single `[projects."<realpath cwd>"] trust_level = "trusted"` entry, so codex TUI accepts the cwd without a trust prompt or git-repo refusal
+
+This avoids inheriting unrelated user-level `CODEX_HOME` conventions and keeps cwd trust per-run rather than mutating the user's global config. `--codex-no-isolate` disables the isolation; in that mode the user's `~/.codex/config.toml` and trust-cache are used directly (so non-git cwds will pop a trust prompt the first time).
 
 If your Claude Code environment does not support 1M context, keep using the legacy non-1M Claude presets from the model picker or change the defaults in `src/config.ts` in your own fork.
 

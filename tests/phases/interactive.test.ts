@@ -871,7 +871,7 @@ describe('runInteractivePhase — codex-interactive branch invokes codex isolati
 
     await runInteractivePhase(1, state, harnessDir, runDir, repoDir, 'attempt-1');
 
-    expect(vi.mocked(ensureCodexIsolation)).toHaveBeenCalledWith(runDir);
+    expect(vi.mocked(ensureCodexIsolation)).toHaveBeenCalledWith(runDir, repoDir);
     const call = vi.mocked(spawnCodexInteractiveInPane).mock.calls[0];
     expect(call).toBeDefined();
     expect(call[0].codexHome).toBe(`${runDir}/codex-home`);

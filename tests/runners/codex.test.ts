@@ -126,7 +126,7 @@ describe('runCodexGate — CODEX_HOME env plumbing (BUG-C isolation)', () => {
 });
 
 describe('spawnCodexInteractiveInPane — pane injection', () => {
-  it('sends a codex exec command to the workspace pane with correct sandbox and CODEX_HOME', async () => {
+  it('sends a top-level `codex` TUI command (not `codex exec`) with prompt arg, sandbox, CODEX_HOME', async () => {
     const fs = await import('fs');
     const os = await import('os');
     const path = await import('path');
@@ -159,10 +159,19 @@ describe('spawnCodexInteractiveInPane — pane injection', () => {
 
     expect(vi.mocked(sendKeysToPane)).toHaveBeenCalled();
     const cmd: string = vi.mocked(sendKeysToPane).mock.calls.at(-1)![2];
+    // Top-level TUI codex — pane stays interactive (input line + reasoning).
+    expect(cmd).toMatch(/\bcodex\s+--model\b/);
+    expect(cmd).not.toMatch(/\bcodex\s+exec\b/);
+    expect(cmd).not.toMatch(/--skip-git-repo-check/);
     expect(cmd).toContain('CODEX_HOME="/iso/interactive"');
     expect(cmd).toContain('--sandbox workspace-write');
     expect(cmd).toContain('--full-auto');
-    expect(cmd).toContain(`echo "atmp-1" > "${sentinelPath}"`);
+    // Prompt as cat-substitution positional arg, not stdin redirect.
+    expect(cmd).toContain(`"$(cat "${promptPath}")"`);
+    expect(cmd).not.toMatch(/<\s+"[^"]*p\.txt"/);
+    // No shell-level sentinel write — codex writes the sentinel via tool use
+    // per phase-N prompt instructions, matching Claude TUI's pattern.
+    expect(cmd).not.toContain('echo "atmp-1"');
 
     fs.rmSync(tmp, { recursive: true, force: true });
   });
@@ -198,6 +207,8 @@ describe('spawnCodexInteractiveInPane — pane injection', () => {
     });
 
     const cmd: string = vi.mocked(sendKeysToPane).mock.calls.at(-1)![2];
+    expect(cmd).toMatch(/\bcodex\s+--model\b/);
+    expect(cmd).not.toMatch(/\bcodex\s+exec\b/);
     expect(cmd).toContain('--sandbox danger-full-access');
     expect(cmd).not.toContain('CODEX_HOME');
 
@@ -385,10 +396,55 @@ function makeMinimalState(): HarnessState {
 }
 
 describe('spawnCodexInPane — fresh', () => {
-  it('sends fresh `codex exec` command to pane and returns pid', async () => {
+  it('sends fresh top-level `codex` TUI command with prompt as cat-substitution arg', async () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-pane-'));
     const state = makeMinimalState();
+    const promptFile = path.join(tmpDir, 'prompt.md');
     const result = await spawnCodexInPane({
+      phase: 2,
+      state,
+      preset,
+      harnessDir: tmpDir,
+      runDir: tmpDir,
+      promptFile,
+      cwd: tmpDir,
+      codexHome: null,
+      mode: 'fresh',
+    });
+    expect(result.pid).toBe(12345);
+    const sendCalls = vi.mocked(sendKeysToPane).mock.calls;
+    const cmds = sendCalls.map(c => c[2]);
+    const wrappedCmd = cmds.find(c => /\bcodex\b/.test(c) && !c.startsWith('C-'));
+    expect(wrappedCmd).toBeDefined();
+    // Top-level `codex` (TUI), not `codex exec` — TUI gives the user a visible
+    // input line and reasoning stream, restoring PR #74's intent. Trust entry
+    // pre-written by ensureCodexIsolation removes the need for the
+    // exec-only `--skip-git-repo-check` flag in non-git cwds.
+    expect(wrappedCmd).toMatch(/\bcodex\s+--model\b/);
+    expect(wrappedCmd).not.toMatch(/\bcodex\s+exec\b/);
+    expect(wrappedCmd).not.toMatch(/--skip-git-repo-check/);
+    // Sandbox + auto-approval still required so codex can write verdict + sentinel.
+    expect(wrappedCmd).toMatch(/-s\s+workspace-write/);
+    expect(wrappedCmd).toMatch(/--full-auto/);
+    // Prompt is injected via shell command substitution at execution time so
+    // tmux send-keys carries only the short wrapper, not the 40+ KB prompt.
+    expect(wrappedCmd).toContain(`"$(cat "${promptFile}")"`);
+    // No stdin redirect (top-level codex rejects "stdin is not a terminal").
+    expect(wrappedCmd).not.toMatch(/<\s+"[^"]*prompt\.md"/);
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+});
+
+describe('spawnCodexInPane — fresh in non-git cwd', () => {
+  it('does NOT add --skip-git-repo-check even when cwd is non-git (trust-entry handles it)', async () => {
+    // PR #80/#82/#83 used --skip-git-repo-check conditionally on non-git cwd.
+    // The trust-entry approach (ensureCodexIsolation) makes that flag both
+    // unsupported (top-level codex 0.124.0 dropped it) and unnecessary.
+    const gitMod = await import('../../src/git.js');
+    (gitMod.isInGitRepo as any).mockReturnValueOnce(false);
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-pane-nongit-'));
+    const state = makeMinimalState();
+    await spawnCodexInPane({
       phase: 2,
       state,
       preset,
@@ -399,35 +455,27 @@ describe('spawnCodexInPane — fresh', () => {
       codexHome: null,
       mode: 'fresh',
     });
-    expect(result.pid).toBe(12345);
     const sendCalls = vi.mocked(sendKeysToPane).mock.calls;
     const cmds = sendCalls.map(c => c[2]);
-    const wrappedCmd = cmds.find(c => /\bcodex\s+exec\b/.test(c));
+    const wrappedCmd = cmds.find(c => /\bcodex\s+--model\b/.test(c));
     expect(wrappedCmd).toBeDefined();
-    // codex-cli 0.124.0: top-level `codex` refuses stdin redirect and removed
-    // --skip-git-repo-check; we must use `codex exec` for pane injection now.
-    expect(wrappedCmd).toMatch(/\bcodex\s+exec\b/);
-    expect(wrappedCmd).not.toMatch(/\s-s\s+workspace-write\b/);
-    expect(wrappedCmd).not.toMatch(/\s-a\s+never\b/);
-    // --full-auto required: gate prompt instructs codex to write verdict +
-    // sentinel files; codex exec's default sandbox is read-only.
-    expect(wrappedCmd).toMatch(/--full-auto/);
-    expect(wrappedCmd).toMatch(/- < ".*prompt\.md"/);
+    expect(wrappedCmd).not.toMatch(/--skip-git-repo-check/);
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 });
 
 describe('spawnCodexInPane — resume', () => {
-  it('sends `codex exec resume <sessionId>` command', async () => {
+  it('sends top-level `codex resume <sessionId>` TUI command with prompt arg', async () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-pane-'));
     const state = makeMinimalState();
+    const promptFile = path.join(tmpDir, 'resume-prompt.md');
     await spawnCodexInPane({
       phase: 2,
       state,
       preset,
       harnessDir: tmpDir,
       runDir: tmpDir,
-      promptFile: path.join(tmpDir, 'resume-prompt.md'),
+      promptFile,
       cwd: tmpDir,
       codexHome: null,
       mode: 'resume',
@@ -437,12 +485,15 @@ describe('spawnCodexInPane — resume', () => {
     const cmds = sendCalls.map(c => c[2]);
     const wrappedCmd = cmds.find(c => c.includes('resume'));
     expect(wrappedCmd).toBeDefined();
-    expect(wrappedCmd).toMatch(/\bcodex\s+exec\s+resume\s+sess-abc-123\b/);
-    // codex exec resume rejects -s / -a, but accepts --full-auto (required to
-    // let codex write the verdict + sentinel files).
-    expect(wrappedCmd).not.toMatch(/\s-s\s+workspace-write\b/);
-    expect(wrappedCmd).not.toMatch(/\s-a\s+never\b/);
+    // Top-level `codex resume <id>`, NOT `codex exec resume`. Top-level resume
+    // accepts -s and --full-auto (unlike exec resume), so fresh and resume
+    // share the same flag set.
+    expect(wrappedCmd).toMatch(/\bcodex\s+resume\s+sess-abc-123\b/);
+    expect(wrappedCmd).not.toMatch(/\bcodex\s+exec\s+resume\b/);
+    expect(wrappedCmd).not.toMatch(/--skip-git-repo-check/);
+    expect(wrappedCmd).toMatch(/-s\s+workspace-write/);
     expect(wrappedCmd).toMatch(/--full-auto/);
+    expect(wrappedCmd).toContain(`"$(cat "${promptFile}")"`);
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 });
