@@ -188,21 +188,19 @@ Other behavior:
 When the selected preset runner is `codex`, harness launches the top-level `codex` TUI in the workspace pane — same UX as Claude (input line + reasoning stream visible, intervention possible):
 
 ```bash
-codex --model <model> -c model_reasoning_effort="<effort>" --sandbox <level> --full-auto "$(cat <prompt-file>)"
+codex --model <model> -c model_reasoning_effort="<effort>" --dangerously-bypass-approvals-and-sandbox "$(cat <prompt-file>)"
 ```
 
 The prompt is injected as a positional CLI argument via shell command substitution at execution time, so tmux send-keys carries only the short wrapper (the prompt itself can exceed tens of KB). The agent itself writes the `phase-N.done` sentinel via tool use per the phase prompt's instructions, matching Claude's pattern.
 
-Sandbox level:
-- phases 1 and 3 → `workspace-write`
-- phase 5 → `danger-full-access`
+Approvals/sandbox: `--dangerously-bypass-approvals-and-sandbox` (yolo) is used for all Codex interactive phases (1/3/5). The harness invocation is the trust boundary; codex runs without sandbox or approval prompts so cross-worktree writes and git operations don't block the autonomous loop on a yes/no inside the workspace pane.
 
 ### Gate phases
 
 Gate phases are preset-driven too. Codex gates run through the top-level `codex` TUI in the **same tmux workspace pane** as interactive phases:
 
 ```bash
-codex --model <model> -c model_reasoning_effort="<effort>" -s workspace-write --full-auto "$(cat <prompt-file>)"
+codex --model <model> -c model_reasoning_effort="<effort>" --dangerously-bypass-approvals-and-sandbox "$(cat <prompt-file>)"
 ```
 
 For reopens, harness uses `codex resume <session_id>` with the same flags. If a gate phase is explicitly mapped to a Claude preset, harness instead runs a `claude --print` gate subprocess.

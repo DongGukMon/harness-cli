@@ -338,22 +338,27 @@ export async function spawnCodexInPane(input: SpawnCodexInPaneInput): Promise<Co
   // `[projects."<realpath cwd>"] trust_level = "trusted"` into the isolated
   // CODEX_HOME), which bypasses both the trust prompt and the git-repo check.
   //
-  // `-s workspace-write --full-auto` lets codex write gate-N-verdict.md and
-  // phase-N.done as instructed by buildGateOutputProtocol (assembler.ts).
+  // `--dangerously-bypass-approvals-and-sandbox` (yolo) disables both the
+  // sandbox and approval prompts, matching harness's autonomous-mode intent —
+  // gates often need to write artifacts (verdict, sentinel, plan files) into
+  // paths whose git metadata sits outside the sandbox writable roots (e.g.
+  // sibling worktrees), and any approval prompt blocks the codex TUI inside
+  // the workspace pane until the human responds. The harness wrapper trusts
+  // the caller's cwd; security boundary is the harness invocation, not codex.
   let codexCmd: string;
   if (mode === 'resume' && sessionId) {
     codexCmd =
       `${codexBin} resume ${sessionId} ` +
       `--model ${preset.model} ` +
       `-c model_reasoning_effort="${preset.effort}" ` +
-      `-s workspace-write --full-auto ` +
+      `--dangerously-bypass-approvals-and-sandbox ` +
       `"$(cat "${promptFile}")"`;
   } else {
     codexCmd =
       `${codexBin} ` +
       `--model ${preset.model} ` +
       `-c model_reasoning_effort="${preset.effort}" ` +
-      `-s workspace-write --full-auto ` +
+      `--dangerously-bypass-approvals-and-sandbox ` +
       `"$(cat "${promptFile}")"`;
   }
 
@@ -389,10 +394,13 @@ export interface SpawnCodexInteractiveInPaneInput {
 }
 
 /**
- * Inject a `codex exec --full-auto` command into the tmux workspace pane for
- * interactive phases (1/3/5). Unlike spawnCodexInPane (gates), the shell wrapper
- * does NOT use `exec`, so sh survives codex exit and can write the sentinel.
- * Sentinel content = attemptId, enabling checkSentinelFreshness to verify it.
+ * Inject a top-level `codex` (TUI) command into the tmux workspace pane for
+ * interactive phases (1/3/5). Runs with
+ * `--dangerously-bypass-approvals-and-sandbox` so cross-worktree writes and
+ * git operations don't trip the sandbox or pop approval prompts. Unlike
+ * spawnCodexInPane (gates), the shell wrapper does NOT use `exec`, so sh
+ * survives codex exit and can write the sentinel. Sentinel content =
+ * attemptId, enabling checkSentinelFreshness to verify it.
  */
 export async function spawnCodexInteractiveInPane(
   input: SpawnCodexInteractiveInPaneInput,
@@ -432,19 +440,21 @@ export async function spawnCodexInteractiveInPane(
   if (fs.existsSync(pidFile)) fs.unlinkSync(pidFile);
 
   const codexBin = resolveCodexBin();
-  const sandbox = phase === 5 ? 'danger-full-access' : 'workspace-write';
   const codexHomeEnv = codexHome ? `CODEX_HOME="${codexHome}" ` : '';
 
   // Top-level `codex` TUI (matches gate pane spawn pattern). Trust entry in
   // the isolated CODEX_HOME (ensureCodexIsolation) bypasses git-repo check.
   // Prompt injected as positional arg via `cat` substitution at exec time.
+  // `--dangerously-bypass-approvals-and-sandbox` disables sandbox + all
+  // approval prompts so the autonomous loop never blocks on a yes/no inside
+  // the workspace pane (interactive phases routinely write across worktrees,
+  // run git, etc., which hits sandbox or approval gates otherwise).
   const wrappedCmd =
     `sh -c 'cd "${cwd}" && echo $$ > "${pidFile}" && ` +
     `${codexHomeEnv}exec ${codexBin} ` +
     `--model ${preset.model} ` +
     `-c model_reasoning_effort="${preset.effort}" ` +
-    `--sandbox ${sandbox} ` +
-    `--full-auto ` +
+    `--dangerously-bypass-approvals-and-sandbox ` +
     `"$(cat "${promptFile}")"'`;
 
   sendKeysToPane(sessionName, workspacePane, wrappedCmd);
