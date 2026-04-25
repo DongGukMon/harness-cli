@@ -939,6 +939,106 @@ describe('runInteractivePhase — codex-interactive branch invokes codex isolati
   });
 });
 
+// ─── runInteractivePhase — Codex P5 uncommitted-changes detection (#84) ─────
+
+describe('runInteractivePhase — Codex P5 uncommitted-changes detection (#84)', () => {
+  it('attaches uncommittedRepos and writes stderr warn when working tree is dirty', async () => {
+    const { runInteractivePhase } = await import('../../src/phases/interactive.js');
+
+    const runDir = makeTmpDir();
+    const harnessDir = makeTmpDir();
+    const repoDir = createTestRepo();
+
+    // Pollute working tree (uncommitted file) BEFORE running phase.
+    fs.writeFileSync(path.join(repoDir, 'dirty.txt'), 'wip\n');
+
+    const head = execSync('git rev-parse HEAD', { cwd: repoDir, encoding: 'utf-8' }).trim();
+    const state = makeState({
+      tmuxSession: 'test-session',
+      tmuxWorkspacePane: '%1',
+      tmuxControlPane: '%0',
+      phasePresets: { ...createInitialState('r', 't', 'b', false).phasePresets, '5': 'codex-high' },
+      codexNoIsolate: true,
+      baseCommit: head,
+      implRetryBase: head,
+    });
+    state.trackedRepos = [{ path: repoDir, baseCommit: head, implRetryBase: head, implHead: null }];
+
+    const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      const result = await runInteractivePhase(5, state, harnessDir, runDir, repoDir, 'attempt-uncommitted');
+      expect(result.status).toBe('failed');
+      expect(result.uncommittedRepos).toEqual([{ path: repoDir, count: 1 }]);
+      const writes = stderrSpy.mock.calls.map((c) => String(c[0])).join('');
+      expect(writes).toMatch(/Codex completed \(sentinel fresh\) but left uncommitted changes/);
+    } finally {
+      stderrSpy.mockRestore();
+    }
+  });
+
+  it('does NOT warn when Codex P5 fails with a clean working tree', async () => {
+    const { runInteractivePhase } = await import('../../src/phases/interactive.js');
+
+    const runDir = makeTmpDir();
+    const harnessDir = makeTmpDir();
+    const repoDir = createTestRepo();
+    // No pollution — tree stays clean.
+
+    const head = execSync('git rev-parse HEAD', { cwd: repoDir, encoding: 'utf-8' }).trim();
+    const state = makeState({
+      tmuxSession: 'test-session',
+      tmuxWorkspacePane: '%1',
+      tmuxControlPane: '%0',
+      phasePresets: { ...createInitialState('r', 't', 'b', false).phasePresets, '5': 'codex-high' },
+      codexNoIsolate: true,
+      baseCommit: head,
+      implRetryBase: head,
+    });
+    state.trackedRepos = [{ path: repoDir, baseCommit: head, implRetryBase: head, implHead: null }];
+
+    const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      const result = await runInteractivePhase(5, state, harnessDir, runDir, repoDir, 'attempt-clean');
+      expect(result.status).toBe('failed');
+      expect(result.uncommittedRepos).toBeUndefined();
+      const writes = stderrSpy.mock.calls.map((c) => String(c[0])).join('');
+      expect(writes).not.toMatch(/uncommitted changes/);
+    } finally {
+      stderrSpy.mockRestore();
+    }
+  });
+
+  it('does NOT warn for Claude P5 even when the tree is dirty (Claude branch never reaches the new code path)', async () => {
+    const { runInteractivePhase } = await import('../../src/phases/interactive.js');
+
+    const runDir = makeTmpDir();
+    const harnessDir = makeTmpDir();
+    const repoDir = createTestRepo();
+    fs.writeFileSync(path.join(repoDir, 'dirty.txt'), 'wip\n');
+
+    const head = execSync('git rev-parse HEAD', { cwd: repoDir, encoding: 'utf-8' }).trim();
+    // Default phase 5 preset is a Claude variant.
+    const state = makeState({
+      tmuxSession: 'test-session',
+      tmuxWorkspacePane: '%1',
+      tmuxControlPane: '%0',
+      baseCommit: head,
+      implRetryBase: head,
+    });
+    state.trackedRepos = [{ path: repoDir, baseCommit: head, implRetryBase: head, implHead: null }];
+
+    const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      const result = await runInteractivePhase(5, state, harnessDir, runDir, repoDir, 'attempt-claude');
+      expect(result.uncommittedRepos).toBeUndefined();
+      const writes = stderrSpy.mock.calls.map((c) => String(c[0])).join('');
+      expect(writes).not.toMatch(/uncommitted changes/);
+    } finally {
+      stderrSpy.mockRestore();
+    }
+  });
+});
+
 describe('validatePhaseArtifacts — Phase 5 multi-repo (FR-6, ADR-D4)', () => {
   it('returns true when any repo advanced; sets implHead on advanced repos only', () => {
     const outer = makeTmpDir();

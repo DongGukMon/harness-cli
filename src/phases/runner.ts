@@ -507,6 +507,10 @@ export async function handleInteractivePhase(
         status: 'failed',
         durationMs: Date.now() - phaseStartTs,
         ...(failedTokens !== undefined ? { claudeTokens: failedTokens } : {}),
+        // Issue #84 — Codex P5 sentinel-fresh + dirty-tree case only.
+        ...(result.uncommittedRepos !== undefined && result.uncommittedRepos.length > 0
+          ? { uncommittedRepos: result.uncommittedRepos }
+          : {}),
       });
     }
   } catch (err) {
