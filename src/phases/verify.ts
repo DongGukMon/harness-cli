@@ -6,7 +6,7 @@ import type { HarnessState, VerifyOutcome, VerifyResult } from '../types.js';
 import { VERIFY_TIMEOUT_MS, SIGTERM_WAIT_MS } from '../config.js';
 import { writeState } from '../state.js';
 import { updateLockChild, clearLockChild } from '../lock.js';
-import { runPhase6Preconditions } from '../artifact.js';
+import { runPhase6Preconditions, resolveArtifact } from '../artifact.js';
 import { killProcessGroup, getProcessStartTime } from '../process.js';
 import { resolveVerifyScriptPath } from '../preflight.js';
 
@@ -110,9 +110,10 @@ export async function runVerifyPhase(
   writeState(runDir, state);
 
   // Step 5: Spawn subprocess
+  const evalAbsPath = resolveArtifact(state, state.artifacts.evalReport, cwd);
   const child = spawn(
     scriptPath,
-    [state.artifacts.checklist, state.artifacts.evalReport],
+    [state.artifacts.checklist, evalAbsPath],
     { stdio: ['pipe', 'pipe', 'pipe'], detached: true, cwd }
   );
 
@@ -154,16 +155,12 @@ export async function runVerifyPhase(
       clearTimeout(timer);
 
       const code = exitCode ?? 1;
-      const evalReportAbsPath = path.isAbsolute(state.artifacts.evalReport)
-        ? state.artifacts.evalReport
-        : path.join(cwd, state.artifacts.evalReport);
-
-      const hasSummary = checkHasSummary(evalReportAbsPath);
+      const hasSummary = checkHasSummary(evalAbsPath);
 
       // Write verify-result.json immediately on exit
       writeVerifyResult(runDir, code, hasSummary);
 
-      const evalValid = isEvalReportValid(evalReportAbsPath);
+      const evalValid = isEvalReportValid(evalAbsPath);
       const classification = classifyVerifyResult(code, hasSummary, evalValid);
 
       const stdoutStr = Buffer.concat(stdoutChunks).toString('utf-8');
@@ -174,7 +171,7 @@ export async function runVerifyPhase(
       } else if (classification === 'fail') {
         const feedbackPath = path.join(runDir, VERIFY_FEEDBACK_FILE);
         try {
-          fs.copyFileSync(evalReportAbsPath, feedbackPath);
+          fs.copyFileSync(evalAbsPath, feedbackPath);
         } catch {
           // If copy fails, degrade to error
           resolve(buildErrorOutcome(runDir, stdoutStr, stderrStr));

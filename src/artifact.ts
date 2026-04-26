@@ -129,6 +129,10 @@ export function normalizeArtifactCommit(filePath: string, message: string, cwd?:
   const stagedFiles = getStagedFiles(cwd);
 
   if (stagedFiles.length === 0 || (stagedFiles.length === 1 && stagedFiles[0] === filePath)) {
+    const cwdAbs = cwd ?? process.cwd();
+    if (!existsSync(join(cwdAbs, filePath))) {
+      return false;
+    }
     exec(`git add "${filePath}"`, cwd);
     exec(`git commit -m "${message}"`, cwd);
     return true;
@@ -288,6 +292,7 @@ export function commitEvalReport(state: HarnessState, cwd: string): 'committed' 
   }
   const k = state.verifyRetries + 1;
   const message = `harness[${state.runId}]: Phase 6 — rev ${k} eval report`;
-  normalizeArtifactCommit(filePath, message, cwd);
+  const committed = normalizeArtifactCommit(filePath, message, cwd);
+  if (!committed) return 'skipped';
   return 'committed';
 }
