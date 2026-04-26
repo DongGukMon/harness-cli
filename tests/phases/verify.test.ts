@@ -2,10 +2,14 @@ import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import { EventEmitter } from 'events';
 
 vi.mock('../../src/state.js', () => ({ writeState: vi.fn() }));
 vi.mock('../../src/lock.js', () => ({ updateLockChild: vi.fn(), clearLockChild: vi.fn() }));
-vi.mock('../../src/artifact.js', () => ({ runPhase6Preconditions: vi.fn() }));
+vi.mock('../../src/artifact.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/artifact.js')>();
+  return { ...actual, runPhase6Preconditions: vi.fn() };
+});
 vi.mock('../../src/process.js', () => ({
   getProcessStartTime: vi.fn(() => 0),
   isProcessGroupAlive: vi.fn(() => false),
@@ -274,5 +278,41 @@ describe('runVerifyPhase — docsRoot (FR-3/6)', () => {
     }
 
     expect(mockPreconditions).toHaveBeenCalledWith('eval.md', 'test-run', outerCwd, []);
+  });
+});
+
+describe('runVerifyPhase — eval report absolute path in spawn args (producer fix #91)', () => {
+  it('passes docsRoot-based absolute path as OUTPUT_FILE to spawn when cwd !== docsRoot', async () => {
+    const outerCwd = tmpDir();
+    const docsRootDir = path.join(outerCwd, 'inner-repo');
+    fs.mkdirSync(docsRootDir, { recursive: true });
+
+    const state = {
+      runId: 'test-run',
+      phases: {},
+      artifacts: { checklist: 'checklist.json', evalReport: 'docs/eval.md' },
+      trackedRepos: [{ path: docsRootDir, baseCommit: 'abc', implRetryBase: 'abc', implHead: null }],
+      dirtyBaseline: [],
+    } as unknown as HarnessState;
+
+    const { spawn } = await import('child_process');
+    const mockSpawn = vi.mocked(spawn);
+    mockSpawn.mockClear();
+
+    const fakeChild = new EventEmitter() as any;
+    fakeChild.pid = 99999;
+    fakeChild.stdout = new EventEmitter();
+    fakeChild.stderr = new EventEmitter();
+    mockSpawn.mockReturnValueOnce(fakeChild);
+
+    vi.spyOn(preflightModule, 'resolveVerifyScriptPath').mockReturnValue('/fake/harness-verify.sh');
+
+    setImmediate(() => fakeChild.emit('close', 1));
+
+    await runVerifyPhase(state, outerCwd, outerCwd, outerCwd);
+
+    expect(mockSpawn).toHaveBeenCalledOnce();
+    const spawnArgs = mockSpawn.mock.calls[0][1] as string[];
+    expect(spawnArgs[1]).toBe(path.join(docsRootDir, 'docs/eval.md'));
   });
 });

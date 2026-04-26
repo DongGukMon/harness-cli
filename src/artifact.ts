@@ -293,5 +293,6 @@ export function commitEvalReport(state: HarnessState, cwd: string): 'committed' 
   const k = state.verifyRetries + 1;
   const message = `harness[${state.runId}]: Phase 6 — rev ${k} eval report`;
   const committed = normalizeArtifactCommit(filePath, message, cwd);
-  return committed ? 'committed' : 'skipped';
+  if (!committed) return 'skipped';
+  return 'committed';
 }

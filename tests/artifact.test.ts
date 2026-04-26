@@ -74,6 +74,23 @@ describe('normalizeArtifactCommit', () => {
     ).toThrow('Cannot auto-commit artifact: other staged changes exist.');
   });
 
+  it('returns false without throwing when file is staged-for-deletion and absent on disk', () => {
+    const filePath = 'artifact.md';
+    writeFileSync(join(repo.path, filePath), '# Artifact');
+    execSync(`git add "${filePath}" && git commit -m "add artifact"`, { cwd: repo.path });
+    // git rm stages deletion and removes file from disk
+    execSync(`git rm "${filePath}"`, { cwd: repo.path });
+
+    const headBefore = getHead(repo.path);
+
+    let result: boolean | undefined;
+    expect(() => {
+      result = normalizeArtifactCommit(filePath, 'harness: update artifact', repo.path);
+    }).not.toThrow();
+    expect(result).toBe(false);
+    expect(getHead(repo.path)).toBe(headBefore);
+  });
+
   it('recovers from interrupted git add (target-only staged)', () => {
     const filePath = 'artifact.md';
     writeFileSync(join(repo.path, filePath), '# Artifact');
@@ -433,6 +450,19 @@ describe('commitEvalReport', () => {
     expect(state.evalCommit).toBeNull();
     const warnMessages = stderrSpy.mock.calls.map((c: any) => c[0]).join('');
     expect(warnMessages).toContain('gitignored');
+  });
+
+  it('returns skipped when eval report file is absent (normalizeArtifactCommit no-op)', () => {
+    const baseCommit = getHead(repo.path);
+    const state = createInitialState('absent-run', 'task', baseCommit, false);
+    state.artifacts.evalReport = 'docs/process/evals/absent-run-eval.md';
+    // File intentionally does not exist
+
+    const headBefore = getHead(repo.path);
+    const result = commitEvalReport(state, repo.path);
+
+    expect(result).toBe('skipped');
+    expect(getHead(repo.path)).toBe(headBefore);
   });
 
   it('commits normally when eval report path is not gitignored', () => {
