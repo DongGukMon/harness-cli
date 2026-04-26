@@ -1038,7 +1038,7 @@ export async function handleVerifyPhase(
         phase: 6,
         status: 'failed',
         durationMs: Date.now() - phaseStartTs,
-        details: { reason: 'eval_commit_failed' },
+        details: { reason: 'eval_commit_failed', error: (err as Error).message },
       });
       return;
     }
