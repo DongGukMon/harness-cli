@@ -1262,3 +1262,86 @@ describe('assembleGateResumePrompt — Output Protocol block', () => {
     expect(prompt).toContain('resume-uuid-456');
   });
 });
+
+// ─── Clarity Scores Protocol (P2 ambiguity gate) ────────────────────────────
+
+describe('CLARITY_SCORES_PROTOCOL — assembleGatePrompt', () => {
+  function writeSpec(cwd: string, state: HarnessState): void {
+    const specAbsPath = path.join(cwd, state.artifacts.spec);
+    fs.mkdirSync(path.dirname(specAbsPath), { recursive: true });
+    fs.writeFileSync(specAbsPath, '# My Spec\n\nSome spec content here.');
+  }
+
+  function writePlan(cwd: string, state: HarnessState): void {
+    const planAbsPath = path.join(cwd, state.artifacts.plan);
+    fs.mkdirSync(path.dirname(planAbsPath), { recursive: true });
+    fs.writeFileSync(planAbsPath, '# My Plan\n\nSome plan content here.');
+  }
+
+  it('Phase-2 assembleGatePrompt output contains "## Clarity Scores" (full flow)', () => {
+    const cwd = makeTmpDir();
+    const state = makeState();
+    writeSpec(cwd, state);
+    const result = assembleGatePrompt(2, state, '/tmp/harness', cwd);
+    expect(typeof result).toBe('string');
+    expect(result as string).toContain('## Clarity Scores');
+  });
+
+  it('Phase-4 assembleGatePrompt output does NOT contain "## Clarity Scores"', () => {
+    const cwd = makeTmpDir();
+    const state = makeState();
+    writeSpec(cwd, state);
+    writePlan(cwd, state);
+    const result = assembleGatePrompt(4, state, '/tmp/harness', cwd);
+    expect(typeof result).toBe('string');
+    expect(result as string).not.toContain('## Clarity Scores');
+  });
+
+  it('Phase-7 assembleGatePrompt output does NOT contain "## Clarity Scores"', () => {
+    const cwd = makeTmpDir();
+    const state = makeFullEvalState();
+    writeSpec(cwd, state);
+    writePlan(cwd, state);
+    const evalAbsPath = path.join(cwd, state.artifacts.evalReport);
+    fs.mkdirSync(path.dirname(evalAbsPath), { recursive: true });
+    fs.writeFileSync(evalAbsPath, '# Eval Report');
+    const result = assembleGatePrompt(7, state, '/tmp/harness', cwd);
+    expect(typeof result).toBe('string');
+    expect(result as string).not.toContain('## Clarity Scores');
+  });
+});
+
+describe('CLARITY_SCORES_PROTOCOL — assembleGateResumePrompt', () => {
+  function writeSpec(cwd: string, state: HarnessState): void {
+    const specAbsPath = path.join(cwd, state.artifacts.spec);
+    fs.mkdirSync(path.dirname(specAbsPath), { recursive: true });
+    fs.writeFileSync(specAbsPath, '# My Spec\n\nSome spec content here.');
+  }
+
+  function writePlan(cwd: string, state: HarnessState): void {
+    const planAbsPath = path.join(cwd, state.artifacts.plan);
+    fs.mkdirSync(path.dirname(planAbsPath), { recursive: true });
+    fs.writeFileSync(planAbsPath, '# My Plan\n\nSome plan content here.');
+  }
+
+  it('Phase-2 assembleGateResumePrompt output contains "## Clarity Scores" bullet', () => {
+    const cwd = makeTmpDir();
+    const runDir = path.join(cwd, '.harness', 'my-run');
+    const state = makeState();
+    writeSpec(cwd, state);
+    const result = assembleGateResumePrompt(2, state, cwd, 'reject', 'P1 feedback', runDir);
+    expect(typeof result).toBe('string');
+    expect(result as string).toContain('## Clarity Scores');
+  });
+
+  it('Phase-4 assembleGateResumePrompt output does NOT contain "## Clarity Scores" bullet', () => {
+    const cwd = makeTmpDir();
+    const runDir = path.join(cwd, '.harness', 'my-run');
+    const state = makeState();
+    writeSpec(cwd, state);
+    writePlan(cwd, state);
+    const result = assembleGateResumePrompt(4, state, cwd, 'reject', 'P1 feedback', runDir);
+    expect(typeof result).toBe('string');
+    expect(result as string).not.toContain('## Clarity Scores');
+  });
+});

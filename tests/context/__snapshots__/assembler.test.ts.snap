@@ -37,6 +37,26 @@ Scope rules:
 3. Scope — 단일 구현 plan으로 분해 가능한 크기인가? 여러 독립 프로젝트 섞이지 않음?
 
 Note: Phase 1 resolves design ambiguities live with the developer. Do not penalize for missing "Open Questions" / "TODO" / deferred-items sections — those are intentionally absent.
+
+## Clarity Scores (REQUIRED — Phase 2 only)
+After \`## Summary\`, append a section titled exactly \`## Clarity Scores\`
+with one line per axis, in this exact order:
+
+  - goal: <0.0–1.0>
+  - constraint: <0.0–1.0>
+  - success: <0.0–1.0>
+  - context: <0.0–1.0>
+
+Each score is your assessment of how clear/unambiguous that aspect of the
+spec is — independent of whether you ultimately APPROVE or REJECT:
+  - goal       — Is the desired outcome stated unambiguously?
+  - constraint — Are non-requirements / forbidden behaviors / boundary conditions explicit?
+  - success    — Are success criteria measurable and concrete?
+  - context    — Are assumptions, inputs, and prior decisions captured?
+
+Use 1.0 for "fully clear, no reviewer-to-reviewer drift expected" and 0.0 for
+"so vague that two reviewers would reasonably reach different conclusions".
+Emit numbers, not adjectives. Do not omit axes.
 <harness_lifecycle>
 This is Gate 2 of a 7-phase harness lifecycle. You are reviewing ONLY the <spec> artifact. The implementation plan (Phase 3), the implementation itself (Phase 5), and the eval report (Phase 7) have not yet been produced; their absence must NOT appear as a finding.
 </harness_lifecycle>
