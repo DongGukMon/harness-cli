@@ -86,7 +86,9 @@ import {
   handleVerifyFail,
   handleVerifyEscalation,
   handleVerifyError,
+  __resetDetectors,
 } from '../../src/phases/runner.js';
+import { __resetWarnCache } from '../../src/phases/stagnation.js';
 import { runInteractivePhase } from '../../src/phases/interactive.js';
 import { runGatePhase } from '../../src/phases/gate.js';
 import { runVerifyPhase } from '../../src/phases/verify.js';
@@ -103,6 +105,9 @@ const tmpDirs: string[] = [];
 
 afterEach(() => {
   vi.clearAllMocks();
+  vi.unstubAllEnvs();
+  __resetDetectors();
+  __resetWarnCache();
   for (const dir of tmpDirs) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -2004,5 +2009,225 @@ describe('light flow — runPhaseLoop (spec §4 + ADR-1/ADR-4/ADR-14)', () => {
     expect(state.phaseCodexSessions['7']).toBeNull();
     expect(fs.existsSync(path.join(runDir, 'gate-7-raw.txt'))).toBe(false);
     expect(fs.existsSync(path.join(runDir, 'gate-7-result.json'))).toBe(false);
+  });
+});
+
+// ─── Stagnation detection in handleGateReject ─────────────────────────────────
+
+const STAGNANT = 'plan does not cover spec requirements; tests are missing; docs incomplete';
+const DIVERSE_A = 'the implementation is mostly correct but tests need edge case coverage';
+const DIVERSE_B = 'formatting issues found; please fix indentation and remove dead code';
+const DIVERSE_C = 'critical bug in error handler path; stack overflow under high load';
+
+describe('Stagnation — Test 5: auto-mode + 3 stagnant rejects → gate_stagnation + handleGateEscalation', () => {
+  it('emits gate_stagnation and calls handleGateEscalation with reason gate-stagnation', async () => {
+    __resetDetectors();
+    const runDir = makeTmpDir();
+    const state = makeState({ autoMode: true, currentPhase: 2 });
+    const { logger, eventsPath, cleanup } = makeTestLogger(state.runId);
+
+    vi.mocked(promptChoice).mockResolvedValueOnce('Q');
+
+    try {
+      // 3 rejects, same text — buffer fills with 3 identical entries
+      await handleGateReject(2, STAGNANT, undefined, 0, state, HDIR, runDir, CWD, createNoOpInputManager(), logger);
+      await handleGateReject(2, STAGNANT, undefined, 1, state, HDIR, runDir, CWD, createNoOpInputManager(), logger);
+      // 3rd reject: retryCount = 3 = retryLimit → stagnation fires
+      await handleGateReject(2, STAGNANT, undefined, 2, state, HDIR, runDir, CWD, createNoOpInputManager(), logger);
+
+      const events = readEvents(eventsPath);
+      const stagnation = events.find((e: any) => e.event === 'gate_stagnation');
+      expect(stagnation).toBeDefined();
+      expect(stagnation.phase).toBe(2);
+      expect(stagnation.action).toBe('escalate');
+      expect(Array.isArray(stagnation.similarities)).toBe(true);
+      expect(stagnation.similarities.length).toBeGreaterThanOrEqual(1);
+
+      const escalation = events.find((e: any) => e.event === 'escalation');
+      expect(escalation).toBeDefined();
+      expect(escalation.reason).toBe('gate-stagnation');
+
+      const forcePassEvents = events.filter((e: any) => e.event === 'force_pass');
+      expect(forcePassEvents).toHaveLength(0);
+
+      // forcePassGate must NOT have been called
+      expect(vi.mocked(promptChoice)).toHaveBeenCalledTimes(1);
+    } finally {
+      cleanup();
+    }
+  });
+});
+
+describe('Stagnation — Test 6: auto-mode + 3 diverse rejects → forcePassGate, no gate_stagnation', () => {
+  it('calls forcePassGate and does NOT emit gate_stagnation', async () => {
+    __resetDetectors();
+    const runDir = makeTmpDir();
+    const state = makeState({ autoMode: true, currentPhase: 2 });
+    const { logger, eventsPath, cleanup } = makeTestLogger(state.runId);
+
+    try {
+      await handleGateReject(2, DIVERSE_A, undefined, 0, state, HDIR, runDir, CWD, createNoOpInputManager(), logger);
+      await handleGateReject(2, DIVERSE_B, undefined, 1, state, HDIR, runDir, CWD, createNoOpInputManager(), logger);
+      await handleGateReject(2, DIVERSE_C, undefined, 2, state, HDIR, runDir, CWD, createNoOpInputManager(), logger);
+
+      const events = readEvents(eventsPath);
+      expect(events.find((e: any) => e.event === 'gate_stagnation')).toBeUndefined();
+      expect(events.find((e: any) => e.event === 'force_pass')).toBeDefined();
+
+      const writes = vi.mocked(writeState).mock.calls.map(([, s]) => s);
+      const forcePassState = writes.find(s => s.phases['2'] === 'completed');
+      expect(forcePassState).toBeDefined();
+
+      expect(vi.mocked(promptChoice)).not.toHaveBeenCalled();
+    } finally {
+      cleanup();
+    }
+  });
+});
+
+describe('Stagnation — Test 7: manual mode + 3 stagnant rejects → escalation reason=gate-retry-limit (no change)', () => {
+  it('preserves existing manual-mode escalation path', async () => {
+    __resetDetectors();
+    const runDir = makeTmpDir();
+    const state = makeState({ autoMode: false, currentPhase: 2,
+      gateRetries: { '2': FULL_GATE_RETRY_LIMIT, '4': 0, '7': 0 } });
+    const { logger, eventsPath, cleanup } = makeTestLogger(state.runId);
+
+    vi.mocked(promptChoice).mockResolvedValueOnce('Q');
+
+    try {
+      await handleGateReject(2, STAGNANT, undefined, FULL_GATE_RETRY_LIMIT, state, HDIR, runDir, CWD, createNoOpInputManager(), logger);
+
+      const events = readEvents(eventsPath);
+      const escalation = events.find((e: any) => e.event === 'escalation');
+      expect(escalation).toBeDefined();
+      expect(escalation.reason).toBe('gate-retry-limit');
+      expect(events.find((e: any) => e.event === 'gate_stagnation')).toBeUndefined();
+    } finally {
+      cleanup();
+    }
+  });
+});
+
+describe('Stagnation — Test 8: HARNESS_GATE_STAGNATION=off in auto-mode → forcePassGate', () => {
+  it('disables stagnation via env; falls back to force-pass', async () => {
+    __resetDetectors();
+    __resetWarnCache();
+    vi.stubEnv('HARNESS_GATE_STAGNATION', 'off');
+
+    const runDir = makeTmpDir();
+    const state = makeState({ autoMode: true, currentPhase: 2 });
+    const { logger, eventsPath, cleanup } = makeTestLogger(state.runId);
+
+    try {
+      await handleGateReject(2, STAGNANT, undefined, 0, state, HDIR, runDir, CWD, createNoOpInputManager(), logger);
+      await handleGateReject(2, STAGNANT, undefined, 1, state, HDIR, runDir, CWD, createNoOpInputManager(), logger);
+      await handleGateReject(2, STAGNANT, undefined, 2, state, HDIR, runDir, CWD, createNoOpInputManager(), logger);
+
+      const events = readEvents(eventsPath);
+      expect(events.find((e: any) => e.event === 'gate_stagnation')).toBeUndefined();
+      expect(events.find((e: any) => e.event === 'force_pass')).toBeDefined();
+      expect(vi.mocked(promptChoice)).not.toHaveBeenCalled();
+    } finally {
+      cleanup();
+    }
+  });
+});
+
+describe('Stagnation — Test 9: detector throws → forcePassGate, single warn, no gate_stagnation', () => {
+  it('catches detector exception and falls back to force-pass', async () => {
+    __resetDetectors();
+    const runDir = makeTmpDir();
+    const state = makeState({ autoMode: true, currentPhase: 2 });
+    const { logger, eventsPath, cleanup } = makeTestLogger(state.runId);
+
+    // Populate buffer so stagnation would normally trigger
+    await handleGateReject(2, STAGNANT, undefined, 0, state, HDIR, runDir, CWD, createNoOpInputManager(), logger);
+    await handleGateReject(2, STAGNANT, undefined, 1, state, HDIR, runDir, CWD, createNoOpInputManager(), logger);
+
+    // Make shouldEscalate throw on the 3rd call
+    const { StagnationDetector: SD } = await import('../../src/phases/stagnation.js');
+    const origShouldEscalate = SD.prototype.shouldEscalate;
+    SD.prototype.shouldEscalate = function() { throw new Error('detector exploded'); };
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    try {
+      await handleGateReject(2, STAGNANT, undefined, 2, state, HDIR, runDir, CWD, createNoOpInputManager(), logger);
+
+      const events = readEvents(eventsPath);
+      expect(events.find((e: any) => e.event === 'gate_stagnation')).toBeUndefined();
+      expect(events.find((e: any) => e.event === 'force_pass')).toBeDefined();
+
+      const stagnationWarns = warnSpy.mock.calls.filter(args => String(args[0]).includes('detector error'));
+      expect(stagnationWarns).toHaveLength(1);
+
+      expect(vi.mocked(promptChoice)).not.toHaveBeenCalled();
+    } finally {
+      SD.prototype.shouldEscalate = origShouldEscalate;
+      cleanup();
+    }
+  });
+});
+
+describe('Stagnation — Test 9a: invalid THRESHOLD env in auto-mode → forcePassGate, one warn', () => {
+  it('unified fail-open: invalid validated env disables feature', async () => {
+    __resetDetectors();
+    __resetWarnCache();
+    vi.stubEnv('HARNESS_GATE_STAGNATION_THRESHOLD', 'not-a-number');
+
+    const runDir = makeTmpDir();
+    const state = makeState({ autoMode: true, currentPhase: 2 });
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    try {
+      await handleGateReject(2, STAGNANT, undefined, 0, state, HDIR, runDir, CWD, createNoOpInputManager(), new NoopLogger());
+      await handleGateReject(2, STAGNANT, undefined, 1, state, HDIR, runDir, CWD, createNoOpInputManager(), new NoopLogger());
+      await handleGateReject(2, STAGNANT, undefined, 2, state, HDIR, runDir, CWD, createNoOpInputManager(), new NoopLogger());
+
+      expect(vi.mocked(promptChoice)).not.toHaveBeenCalled();
+
+      const writes = vi.mocked(writeState).mock.calls.map(([, s]) => s);
+      const forcePassState = writes.find(s => s.phases['2'] === 'completed');
+      expect(forcePassState).toBeDefined();
+
+      const warns = warnSpy.mock.calls.filter(args => String(args[0]).includes('HARNESS_GATE_STAGNATION_THRESHOLD'));
+      expect(warns).toHaveLength(1);
+    } finally {
+      // no cleanup needed (NoopLogger)
+    }
+  });
+});
+
+describe('Stagnation — Test 9b: WINDOW env set to non-2 value → stagnation still fires, no warn', () => {
+  it('WINDOW is a no-op; feature remains enabled when only WINDOW is set', async () => {
+    __resetDetectors();
+    __resetWarnCache();
+    vi.stubEnv('HARNESS_GATE_STAGNATION_WINDOW', '5');
+
+    const runDir = makeTmpDir();
+    const state = makeState({ autoMode: true, currentPhase: 2 });
+    const { logger, eventsPath, cleanup } = makeTestLogger(state.runId);
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    vi.mocked(promptChoice).mockResolvedValueOnce('Q');
+
+    try {
+      await handleGateReject(2, STAGNANT, undefined, 0, state, HDIR, runDir, CWD, createNoOpInputManager(), logger);
+      await handleGateReject(2, STAGNANT, undefined, 1, state, HDIR, runDir, CWD, createNoOpInputManager(), logger);
+      await handleGateReject(2, STAGNANT, undefined, 2, state, HDIR, runDir, CWD, createNoOpInputManager(), logger);
+
+      const events = readEvents(eventsPath);
+      const stagnation = events.find((e: any) => e.event === 'gate_stagnation');
+      expect(stagnation).toBeDefined();
+
+      const escalation = events.find((e: any) => e.event === 'escalation');
+      expect(escalation?.reason).toBe('gate-stagnation');
+
+      const windowWarns = warnSpy.mock.calls.filter(args => String(args[0]).includes('HARNESS_GATE_STAGNATION_WINDOW'));
+      expect(windowWarns).toHaveLength(0);
+    } finally {
+      cleanup();
+    }
   });
 });
