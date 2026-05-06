@@ -180,7 +180,7 @@ export class FileSessionLogger implements SessionLogger {
       const phases: Record<string, any> = {};
       const seenVerdictKeys = new Set<string>();
       const seenErrorPhases = new Set<number>();
-      let gateTokens = 0, gateRejects = 0, gateErrors = 0, escalations = 0, verifyFailures = 0, forcePasses = 0;
+      let gateTokens = 0, gateRejects = 0, gateErrors = 0, escalations = 0, verifyFailures = 0, forcePasses = 0, stagnationEscalations = 0;
 
       // First pass: collect authoritative event keys
       for (const e of events) {
@@ -226,6 +226,8 @@ export class FileSessionLogger implements SessionLogger {
           escalations++;
         } else if (e.event === 'force_pass') {
           forcePasses++;
+        } else if (e.event === 'gate_stagnation' && (e as any).action === 'escalate') {
+          stagnationEscalations++;
         } else if (e.event === 'verify_result' && !e.passed) {
           verifyFailures++;
         }
@@ -241,7 +243,7 @@ export class FileSessionLogger implements SessionLogger {
         status,
         autoMode: state.autoMode,
         phases,
-        totals: { gateTokens, gateRejects, gateErrors, escalations, verifyFailures, forcePasses },
+        totals: { gateTokens, gateRejects, gateErrors, escalations, verifyFailures, forcePasses, stagnationEscalations },
       };
 
       const tmpPath = this.summaryPath + '.tmp';
