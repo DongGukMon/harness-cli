@@ -79,6 +79,23 @@ Light-flow specifics:
 - `phase-harness resume --light` is rejected because flow is frozen at run creation
 - P2 (pre-impl gate): Codex reviews the combined design doc using a 4-axis rubric. REJECT → immediate P1 reopen with feedback delivered via `pendingAction.feedbackPaths` only; `state.carryoverFeedback` is not set at Gate 2. Gate retry limit 3 (same as full-flow P2). Legacy light runs created before P2 activation keep `phases['2']='skipped'` — activation is forward-only via `createInitialState`, not retroactive migration.
 - gate retry limit: light P2 = 3, light P7 = 5, full flow = 3
+
+### Gate stagnation detection (auto-mode)
+
+In auto-mode, when a gate phase is rejected `retryLimit` times in a row, harness checks whether the rejections are *stagnant* before force-passing. Stagnation is defined as: the last two adjacent reviewer feedback texts are ≥70% token-Jaccard similar (token union/intersection after NFKC normalisation). If both conditions hold (auto-mode + stagnation detected), harness escalates to the C/S/Q prompt instead of force-passing. This prevents silently inheriting an unaddressed root cause across phases.
+
+**Configuration:** four env vars control detection; see README for the full table. Key defaults:
+- `HARNESS_GATE_STAGNATION=on` (auto-mode default; `=off` to restore old force-pass behaviour)
+- `HARNESS_GATE_STAGNATION_THRESHOLD=0.70`
+- `HARNESS_GATE_STAGNATION_RUN=2` (two consecutive stagnant pairs required)
+- `HARNESS_GATE_STAGNATION_WINDOW=2` (reserved; no-op in v1)
+
+Invalid values for the first three vars disable the feature fail-open (one stderr warn per key per process). The detector buffer is in-memory only; resuming a paused run starts empty.
+
+**New `events.jsonl` event:** `gate_stagnation` is emitted once per triggered detection, immediately before the `escalation` event, with fields `phase`, `retryIndex`, `similarities[]`, `threshold`, `run`, `action: 'escalate'`.
+
+**Extended schema:** `escalation.reason` now includes `'gate-stagnation'` in addition to the four pre-existing values.
+
 - on P7 `REJECT`:
   - `Scope: impl` → reopen P5
   - `Scope: design`, `Scope: mixed`, or missing scope → reopen P1 and preserve carryover feedback for P5
@@ -326,7 +343,7 @@ When enabled, harness writes under:
   summary.json
 ```
 
-Important logged events include `phase_start`, `phase_end`, `gate_verdict`, `gate_error`, `gate_retry`, `verify_result`, `ui_render`, `terminal_action`, and `session_end`.
+Important logged events include `phase_start`, `phase_end`, `gate_verdict`, `gate_error`, `gate_retry`, `gate_stagnation`, `verify_result`, `ui_render`, `terminal_action`, and `session_end`. The `gate_stagnation` event carries fields `phase`, `retryIndex`, `similarities` (number[]), `threshold`, `run`, `action: 'escalate'`.
 The control-pane footer aggregates elapsed time plus Claude/gate token totals from those logs.
 
 ---

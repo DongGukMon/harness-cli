@@ -273,7 +273,16 @@ export type LogEvent =
       preset?: { id: string; runner: 'claude' | 'codex'; model: string; effort: string };
     })
   | (LogEventBase & { event: 'gate_retry'; phase: number; retryIndex: number; retryCount: number; retryLimit: number; feedbackPath: string; feedbackBytes: number; feedbackPreview: string })
-  | (LogEventBase & { event: 'escalation'; phase: number; reason: 'gate-retry-limit' | 'gate-error' | 'verify-limit' | 'verify-error'; userChoice?: 'C' | 'S' | 'Q' | 'R' })
+  | (LogEventBase & {
+      event: 'gate_stagnation';
+      phase: number;
+      retryIndex: number;
+      similarities: number[];
+      threshold: number;
+      run: number;
+      action: 'escalate';
+    })
+  | (LogEventBase & { event: 'escalation'; phase: number; reason: 'gate-retry-limit' | 'gate-error' | 'verify-limit' | 'verify-error' | 'gate-stagnation'; userChoice?: 'C' | 'S' | 'Q' | 'R' })
   | (LogEventBase & { event: 'force_pass'; phase: number; by: 'auto' | 'user' })
   | (LogEventBase & { event: 'verify_result'; passed: boolean; retryIndex: number; durationMs: number; failedChecks?: string[] })
   | (LogEventBase & { event: 'phase_end'; phase: number; attemptId?: string | null; status: 'completed' | 'failed'; durationMs: number; details?: { reason: string; error?: string }; claudeTokens?: ClaudeTokens | null; codexTokens?: ClaudeTokens | null; uncommittedRepos?: Array<{ path: string; count: number }> })
