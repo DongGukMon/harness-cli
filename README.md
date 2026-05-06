@@ -227,6 +227,18 @@ Important behavior:
 - if `--require-clean` is set, both staged and unstaged changes are blocked
 - on first run, harness ensures `.harness/` is present in `.gitignore`
 
+**Auto-mode gate stagnation detection:**
+When running with `--auto`, harness detects *stagnant* gate retry cycles — where each retry's reviewer feedback is essentially the same as the previous one — and escalates to the user (C/S/Q prompt) instead of silently force-passing. Stagnation is measured by token-set Jaccard similarity between adjacent reviewer feedback texts. Four environment variables control this behaviour:
+
+| Variable | Default | Description |
+|---|---|---|
+| `HARNESS_GATE_STAGNATION` | `on` (auto-mode) | Set to `off` to restore pre-detection force-pass behaviour |
+| `HARNESS_GATE_STAGNATION_THRESHOLD` | `0.70` | Jaccard similarity threshold [0, 1]; higher = stricter |
+| `HARNESS_GATE_STAGNATION_RUN` | `2` | Consecutive stagnant pairs required before escalation (min 2) |
+| `HARNESS_GATE_STAGNATION_WINDOW` | `2` | Reserved for future use; currently fixed at 2 (pair comparison) |
+
+Any invalid value for the first three variables disables the feature for that process and emits one warning to stderr. The feature is always off in manual mode.
+
 ### `phase-harness resume [runId]`
 
 Resumes the current run or a specific run.

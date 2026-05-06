@@ -79,6 +79,23 @@ light flow 특이사항:
 - flow는 run 생성 시 고정되므로 `phase-harness resume --light`는 거부됩니다
 - P2 (pre-impl gate): Codex가 결합 design doc를 4축 루브릭으로 리뷰합니다. REJECT 시 즉시 P1 재진입 — feedback은 `pendingAction.feedbackPaths`로만 전달되고 `state.carryoverFeedback`는 Gate 2에서 설정되지 않습니다. Gate retry limit 3 (풀 플로우 P2와 동일). P2 활성화 이전에 생성된 legacy light run은 `phases['2']='skipped'` 상태를 유지합니다 — activation은 `createInitialState`를 통한 forward-only이고 retroactive migration이 아닙니다.
 - gate retry limit: light P2 = 3회, light P7 = 5회, 풀 플로우 = 3회
+
+### 게이트 스태그네이션 감지 (자율 모드)
+
+자율 모드에서 게이트 페이즈가 `retryLimit`번 연속으로 거부되면, harness는 강제 통과 전에 거부가 *정체 상태*인지 확인합니다. 정체는 마지막 두 인접 리뷰어 피드백 텍스트가 NFKC 정규화 후 토큰 집합 Jaccard 유사도 ≥70%인 경우로 정의됩니다. 두 조건이 모두 충족되면 (자율 모드 + 정체 감지) harness는 강제 통과 대신 C/S/Q 프롬프트로 에스컬레이션합니다. 이는 처리되지 않은 근본 원인이 다음 페이즈로 조용히 넘어가는 것을 방지합니다.
+
+**설정:** 네 가지 환경 변수로 감지를 제어합니다; 전체 표는 README를 참조하세요. 주요 기본값:
+- `HARNESS_GATE_STAGNATION=on` (자율 모드 기본값; `=off`로 기존 강제 통과 동작으로 복원)
+- `HARNESS_GATE_STAGNATION_THRESHOLD=0.70`
+- `HARNESS_GATE_STAGNATION_RUN=2` (연속 정체 쌍 2개 필요)
+- `HARNESS_GATE_STAGNATION_WINDOW=2` (예약됨; v1에서는 no-op)
+
+처음 세 변수의 잘못된 값은 기능을 fail-open으로 비활성화합니다 (프로세스당 키당 최대 1회 stderr 경고). 감지기 버퍼는 메모리 내에만 존재하며, 일시정지된 실행을 재개하면 빈 상태로 시작됩니다.
+
+**새 `events.jsonl` 이벤트:** `gate_stagnation`은 트리거된 감지당 한 번 `escalation` 이벤트 바로 전에 발생하며, `phase`, `retryIndex`, `similarities[]`, `threshold`, `run`, `action: 'escalate'` 필드를 포함합니다.
+
+**확장된 스키마:** `escalation.reason`은 기존 네 가지 값에 더해 `'gate-stagnation'`을 포함합니다.
+
 - P7 `REJECT` 시:
   - `Scope: impl` → P5 재오픈
   - `Scope: design`, `Scope: mixed`, scope 누락 → P1 재오픈 + carryover feedback을 P5까지 유지
@@ -307,7 +324,7 @@ light flow에서는 skipped phase로 jump할 수 없습니다.
   summary.json
 ```
 
-주요 이벤트는 `phase_start`, `phase_end`, `gate_verdict`, `gate_error`, `gate_retry`, `verify_result`, `ui_render`, `terminal_action`, `session_end` 등입니다.
+주요 이벤트는 `phase_start`, `phase_end`, `gate_verdict`, `gate_error`, `gate_retry`, `gate_stagnation`, `verify_result`, `ui_render`, `terminal_action`, `session_end` 등입니다. `gate_stagnation` 이벤트는 `phase`, `retryIndex`, `similarities` (number[]), `threshold`, `run`, `action: 'escalate'` 필드를 포함합니다.
 control pane footer는 이 로그를 바탕으로 경과 시간과 Claude/gate 토큰 합계를 집계합니다.
 
 ---

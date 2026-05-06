@@ -227,6 +227,18 @@ phase-harness start --root /tmp/demo "task"
 - `--require-clean`을 주면 staged/unstaged 둘 다 차단됩니다
 - 첫 실행 시 `.gitignore`에 `.harness/`가 없으면 자동으로 추가합니다
 
+**자율 모드 게이트 스태그네이션 감지:**
+`--auto`로 실행할 때, harness는 *정체된* 게이트 재시도 사이클을 감지합니다 — 각 재시도의 리뷰어 피드백이 이전과 본질적으로 동일한 경우 — 조용히 강제 통과하는 대신 사용자에게 에스컬레이션합니다 (C/S/Q 프롬프트). 정체는 인접한 리뷰어 피드백 텍스트 사이의 토큰 집합 Jaccard 유사도로 측정합니다. 네 가지 환경 변수로 이 동작을 제어합니다:
+
+| 변수 | 기본값 | 설명 |
+|---|---|---|
+| `HARNESS_GATE_STAGNATION` | `on` (자율 모드) | `off`로 설정하면 감지 전 강제 통과 동작으로 복원 |
+| `HARNESS_GATE_STAGNATION_THRESHOLD` | `0.70` | Jaccard 유사도 임계값 [0, 1]; 높을수록 엄격 |
+| `HARNESS_GATE_STAGNATION_RUN` | `2` | 에스컬레이션 전 연속 정체 쌍 수 (최소 2) |
+| `HARNESS_GATE_STAGNATION_WINDOW` | `2` | 향후 사용 예약; 현재 2로 고정 (쌍 비교) |
+
+처음 세 변수에 잘못된 값이 있으면 해당 프로세스에서 기능이 비활성화되고 stderr에 경고 하나가 출력됩니다. 수동 모드에서는 항상 비활성화됩니다.
+
 ### `phase-harness resume [runId]`
 
 현재 run 또는 특정 run을 재개합니다.
