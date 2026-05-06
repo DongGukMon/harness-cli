@@ -40,7 +40,7 @@ Medium — single new module (`src/phases/stagnation.ts`, ~150 LoC) plus one bra
 3. Stagnation detection is deterministic, dependency-free, O(text length) per gate retry, and never blocks a converging gate from reaching force-pass.
 4. The user can disable detection or tune its threshold/run/window via environment variables without rebuilding.
 5. The events.jsonl schema gains exactly one new optional event variant and one enum addition; no existing event field is renamed, removed, or retyped.
-6. On any internal failure (token parse error, ring buffer corruption, malformed env), behaviour falls back to the existing 3-strike force-pass with a single stderr warn — *never* harder than today.
+6. On any internal failure (token parse error, ring buffer corruption, malformed env), behaviour falls back to the existing 3-strike force-pass with at most one stderr warn per key — *never* harder than today. Specifically: malformed env values force `cfg.enabled = false` for the entire process (unified rule — see Configuration loader and I-3); detector exceptions are caught and routed to force-pass at the call site.
 
 ## Non-goals
 
@@ -107,20 +107,22 @@ function loadStagnationConfig(autoMode: boolean): {
 }
 ```
 
-Reads `process.env`. Each env var is parsed once per phase loop iteration entry (cheap). Invalid values fall back to defaults and emit *one* `console.warn` per misconfigured key per process (deduped via a module-private `Set`).
+Reads `process.env`. Each env var is parsed once per phase loop iteration entry (cheap). **Any invalid env value forces `enabled = false` for the entire process** (i.e., the feature self-disables on misconfiguration), and emits *one* `console.warn` per misconfigured key per process (deduped via a module-private `Set`). This unified rule guarantees that the runtime path on misconfig is byte-identical to today's 3-strike force-pass behaviour (Goal #6).
 
 | Env | Default | Parse rule | On invalid |
 |---|---|---|---|
-| `HARNESS_GATE_STAGNATION` | `'on'` if `autoMode` else `'off'` | `'on'`/`'off'` exact (case-insensitive) | warn + `'off'` |
-| `HARNESS_GATE_STAGNATION_THRESHOLD` | `0.70` | `parseFloat`, must be in `[0, 1]` | warn + `0.70` |
-| `HARNESS_GATE_STAGNATION_RUN` | `2` | `parseInt(base 10)`, must be `>= 2` | warn + `2` |
-| `HARNESS_GATE_STAGNATION_WINDOW` | `2` | `parseInt(base 10)`, must equal `2` | warn + `2` |
+| `HARNESS_GATE_STAGNATION` | `'on'` if `autoMode` else `'off'` | `'on'`/`'off'` exact (case-insensitive) | warn + force `enabled = false` |
+| `HARNESS_GATE_STAGNATION_THRESHOLD` | `0.70` | `parseFloat`, must be in `[0, 1]` | warn + force `enabled = false` |
+| `HARNESS_GATE_STAGNATION_RUN` | `2` | `parseInt(base 10)`, must be `>= 2` | warn + force `enabled = false` |
+| `HARNESS_GATE_STAGNATION_WINDOW` | `2` | `parseInt(base 10)`, must equal `2` | warn + force `enabled = false` |
+
+When valid, `threshold/run/window` are returned as their parsed values; when invalid, the loader returns `{ enabled: false, threshold: 0.70, run: 2, window: 2 }` (the defaults are still populated as inert placeholders, but `enabled: false` short-circuits all downstream consumers — see Integration point below).
 
 ### Integration point in `runner.ts`
 
 `handleGateReject` is currently the single producer of force-pass and escalation transitions for gate phases. The change is local to that function:
 
-1. At the **top** of `handleGateReject` (after `state.phases[String(phase)] = 'pending'`, before any state mutation that depends on retryCount): call `getOrCreateDetector(phase, state).record(comments)`. This guarantees the buffer reflects the just-rejected feedback before any branching decision.
+1. At the **top** of `handleGateReject` (after `state.phases[String(phase)] = 'pending'`, before any state mutation that depends on retryCount): call `cfg = loadStagnationConfig(state.autoMode)`. If `cfg.enabled === true`, then call `getOrCreateDetector(phase, cfg).record(comments)` — otherwise *skip both the detector construction and the record call entirely*. This way, when stagnation is disabled (manual mode, env-off, or env-misconfigured), `handleGateReject`'s control- and data-flow are byte-identical to today's code (the only delta is the `loadStagnationConfig` call itself, which is a pure read of `process.env` with no side effects beyond the deduped warn). The same `cfg` value is reused at the branch in step 2 — *do not call the loader twice in one invocation*.
 2. **Replace** the existing branch:
    ```ts
    if (retryCount >= retryLimit && state.autoMode) {
@@ -128,11 +130,10 @@ Reads `process.env`. Each env var is parsed once per phase loop iteration entry 
      return;
    }
    ```
-   with:
+   with (note: `cfg` is the same value already loaded in step 1; the detector here is the one that was constructed/recorded in step 1, or `undefined` if stagnation is disabled):
    ```ts
    if (retryCount >= retryLimit && state.autoMode) {
-     const cfg = loadStagnationConfig(state.autoMode);
-     if (cfg.enabled) {
+     if (cfg.enabled && detector !== undefined) {
        let triggered = false;
        let similarities: number[] = [];
        try {
@@ -218,15 +219,16 @@ All existing readers that pattern-match the four prior values continue to work; 
 
 Truth table for the new branch in `handleGateReject`:
 
-| `retryCount >= retryLimit` | `state.autoMode` | `cfg.enabled` | Detector `triggered` | Result |
-|---|---|---|---|---|
-| no | * | * | * | (unchanged) save feedback, reopen interactive phase |
-| yes | no | * | * | (unchanged) `handleGateEscalation` (reason: `'gate-retry-limit'`) |
-| yes | yes | no | * | (unchanged) `forcePassGate(by='auto')` |
-| yes | yes | yes | no | (unchanged) `forcePassGate(by='auto')` |
-| yes | yes | yes | yes | **new** `handleGateEscalation` (reason: `'gate-stagnation'`); `gate_stagnation` event emitted |
+| `retryCount >= retryLimit` | `state.autoMode` | env any-invalid | `cfg.enabled` | Detector `triggered` | Result |
+|---|---|---|---|---|---|
+| no | * | * | * | * | (unchanged) save feedback, reopen interactive phase |
+| yes | no | * | * | * | (unchanged) `handleGateEscalation` (reason: `'gate-retry-limit'`) |
+| yes | yes | yes | no | n/a (detector not constructed) | (unchanged) `forcePassGate(by='auto')` |
+| yes | yes | no | no | n/a (detector not constructed) | (unchanged) `forcePassGate(by='auto')` — covers `HARNESS_GATE_STAGNATION=off` |
+| yes | yes | no | yes | no | (unchanged) `forcePassGate(by='auto')` |
+| yes | yes | no | yes | yes | **new** `handleGateEscalation` (reason: `'gate-stagnation'`); `gate_stagnation` event emitted |
 
-Detector exception in any cell: warn + force-pass (matches the row "triggered=no").
+Detector exception in any cell: warn + force-pass (matches the row "triggered=no"). Note: column "env any-invalid = yes" implies `cfg.enabled = false` by I-3, so it can never coexist with `triggered = yes`.
 
 ## Configuration surface (final)
 
@@ -248,7 +250,7 @@ HARNESS_GATE_STAGNATION_WINDOW      2    (=== 2 in v1)
    - last `RUN` pairs all ≥ threshold: `triggered = true`
    - last `RUN` pairs include one < threshold: `triggered = false`
    - any pair returns null similarity: `triggered = false`
-4. `loadStagnationConfig` — defaults respect `autoMode`; invalid values warn-once + fall back; valid values parsed correctly.
+4. `loadStagnationConfig` — defaults respect `autoMode`; **any invalid env value forces `enabled = false` and warns at most once per misconfigured key per process** (regardless of which key was malformed); all-valid input returns parsed values with `enabled` driven by `HARNESS_GATE_STAGNATION` only.
 
 ### Unit — `src/phases/runner.test.ts` additions
 
@@ -257,6 +259,7 @@ HARNESS_GATE_STAGNATION_WINDOW      2    (=== 2 in v1)
 7. Manual mode + 3 stagnant rejects → existing escalation path with reason `'gate-retry-limit'` (regression guard).
 8. `HARNESS_GATE_STAGNATION=off` in auto-mode + 3 stagnant rejects → `forcePassGate` called (regression guard).
 9. Detector throws inside `shouldEscalate` → fall back to `forcePassGate`, single warn, no `gate_stagnation` event.
+9a. **Env misconfiguration (any one of THRESHOLD/RUN/WINDOW invalid, e.g., `HARNESS_GATE_STAGNATION_THRESHOLD=not-a-number`) in auto-mode + 3 stagnant rejects → `forcePassGate` called, `gate_stagnation` not emitted, exactly one warn for the offending key.** This pins the unified-fail-open rule.
 
 ### Integration — `tests/integration/gate-stagnation.test.ts`
 
@@ -281,15 +284,15 @@ A change is *complete* when **all** of the following are true:
 5. **Backward compat:** a freshly built `dist/` produces an `events.jsonl` whose `force_pass`, `gate_retry`, and `escalation` event shapes are byte-identical to a baseline captured before the change for non-stagnant runs. Verifiable by: integration test 11 listed above (existing suite passes unchanged).
 6. **No new dependency:** `package.json` `dependencies` and `devDependencies` are unchanged. Verifiable by: `git diff main -- package.json` shows zero diff in these blocks.
 7. **Documentation sync (CLAUDE.md mandate):** `README.md`, `README.ko.md`, `docs/HOW-IT-WORKS.md`, `docs/HOW-IT-WORKS.ko.md` each contain the string `HARNESS_GATE_STAGNATION` at least once. Verifiable by: `grep -l "HARNESS_GATE_STAGNATION" README.md README.ko.md docs/HOW-IT-WORKS.md docs/HOW-IT-WORKS.ko.md` lists all four files.
-8. **Fail-open under env misconfiguration:** with `HARNESS_GATE_STAGNATION_THRESHOLD=not-a-number` and a 3-stagnant-reject auto-mode run, the result is `forcePassGate` (i.e., the single warn does not block force-pass). Verifiable by integration test variant of test 9.
+8. **Fail-open under env misconfiguration:** with `HARNESS_GATE_STAGNATION_THRESHOLD=not-a-number` (or any other invalid value of any of the four env vars) and a 3-stagnant-reject auto-mode run, the result is `forcePassGate(by='auto')`, `gate_stagnation` is NOT emitted, and exactly one stderr `console.warn` is produced for the offending key. Verifiable by test 9a in the test plan above.
 
 ## Invariants
 
 The implementation MUST preserve the following at all times:
 
-- **I-1 (no-regress):** When `cfg.enabled === false` OR detector returns `triggered === false`, the runtime path through `handleGateReject` is byte-identical to the pre-change path. No new state mutation, no new event, no new file IO.
-- **I-2 (auto-mode-only by default):** In manual mode (`state.autoMode === false`) and with no env override, `loadStagnationConfig(false).enabled === false`. The detector may be constructed and recorded into, but `shouldEscalate` is never consulted on the manual-mode branch.
-- **I-3 (fail-open):** Any thrown exception from `tokenJaccard`, `record`, `shouldEscalate`, or `loadStagnationConfig` is caught at the call site in `handleGateReject` and routed to the existing `forcePassGate` path. Stagnation MUST NOT introduce a new way to crash the harness.
+- **I-1 (no-regress):** When `cfg.enabled === false` (manual mode, env-off, or env-misconfigured) OR `triggered === false` from `shouldEscalate()`, the runtime path through `handleGateReject` is byte-identical to the pre-change path with respect to *persisted* state (`state.json`, sentinels, files), *emitted events*, and *file IO*. The only deltas vs main are: (a) the pure `process.env` read inside `loadStagnationConfig` (which has no side effects beyond an at-most-once-per-key deduped `console.warn`), and (b) when `cfg.enabled === true`, an in-memory ring-buffer push inside the detector — both confined to the running process and never serialised.
+- **I-2 (auto-mode-only by default):** In manual mode (`state.autoMode === false`) and with no env override, `loadStagnationConfig(false).enabled === false`. **When `cfg.enabled === false`, the detector is neither constructed nor consulted** — `getOrCreateDetector` is not called and `record`/`shouldEscalate` are never invoked. The whole stagnation code path collapses to the single `loadStagnationConfig` call.
+- **I-3 (fail-open):** Any thrown exception from `loadStagnationConfig`, `tokenJaccard`, `record`, or `shouldEscalate` is caught at the call site in `handleGateReject` and routed to the existing `forcePassGate` path with one `console.warn`. Additionally, *any* invalid env value forces `cfg.enabled = false` for the rest of the process (one warn per misconfigured key, see I-8). Stagnation MUST NOT introduce a new way to crash the harness, and it MUST NOT make stricter decisions (escalate where the old code force-passed) under malformed configuration.
 - **I-4 (event additivity):** Existing `LogEvent` variant fields remain unchanged in name, type, and presence. The only schema deltas are: (a) a new top-level variant `gate_stagnation`; (b) an enum extension on `escalation.reason`. Verifiable by: `grep -nE "event: 'gate_retry'\|event: 'force_pass'\|event: 'escalation'" src/types.ts` shows the same line shapes (modulo the enum widening) as on `main`.
 - **I-5 (in-memory only):** `state.json` and `meta.json` schemas gain no new fields. The detector buffer is never serialised. Verifiable by: `grep -n "stagnation\|Stagnation" src/state.ts src/types.ts` returns hits ONLY in the LogEvent area, NOT in `HarnessState` / `SessionMeta` interfaces.
 - **I-6 (no new dependency):** `package.json` is unchanged in `dependencies` and `devDependencies`.
