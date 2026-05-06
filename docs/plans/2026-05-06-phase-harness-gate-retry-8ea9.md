@@ -81,21 +81,27 @@ export class StagnationDetector {
 }
 
 const warnedKeys = new Set<string>();
+let featureDisabledForProcess = false;
 
 export function loadStagnationConfig(autoMode: boolean): {
   enabled: boolean; threshold: number; run: number; window: number;
 } {
   const base = { threshold: 0.70, run: 2, window: 2 };
 
+  // Once any validated env is misconfigured, the feature stays disabled for the process.
+  if (featureDisabledForProcess) return { enabled: false, ...base };
+
   const envMain      = process.env['HARNESS_GATE_STAGNATION'];
   const envThreshold = process.env['HARNESS_GATE_STAGNATION_THRESHOLD'];
   const envRun       = process.env['HARNESS_GATE_STAGNATION_RUN'];
   // HARNESS_GATE_STAGNATION_WINDOW is reserved/no-op in v1 — intentionally not read
 
+  let anyInvalid = false;
   let enabled   = autoMode;   // default: on in auto, off in manual
   let threshold = base.threshold;
   let run       = base.run;
 
+  // Check all three validated envs (no early return) so each invalid key warns exactly once.
   if (envMain !== undefined) {
     const lower = envMain.toLowerCase();
     if (lower === 'on') {
@@ -107,7 +113,7 @@ export function loadStagnationConfig(autoMode: boolean): {
         console.warn(`[stagnation] invalid HARNESS_GATE_STAGNATION="${envMain}" — feature disabled`);
         warnedKeys.add('HARNESS_GATE_STAGNATION');
       }
-      return { enabled: false, ...base };
+      anyInvalid = true;
     }
   }
 
@@ -118,9 +124,10 @@ export function loadStagnationConfig(autoMode: boolean): {
         console.warn(`[stagnation] invalid HARNESS_GATE_STAGNATION_THRESHOLD="${envThreshold}" — feature disabled`);
         warnedKeys.add('HARNESS_GATE_STAGNATION_THRESHOLD');
       }
-      return { enabled: false, ...base };
+      anyInvalid = true;
+    } else {
+      threshold = parsed;
     }
-    threshold = parsed;
   }
 
   if (envRun !== undefined) {
@@ -130,17 +137,24 @@ export function loadStagnationConfig(autoMode: boolean): {
         console.warn(`[stagnation] invalid HARNESS_GATE_STAGNATION_RUN="${envRun}" — feature disabled`);
         warnedKeys.add('HARNESS_GATE_STAGNATION_RUN');
       }
-      return { enabled: false, ...base };
+      anyInvalid = true;
+    } else {
+      run = parsed;
     }
-    run = parsed;
+  }
+
+  if (anyInvalid) {
+    featureDisabledForProcess = true;
+    return { enabled: false, ...base };
   }
 
   return { enabled, threshold, run, window: 2 };
 }
 
-// Test hook — resets the per-process warn dedup set.
+// Test hook — resets warn dedup set and process-level disabled latch.
 export function __resetWarnCache(): void {
   warnedKeys.clear();
+  featureDisabledForProcess = false;
 }
 ```
 
@@ -429,6 +443,31 @@ describe('loadStagnationConfig', () => {
     expect(cfg.threshold).toBe(0.80);
     expect(cfg.run).toBe(3);
     expect(cfg.window).toBe(2);
+  });
+
+  it('two invalid validated envs → both keys warned once each, feature disabled', () => {
+    vi.stubEnv('HARNESS_GATE_STAGNATION', 'maybe');      // invalid
+    vi.stubEnv('HARNESS_GATE_STAGNATION_THRESHOLD', '999'); // invalid
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    loadStagnationConfig(true);
+    loadStagnationConfig(true); // second call — neither key warns again
+    const mainWarns = warnSpy.mock.calls.filter(args => String(args[0]).includes('HARNESS_GATE_STAGNATION"'));
+    const threshWarns = warnSpy.mock.calls.filter(args => String(args[0]).includes('HARNESS_GATE_STAGNATION_THRESHOLD'));
+    expect(mainWarns).toHaveLength(1);
+    expect(threshWarns).toHaveLength(1);
+    expect(loadStagnationConfig(true).enabled).toBe(false);
+  });
+
+  it('process latch: once any key is invalid, enabled=false survives env correction until __resetWarnCache', () => {
+    vi.stubEnv('HARNESS_GATE_STAGNATION', 'maybe'); // invalid → sets latch
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    loadStagnationConfig(true); // latch engaged
+    vi.unstubAllEnvs();          // env is now "corrected" (no bad values)
+    // Latch still set → must stay disabled
+    expect(loadStagnationConfig(true).enabled).toBe(false);
+    // Reset latch → re-enabled
+    __resetWarnCache();
+    expect(loadStagnationConfig(true).enabled).toBe(true);
   });
 });
 ```
@@ -721,16 +760,24 @@ Add `dropDetector(phase)` after `state.phases` mutation:
 
 - [ ] **Step 7: Intercept the force-pass branch in handleGateReject**
 
-Find `handleGateReject` (around line 695). After the first line `state.phases[String(phase)] = 'pending';`, insert the config load + record call:
+Find `handleGateReject` (around line 695). After the first line `state.phases[String(phase)] = 'pending';`, insert the config load + record call — wrapped in a try/catch so that any exception from `loadStagnationConfig`, `getOrCreateDetector`, or `record` is caught fail-open (I-3):
 
 ```typescript
   state.phases[String(phase)] = 'pending';
 
-  const cfg = loadStagnationConfig(state.autoMode);
+  // Stagnation setup — fail-open: any exception skips detection for this call.
+  let cfg: { enabled: boolean; threshold: number; run: number; window: number } | undefined;
   let detector: StagnationDetector | undefined;
-  if (cfg.enabled) {
-    detector = getOrCreateDetector(phase, cfg);
-    detector.record(comments);
+  try {
+    cfg = loadStagnationConfig(state.autoMode);
+    if (cfg.enabled) {
+      const det = getOrCreateDetector(phase, cfg);
+      det.record(comments);
+      detector = det; // assign only after record succeeds
+    }
+  } catch (err) {
+    console.warn(`[stagnation] setup error: ${(err as Error).message} — detection skipped`);
+    // cfg and detector remain undefined; stagnation check is bypassed below
   }
 ```
 
@@ -744,11 +791,11 @@ Then find the existing auto-mode force-pass branch (around line 727):
     }
 ```
 
-Replace with:
+Replace with (note `cfg?.enabled` — optional chain guards against setup exception leaving cfg undefined):
 
 ```typescript
     if (retryCount >= retryLimit && state.autoMode) {
-      if (cfg.enabled && detector !== undefined) {
+      if (cfg?.enabled && detector !== undefined) {
         let triggered = false;
         let similarities: number[] = [];
         try {
