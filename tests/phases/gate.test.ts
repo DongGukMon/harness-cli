@@ -666,3 +666,136 @@ describe('runGatePhase — TUI interrupt after sentinel completion', () => {
 });
 
 void buildGateResultFromFileVerdict; // ensure the direct import is also exercised
+
+// ─── ambiguity gate integration ──────────────────────────────────────────────
+
+describe('runGatePhase — ambiguity gate (phase 2)', () => {
+  it('phase-2 verdict with low clarity scores → result has ambiguityVetoed and REJECT', async () => {
+    const { assembleGatePrompt: mockAssembler } = await import('../../src/context/assembler.js');
+    const { spawnCodexInPane: mockSpawn } = await import('../../src/runners/codex.js');
+    const { waitForPhaseCompletion: mockWait } = await import('../../src/phases/interactive.js');
+
+    vi.mocked(mockAssembler).mockReturnValue('mock prompt');
+    vi.mocked(mockSpawn).mockResolvedValue({ pid: null });
+
+    const runDir = makeTmpDir();
+
+    const verdictContent = [
+      '## Verdict', 'APPROVE',
+      '## Comments', '- looks fine',
+      '## Summary', 'OK.',
+      '## Clarity Scores',
+      '- goal: 0.45', '- constraint: 0.60', '- success: 0.85', '- context: 0.90',
+    ].join('\n');
+    // ambiguity = 1 - (0.45*0.35 + 0.60*0.25 + 0.85*0.30 + 0.90*0.10) = 0.3475 > 0.2
+
+    const attemptId = 'test-attempt-id-p2';
+    // Mock waitForPhaseCompletion to write the verdict file (simulating Codex agent output)
+    vi.mocked(mockWait).mockImplementationOnce(async (sentinelPath: string) => {
+      fs.writeFileSync(path.join(runDir, 'gate-2-verdict.md'), verdictContent);
+      return { status: 'completed' };
+    });
+
+    const state = {
+      phasePresets: { '2': 'codex-high' },
+      gateRetries: { '2': 0, '4': 0, '7': 0 },
+      phaseCodexSessions: { '2': null, '4': null, '7': null },
+      phaseAttemptId: { '2': attemptId },
+      currentPhase: 2,
+      codexNoIsolate: false,
+      tmuxSession: undefined,
+      tmuxWorkspacePane: undefined,
+    } as any;
+
+    const result = await runGatePhase(2, state, '/fake-harness', runDir, '/cwd');
+
+    expect(result.type).toBe('verdict');
+    if (result.type === 'verdict') {
+      expect(result.verdict).toBe('REJECT');
+      expect(result.ambiguityVetoed).toBe(true);
+      expect(result.clarityScores).toEqual({ goal: 0.45, constraint: 0.60, success: 0.85, context: 0.90 });
+      expect(result.ambiguity).toBeCloseTo(0.3475, 4);
+      expect(result.ambiguityThreshold).toBe(0.2);
+    }
+  });
+
+  it('phase-4 verdict with ## Clarity Scores in file → result has NO clarity fields', async () => {
+    const { assembleGatePrompt: mockAssembler } = await import('../../src/context/assembler.js');
+    const { spawnCodexInPane: mockSpawn } = await import('../../src/runners/codex.js');
+    const { waitForPhaseCompletion: mockWait } = await import('../../src/phases/interactive.js');
+
+    vi.mocked(mockAssembler).mockReturnValue('mock prompt');
+    vi.mocked(mockSpawn).mockResolvedValue({ pid: null });
+
+    const runDir = makeTmpDir();
+
+    const verdictContent = [
+      '## Verdict', 'APPROVE',
+      '## Summary', 'Plan is solid.',
+      '## Clarity Scores',
+      '- goal: 0.90', '- constraint: 0.85', '- success: 0.95', '- context: 0.80',
+    ].join('\n');
+
+    const attemptId = 'test-attempt-id-p4';
+    // Mock waitForPhaseCompletion to write the verdict file (simulating Codex agent output)
+    vi.mocked(mockWait).mockImplementationOnce(async () => {
+      fs.writeFileSync(path.join(runDir, 'gate-4-verdict.md'), verdictContent);
+      return { status: 'completed' };
+    });
+
+    const state = {
+      phasePresets: { '4': 'codex-high' },
+      gateRetries: { '2': 0, '4': 0, '7': 0 },
+      phaseCodexSessions: { '2': null, '4': null, '7': null },
+      phaseAttemptId: { '4': attemptId },
+      currentPhase: 4,
+      codexNoIsolate: false,
+      tmuxSession: undefined,
+      tmuxWorkspacePane: undefined,
+    } as any;
+
+    const result = await runGatePhase(4, state, '/fake-harness', runDir, '/cwd');
+
+    expect(result.type).toBe('verdict');
+    expect(result.clarityScores).toBeUndefined();
+    expect(result.ambiguity).toBeUndefined();
+    expect(result.ambiguityVetoed).toBeUndefined();
+  });
+
+  it('sidecar replay of gate-2-result.json (no scores in raw) → verdict unchanged, no ambiguity fields', async () => {
+    const runDir = makeTmpDir();
+    // Use a sidecar with runner set (compatible with codex-high preset) but no ## Clarity Scores
+    const rawContent = '## Verdict\nAPPROVE\n## Summary\nOK.';
+    const sidecarResult: GateResult = {
+      exitCode: 0,
+      timestamp: Date.now(),
+      runner: 'codex',
+      promptBytes: 500,
+      durationMs: 1000,
+      sourcePreset: { model: 'gpt-5.5', effort: 'high' },
+    };
+    writeSidecars(runDir, 2, rawContent, sidecarResult);
+
+    const state = {
+      phasePresets: { '2': 'codex-high' },
+      gateRetries: { '2': 0, '4': 0, '7': 0 },
+      phaseCodexSessions: { '2': null, '4': null, '7': null },
+      phaseAttemptId: { '2': 'any-id' },
+      currentPhase: 2,
+      codexNoIsolate: false,
+    } as any;
+
+    const warnSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    const result = await runGatePhase(2, state, '/fake-harness', runDir, '/cwd', { value: true });
+    warnSpy.mockRestore();
+
+    expect(result.type).toBe('verdict');
+    if (result.type === 'verdict') {
+      expect(result.verdict).toBe('APPROVE');
+    }
+    expect(result.clarityScores).toBeUndefined();
+    expect(result.ambiguityVetoed).toBeUndefined();
+    // Sidecar replay should not trigger ambiguity warning
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+});

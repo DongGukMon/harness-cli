@@ -622,6 +622,11 @@ export async function handleGatePhase(
           resumedFrom: result.resumedFrom,
           resumeFallback: result.resumeFallback,
           preset: gatePresetMeta,
+          ...(phase === 2 && result.clarityScores !== undefined ? { clarityScores: result.clarityScores } : {}),
+          ...(phase === 2 && result.ambiguity !== undefined ? { ambiguity: result.ambiguity } : {}),
+          ...(phase === 2 && result.ambiguityThreshold !== undefined ? { ambiguityThreshold: result.ambiguityThreshold } : {}),
+          ...(phase === 2 && result.ambiguityVetoed !== undefined ? { ambiguityVetoed: result.ambiguityVetoed } : {}),
+          ...(phase === 2 && result.clarityParseError !== undefined ? { clarityParseError: result.clarityParseError } : {}),
         });
       }
 
@@ -675,6 +680,11 @@ export async function handleGatePhase(
           resumedFrom: result.resumedFrom,
           resumeFallback: result.resumeFallback,
           preset: gatePresetMeta,
+          ...(phase === 2 && result.clarityScores !== undefined ? { clarityScores: result.clarityScores } : {}),
+          ...(phase === 2 && result.ambiguity !== undefined ? { ambiguity: result.ambiguity } : {}),
+          ...(phase === 2 && result.ambiguityThreshold !== undefined ? { ambiguityThreshold: result.ambiguityThreshold } : {}),
+          ...(phase === 2 && result.ambiguityVetoed !== undefined ? { ambiguityVetoed: result.ambiguityVetoed } : {}),
+          ...(phase === 2 && result.clarityParseError !== undefined ? { clarityParseError: result.clarityParseError } : {}),
         });
       }
       logger.logEvent({

@@ -11,6 +11,7 @@ import { ensureCodexIsolation, CodexIsolationError } from '../runners/codex-isol
 import { writeState } from '../state.js';
 import { readCodexSessionUsage } from '../runners/codex-usage.js';
 import { parseVerdict, buildGateResult, buildGateResultFromFile } from './verdict.js';
+import { loadAmbiguityThreshold, applyAmbiguityGate } from './ambiguity.js';
 import { waitForPhaseCompletion } from './interactive.js';
 import { sendKeysToPane } from '../tmux.js';
 import { killProcessGroup } from '../process.js';
@@ -315,7 +316,11 @@ export async function runGatePhaseInteractive(
     const phaseStartTs = Date.now();
     const rawResult = await runClaudeGate(phase, preset, promptText, harnessDir, cwd);
     const durationMs = Date.now() - phaseStartTs;
-    const result: GatePhaseResult = { ...rawResult, runner, promptBytes, durationMs };
+    let result: GatePhaseResult = { ...rawResult, runner, promptBytes, durationMs };
+    if (phase === 2) {
+      const threshold = loadAmbiguityThreshold();
+      result = applyAmbiguityGate(result, result.rawOutput ?? '', threshold);
+    }
     if (state.currentPhase !== phase) return result;
     await _persistSidecars(result, runDir, phase, runner, promptBytes, durationMs, preset);
     return result;
@@ -394,6 +399,12 @@ export async function runGatePhaseInteractive(
       resumeFallback: false,
       sourcePreset: { model: preset.model, effort: preset.effort },
     };
+  }
+
+  // Apply ambiguity gate for phase 2 (after verdict built, before sidecars)
+  if (phase === 2) {
+    const threshold = loadAmbiguityThreshold();
+    gateResult = applyAmbiguityGate(gateResult, gateResult.rawOutput ?? '', threshold);
   }
 
   // Step 11: Collect codexTokens from JSONL
