@@ -1,5 +1,13 @@
 import { describe, it, expect } from 'vitest';
-import { buildGateResult, extractCodexMetadata, parseVerdict } from '../../src/phases/verdict.js';
+import {
+  buildGateResult,
+  extractCodexMetadata,
+  parseVerdict,
+  parseClarityScores,
+  computeWeightedAmbiguity,
+  AMBIGUITY_AXES,
+  CLARITY_WEIGHTS,
+} from '../../src/phases/verdict.js';
 
 describe('parseVerdict', () => {
   it('parses REJECT with Scope: impl', () => {
@@ -141,13 +149,6 @@ more blah`;
     expect(extractCodexMetadata('session id: 1234-5678').codexSessionId).toBe('1234-5678');
   });
 });
-
-import {
-  parseClarityScores,
-  computeWeightedAmbiguity,
-  AMBIGUITY_AXES,
-  CLARITY_WEIGHTS,
-} from '../../src/phases/verdict.js';
 
 describe('parseClarityScores', () => {
   const good = [

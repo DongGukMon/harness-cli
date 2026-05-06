@@ -131,13 +131,13 @@ export function parseClarityScores(rawOutput: string): ClarityScores | null {
   const found: Partial<Record<AmbiguityAxis, number>> = {};
   for (let i = headerIdx + 1; i < lines.length; i++) {
     const line = lines[i];
-    if (/^\s*##\s/.test(line)) break;
+    if (line.trim().startsWith('##')) break;
     const m = line.match(/^\s*-\s*(goal|constraint|success|context)\s*:\s*(\d+(?:\.\d+)?)\s*$/i);
     if (!m) continue;
     const axis = m[1].toLowerCase() as AmbiguityAxis;
     if (axis in found) continue; // first wins
     const value = parseFloat(m[2]);
-    if (value < 0 || value > 1) return null;
+    if (value > 1) return null;
     found[axis] = value;
   }
 
