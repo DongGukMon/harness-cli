@@ -1265,3 +1265,7 @@ pnpm tsc --noEmit   # typecheck
 pnpm vitest run     # full test suite
 pnpm build          # tsc + copy-assets
 ```
+
+## Deferred
+
+- Persist ambiguity fields (`clarityScores`, `ambiguity`, `ambiguityThreshold`, `ambiguityVetoed`) in `gate-N-result.json` via `_persistSidecars` and hydrate them in `checkGateSidecars`, so sidecar-replay `gate_verdict` events include the post-hoc score data required by spec §28/§349. Requires extending `GateResult` type and both sidecar functions. (gate-7 P2 feedback rev 2)
