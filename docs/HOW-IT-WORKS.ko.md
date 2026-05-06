@@ -89,6 +89,7 @@ light flow 특이사항:
 - `HARNESS_GATE_STAGNATION_THRESHOLD=0.70`
 - `HARNESS_GATE_STAGNATION_RUN=2` (연속 정체 쌍 2개 필요)
 - `HARNESS_GATE_STAGNATION_WINDOW=2` (예약됨; v1에서는 no-op)
+- `HARNESS_GATE_AMBIGUITY_THRESHOLD=0.2` — P2 spec gate 모호성 거부권 임계값 [0, 1]. `=off`로 비활성화(점수는 여전히 로깅). 유효하지 않은 값 → 거부권 비활성화 + stderr 경고 1회.
 
 처음 세 변수의 잘못된 값은 기능을 fail-open으로 비활성화합니다 (프로세스당 키당 최대 1회 stderr 경고). 감지기 버퍼는 메모리 내에만 존재하며, 일시정지된 실행을 재개하면 빈 상태로 시작됩니다.
 
@@ -164,6 +165,10 @@ outer cwd가 git 레포가 아니어도 codex가 trust 프롬프트나 git-repo 
 - interactive: 30분
 - gate: 6분
 - verify: 5분
+
+### 명확성 점수 & 모호성 거부권 (P2 전체 플로우 전용)
+
+전체 플로우 P2 spec gate에서 Codex는 `## Clarity Scores` 블록(4개 축: goal, constraint, success, context, 각 [0.0, 1.0])을 출력하도록 지시받습니다. 하네스는 `ambiguity = 1 − Σ(score × weight)` (가중치: goal 0.35, constraint 0.25, success 0.30, context 0.10)를 계산합니다. `ambiguity > HARNESS_GATE_AMBIGUITY_THRESHOLD` (기본값 `0.2`)이고 정성 판단이 APPROVE였다면, 하네스는 REJECT로 재작성하며 점수가 가장 낮은 두 축을 명시하는 P1 합성 코멘트를 생성합니다. 환경 변수를 `off`로 설정하면 거부권이 비활성화되지만 점수는 여전히 파싱·로깅됩니다. 파싱 실패는 fail-open 처리됩니다. 이 기능은 full-flow P2 전용입니다; light-flow P2는 변경되지 않습니다.
 
 ---
 
@@ -324,7 +329,7 @@ light flow에서는 skipped phase로 jump할 수 없습니다.
   summary.json
 ```
 
-주요 이벤트는 `phase_start`, `phase_end`, `gate_verdict`, `gate_error`, `gate_retry`, `gate_stagnation`, `verify_result`, `ui_render`, `terminal_action`, `session_end` 등입니다. `gate_stagnation` 이벤트는 `phase`, `retryIndex`, `similarities` (number[]), `threshold`, `run`, `action: 'escalate'` 필드를 포함합니다.
+주요 이벤트는 `phase_start`, `phase_end`, `gate_verdict`, `gate_error`, `gate_retry`, `gate_stagnation`, `verify_result`, `ui_render`, `terminal_action`, `session_end` 등입니다. `gate_stagnation` 이벤트는 `phase`, `retryIndex`, `similarities` (number[]), `threshold`, `run`, `action: 'escalate'` 필드를 포함합니다. Phase 2의 `gate_verdict` 이벤트에는 모호성 게이트 실행 시 다음 5개의 선택적 필드가 추가됩니다: `clarityScores`, `ambiguity`, `ambiguityThreshold`, `ambiguityVetoed`, `clarityParseError`. 이 필드들은 P4/P7 이벤트에는 포함되지 않습니다.
 control pane footer는 이 로그를 바탕으로 경과 시간과 Claude/gate 토큰 합계를 집계합니다.
 
 ---

@@ -89,6 +89,7 @@ In auto-mode, when a gate phase is rejected `retryLimit` times in a row, harness
 - `HARNESS_GATE_STAGNATION_THRESHOLD=0.70`
 - `HARNESS_GATE_STAGNATION_RUN=2` (two consecutive stagnant pairs required)
 - `HARNESS_GATE_STAGNATION_WINDOW=2` (reserved; no-op in v1)
+- `HARNESS_GATE_AMBIGUITY_THRESHOLD=0.2` — P2 spec gate ambiguity veto threshold [0, 1]. `=off` to disable veto (scores still logged). Invalid value → veto disabled + one stderr warning.
 
 Invalid values for the first three vars disable the feature fail-open (one stderr warn per key per process). The detector buffer is in-memory only; resuming a paused run starts empty.
 
@@ -164,6 +165,10 @@ Current timeout constants (`src/config.ts`):
 - interactive phases: 30 minutes
 - gate phases: 6 minutes
 - verify: 5 minutes
+
+### Clarity Scores & Ambiguity Veto (P2 full flow only)
+
+When running the spec gate (full flow P2), Codex is instructed to emit a `## Clarity Scores` block with four axis scores (goal, constraint, success, context), each in [0.0, 1.0]. Harness computes `ambiguity = 1 − Σ(score × weight)` with weights `{goal: 0.35, constraint: 0.25, success: 0.30, context: 0.10}`. If `ambiguity > HARNESS_GATE_AMBIGUITY_THRESHOLD` (default `0.2`) and the qualitative verdict was APPROVE, harness rewrites it to REJECT with a synthetic P1 comment naming the lowest-scoring axes and appends `Scope: design` to route the retry back to Phase 1. Setting the env var to `off` disables the veto while still parsing and logging scores. Parse failure is fail-open — the qualitative verdict stands and `clarityParseError: true` is attached to the event. This feature applies to full-flow P2 only; light-flow P2 (`FIVE_AXIS_DESIGN_GATE_LIGHT`) is unchanged.
 
 ---
 
@@ -343,7 +348,7 @@ When enabled, harness writes under:
   summary.json
 ```
 
-Important logged events include `phase_start`, `phase_end`, `gate_verdict`, `gate_error`, `gate_retry`, `gate_stagnation`, `verify_result`, `ui_render`, `terminal_action`, and `session_end`. The `gate_stagnation` event carries fields `phase`, `retryIndex`, `similarities` (number[]), `threshold`, `run`, `action: 'escalate'`.
+Important logged events include `phase_start`, `phase_end`, `gate_verdict`, `gate_error`, `gate_retry`, `gate_stagnation`, `verify_result`, `ui_render`, `terminal_action`, and `session_end`. The `gate_stagnation` event carries fields `phase`, `retryIndex`, `similarities` (number[]), `threshold`, `run`, `action: 'escalate'`. The `gate_verdict` event for Phase 2 additionally carries five optional fields when the ambiguity gate ran: `clarityScores` (object with goal/constraint/success/context), `ambiguity` (weighted score), `ambiguityThreshold` (threshold in effect), `ambiguityVetoed` (true if APPROVE was rewritten to REJECT), `clarityParseError` (true if score parsing failed). These fields are absent on P4/P7 events.
 The control-pane footer aggregates elapsed time plus Claude/gate token totals from those logs.
 
 ---

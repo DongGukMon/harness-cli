@@ -49,6 +49,8 @@ P1 spec → P2 spec gate → P3 plan → P4 plan gate → P5 implement → P6 ve
 
 마이그레이션, API/contract 변경, 보안 민감 작업처럼 **구현 전에 독립 리뷰가 중요한 경우** full flow가 적합합니다.
 
+Spec gate (P2)는 Codex의 `## Clarity Scores` 출력에서 가중 모호성 점수를 추가로 계산하며, `ambiguity > HARNESS_GATE_AMBIGUITY_THRESHOLD`(기본값 0.2)인 경우 APPROVE를 REJECT로 재작성합니다.
+
 ### Light flow (`phase-harness start --light "task"`)
 
 ```text
@@ -236,6 +238,7 @@ phase-harness start --root /tmp/demo "task"
 | `HARNESS_GATE_STAGNATION_THRESHOLD` | `0.70` | Jaccard 유사도 임계값 [0, 1]; 높을수록 엄격 |
 | `HARNESS_GATE_STAGNATION_RUN` | `2` | 에스컬레이션 전 연속 정체 쌍 수 (최소 2) |
 | `HARNESS_GATE_STAGNATION_WINDOW` | `2` | 향후 사용 예약; 현재 2로 고정 (쌍 비교) |
+| `HARNESS_GATE_AMBIGUITY_THRESHOLD` | `0.2` | P2 spec gate 모호성 거부권 임계값 [0, 1]. `off`로 비활성화(점수는 여전히 로깅). 유효하지 않은 값 → 거부권 비활성화 + stderr 경고 1회. |
 
 처음 세 변수에 잘못된 값이 있으면 해당 프로세스에서 기능이 비활성화되고 stderr에 경고 하나가 출력됩니다. 수동 모드에서는 항상 비활성화됩니다.
 
