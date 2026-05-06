@@ -38,7 +38,7 @@ Medium — single new module (`src/phases/stagnation.ts`, ~150 LoC) plus one bra
 1. In auto-mode, replace the *unconditional* "rejected `retryLimit` times → force-pass" rule with: *"rejected `retryLimit` times AND the last two reject pairs were stagnant → escalate to user; else force-pass as before"*.
 2. The escalation surface is the existing `handleGateEscalation` prompt (C / S / Q) — no new UI, no new sentinel/reopen logic.
 3. Stagnation detection is deterministic, dependency-free, O(text length) per gate retry, and never blocks a converging gate from reaching force-pass.
-4. The user can disable detection or tune its threshold/run/window via environment variables without rebuilding.
+4. The user can disable detection or tune its **threshold and run** via environment variables without rebuilding. The pair-size parameter (`window`) is *not* user-tunable in v1 — it is fixed at `2` (adjacent-pair comparison). The env var `HARNESS_GATE_STAGNATION_WINDOW` is accepted but treated as a no-op for forward-compatibility (see Configuration loader).
 5. The events.jsonl schema gains exactly one new optional event variant and one enum addition; no existing event field is renamed, removed, or retyped.
 6. On any internal failure (token parse error, ring buffer corruption, malformed env), behaviour falls back to the existing 3-strike force-pass with at most one stderr warn per key — *never* harder than today. Specifically: malformed env values force `cfg.enabled = false` for the entire process (unified rule — see Configuration loader and I-3); detector exceptions are caught and routed to force-pass at the call site.
 
@@ -97,7 +97,7 @@ class StagnationDetector {
 }
 ```
 
-The buffer holds the last `RUN + (WINDOW − 1)` feedback strings — at default `RUN=2, WINDOW=2` this is **3 strings** (s₀, s₁, s₂), enough to form the two adjacent pairs `(s₀,s₁)` and `(s₁,s₂)` required for trigger. Older entries roll off FIFO. `record` is total (no throws on empty/huge inputs); `shouldEscalate` is total (returns `{triggered: false, similarities: []}` when buffer too small).
+The constructor accepts `window` for forward-compat parameterisation (and so unit tests can probe the buffer formula against multiple values), but in v1 `loadStagnationConfig` always passes `window: 2`. The buffer holds the last `RUN + (WINDOW − 1)` feedback strings — at the v1 fixed values `RUN=2, WINDOW=2` this is **3 strings** (s₀, s₁, s₂), enough to form the two adjacent pairs `(s₀,s₁)` and `(s₁,s₂)` required for trigger. Older entries roll off FIFO. `record` is total (no throws on empty/huge inputs); `shouldEscalate` is total (returns `{triggered: false, similarities: []}` when buffer too small).
 
 ### Configuration loader
 
@@ -107,16 +107,16 @@ function loadStagnationConfig(autoMode: boolean): {
 }
 ```
 
-Reads `process.env`. Each env var is parsed once per phase loop iteration entry (cheap). **Any invalid env value forces `enabled = false` for the entire process** (i.e., the feature self-disables on misconfiguration), and emits *one* `console.warn` per misconfigured key per process (deduped via a module-private `Set`). This unified rule guarantees that the runtime path on misconfig is byte-identical to today's 3-strike force-pass behaviour (Goal #6).
+Reads `process.env`. Each env var is parsed once per phase loop iteration entry (cheap). **Any invalid value of a *validated* env (`HARNESS_GATE_STAGNATION`, `_THRESHOLD`, `_RUN`) forces `enabled = false` for the entire process** (i.e., the feature self-disables on misconfiguration), and emits *one* `console.warn` per misconfigured key per process (deduped via a module-private `Set`). This unified rule guarantees that the runtime path on misconfig is byte-identical to today's 3-strike force-pass behaviour (Goal #6). `HARNESS_GATE_STAGNATION_WINDOW` is **not** validated in v1 — it is a *reserved* env name accepted as a no-op and never participates in the misconfig disable rule.
 
 | Env | Default | Parse rule | On invalid |
 |---|---|---|---|
 | `HARNESS_GATE_STAGNATION` | `'on'` if `autoMode` else `'off'` | `'on'`/`'off'` exact (case-insensitive) | warn + force `enabled = false` |
 | `HARNESS_GATE_STAGNATION_THRESHOLD` | `0.70` | `parseFloat`, must be in `[0, 1]` | warn + force `enabled = false` |
 | `HARNESS_GATE_STAGNATION_RUN` | `2` | `parseInt(base 10)`, must be `>= 2` | warn + force `enabled = false` |
-| `HARNESS_GATE_STAGNATION_WINDOW` | `2` | `parseInt(base 10)`, must equal `2` | warn + force `enabled = false` |
+| `HARNESS_GATE_STAGNATION_WINDOW` | `2` (fixed) | **no validation** — value is read but ignored; `window` returned by loader is always `2` in v1 | n/a (no value can be "invalid") |
 
-When valid, `threshold/run/window` are returned as their parsed values; when invalid, the loader returns `{ enabled: false, threshold: 0.70, run: 2, window: 2 }` (the defaults are still populated as inert placeholders, but `enabled: false` short-circuits all downstream consumers — see Integration point below).
+When the three validated envs are valid, `loadStagnationConfig` returns parsed values for `threshold` and `run` and the constant `2` for `window`; when any validated env is invalid, the loader returns `{ enabled: false, threshold: 0.70, run: 2, window: 2 }` (the defaults are still populated as inert placeholders, but `enabled: false` short-circuits all downstream consumers — see Integration point below). Setting `HARNESS_GATE_STAGNATION_WINDOW` to any value (`2`, `5`, `not-a-number`, empty, etc.) does NOT change the returned config and does NOT emit a warn.
 
 ### Integration point in `runner.ts`
 
@@ -219,7 +219,7 @@ All existing readers that pattern-match the four prior values continue to work; 
 
 Truth table for the new branch in `handleGateReject`:
 
-| `retryCount >= retryLimit` | `state.autoMode` | env any-invalid | `cfg.enabled` | Detector `triggered` | Result |
+| `retryCount >= retryLimit` | `state.autoMode` | any *validated* env invalid | `cfg.enabled` | Detector `triggered` | Result |
 |---|---|---|---|---|---|
 | no | * | * | * | * | (unchanged) save feedback, reopen interactive phase |
 | yes | no | * | * | * | (unchanged) `handleGateEscalation` (reason: `'gate-retry-limit'`) |
@@ -228,16 +228,18 @@ Truth table for the new branch in `handleGateReject`:
 | yes | yes | no | yes | no | (unchanged) `forcePassGate(by='auto')` |
 | yes | yes | no | yes | yes | **new** `handleGateEscalation` (reason: `'gate-stagnation'`); `gate_stagnation` event emitted |
 
-Detector exception in any cell: warn + force-pass (matches the row "triggered=no"). Note: column "env any-invalid = yes" implies `cfg.enabled = false` by I-3, so it can never coexist with `triggered = yes`.
+Detector exception in any cell: warn + force-pass (matches the row "triggered=no"). Notes: (1) column "any validated env invalid = yes" implies `cfg.enabled = false` by I-3, so it can never coexist with `triggered = yes`. (2) Setting `HARNESS_GATE_STAGNATION_WINDOW` to any value (including non-`2`) does **not** flip this column — `WINDOW` is not validated in v1 (see Configuration loader).
 
 ## Configuration surface (final)
 
 ```
-HARNESS_GATE_STAGNATION             on (auto) | off (manual; or override)
-HARNESS_GATE_STAGNATION_THRESHOLD   0.70 (range [0, 1])
-HARNESS_GATE_STAGNATION_RUN         2    (>= 2)
-HARNESS_GATE_STAGNATION_WINDOW      2    (=== 2 in v1)
+HARNESS_GATE_STAGNATION             on (auto) | off (manual; or override) | invalid → warn + disable feature
+HARNESS_GATE_STAGNATION_THRESHOLD   0.70  (validated range [0, 1]; invalid → warn + disable feature)
+HARNESS_GATE_STAGNATION_RUN         2     (validated range [2, ∞); invalid → warn + disable feature)
+HARNESS_GATE_STAGNATION_WINDOW      2     (RESERVED in v1 — not validated, accepted as no-op for forward-compat; v1 always uses pair size 2)
 ```
+
+Only the first three envs are honoured for behaviour. `WINDOW` is exposed as a documented placeholder so that future versions can give it semantics without breaking operators who set it today.
 
 ## Test plan
 
@@ -250,7 +252,11 @@ HARNESS_GATE_STAGNATION_WINDOW      2    (=== 2 in v1)
    - last `RUN` pairs all ≥ threshold: `triggered = true`
    - last `RUN` pairs include one < threshold: `triggered = false`
    - any pair returns null similarity: `triggered = false`
-4. `loadStagnationConfig` — defaults respect `autoMode`; **any invalid env value forces `enabled = false` and warns at most once per misconfigured key per process** (regardless of which key was malformed); all-valid input returns parsed values with `enabled` driven by `HARNESS_GATE_STAGNATION` only.
+4. `loadStagnationConfig` —
+   - Defaults respect `autoMode` (manual → `enabled: false`, auto → `enabled: true` baseline).
+   - Any invalid value of a validated key (`HARNESS_GATE_STAGNATION`, `_THRESHOLD`, `_RUN`) forces `enabled = false` and warns at most once per misconfigured key per process.
+   - `HARNESS_GATE_STAGNATION_WINDOW` is treated as no-op: setting it to `'2'`, `'5'`, `'-1'`, `'not-a-number'`, or empty string MUST all return `window: 2` and MUST NOT cause `enabled` to become `false` and MUST NOT emit a warn.
+   - All-valid input returns parsed `threshold`/`run` and the constant `window: 2`, with `enabled` driven by `HARNESS_GATE_STAGNATION` only.
 
 ### Unit — `src/phases/runner.test.ts` additions
 
@@ -259,7 +265,8 @@ HARNESS_GATE_STAGNATION_WINDOW      2    (=== 2 in v1)
 7. Manual mode + 3 stagnant rejects → existing escalation path with reason `'gate-retry-limit'` (regression guard).
 8. `HARNESS_GATE_STAGNATION=off` in auto-mode + 3 stagnant rejects → `forcePassGate` called (regression guard).
 9. Detector throws inside `shouldEscalate` → fall back to `forcePassGate`, single warn, no `gate_stagnation` event.
-9a. **Env misconfiguration (any one of THRESHOLD/RUN/WINDOW invalid, e.g., `HARNESS_GATE_STAGNATION_THRESHOLD=not-a-number`) in auto-mode + 3 stagnant rejects → `forcePassGate` called, `gate_stagnation` not emitted, exactly one warn for the offending key.** This pins the unified-fail-open rule.
+9a. **Env misconfiguration of a *validated* key (any one of `HARNESS_GATE_STAGNATION` / `_THRESHOLD` / `_RUN` invalid, e.g., `HARNESS_GATE_STAGNATION_THRESHOLD=not-a-number`) in auto-mode + 3 stagnant rejects → `forcePassGate` called, `gate_stagnation` not emitted, exactly one warn for the offending key.** This pins the unified-fail-open rule.
+9b. **`HARNESS_GATE_STAGNATION_WINDOW` set to a non-`2` value** (e.g., `5`, `not-a-number`, empty) in auto-mode + 3 stagnant rejects → `handleGateEscalation` called with `reason: 'gate-stagnation'` (i.e., feature stays enabled, WINDOW is ignored), `gate_stagnation` event emitted, NO warn for the WINDOW key. This pins the WINDOW-as-no-op semantics required by Goal #4.
 
 ### Integration — `tests/integration/gate-stagnation.test.ts`
 
@@ -284,7 +291,7 @@ A change is *complete* when **all** of the following are true:
 5. **Backward compat:** a freshly built `dist/` produces an `events.jsonl` whose `force_pass`, `gate_retry`, and `escalation` event shapes are byte-identical to a baseline captured before the change for non-stagnant runs. Verifiable by: integration test 11 listed above (existing suite passes unchanged).
 6. **No new dependency:** `package.json` `dependencies` and `devDependencies` are unchanged. Verifiable by: `git diff main -- package.json` shows zero diff in these blocks.
 7. **Documentation sync (CLAUDE.md mandate):** `README.md`, `README.ko.md`, `docs/HOW-IT-WORKS.md`, `docs/HOW-IT-WORKS.ko.md` each contain the string `HARNESS_GATE_STAGNATION` at least once. Verifiable by: `grep -l "HARNESS_GATE_STAGNATION" README.md README.ko.md docs/HOW-IT-WORKS.md docs/HOW-IT-WORKS.ko.md` lists all four files.
-8. **Fail-open under env misconfiguration:** with `HARNESS_GATE_STAGNATION_THRESHOLD=not-a-number` (or any other invalid value of any of the four env vars) and a 3-stagnant-reject auto-mode run, the result is `forcePassGate(by='auto')`, `gate_stagnation` is NOT emitted, and exactly one stderr `console.warn` is produced for the offending key. Verifiable by test 9a in the test plan above.
+8. **Fail-open under env misconfiguration:** with any invalid value of a *validated* env (`HARNESS_GATE_STAGNATION`, `_THRESHOLD`, or `_RUN` — e.g., `HARNESS_GATE_STAGNATION_THRESHOLD=not-a-number`) and a 3-stagnant-reject auto-mode run, the result is `forcePassGate(by='auto')`, `gate_stagnation` is NOT emitted, and exactly one stderr `console.warn` is produced for the offending key. `HARNESS_GATE_STAGNATION_WINDOW` is *not* a validated env in v1: setting it to any value MUST NOT trigger this path (see test 9b). Verifiable by tests 9a and 9b in the test plan above.
 
 ## Invariants
 
