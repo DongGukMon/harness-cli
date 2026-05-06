@@ -762,6 +762,56 @@ describe('runGatePhase — ambiguity gate (phase 2)', () => {
     expect(result.ambiguityVetoed).toBeUndefined();
   });
 
+  it('light-flow P2 with high-ambiguity verdict → no clarity fields, no warning emitted', async () => {
+    const { assembleGatePrompt: mockAssembler } = await import('../../src/context/assembler.js');
+    const { spawnCodexInPane: mockSpawn } = await import('../../src/runners/codex.js');
+    const { waitForPhaseCompletion: mockWait } = await import('../../src/phases/interactive.js');
+
+    vi.mocked(mockAssembler).mockReturnValue('mock prompt');
+    vi.mocked(mockSpawn).mockResolvedValue({ pid: null });
+
+    const runDir = makeTmpDir();
+    // High-ambiguity output that would trigger veto on full-flow
+    const verdictContent = [
+      '## Verdict', 'APPROVE',
+      '## Comments', '- looks fine',
+      '## Summary', 'OK.',
+      '## Clarity Scores',
+      '- goal: 0.45', '- constraint: 0.60', '- success: 0.85', '- context: 0.90',
+    ].join('\n');
+
+    vi.mocked(mockWait).mockImplementationOnce(async () => {
+      fs.writeFileSync(path.join(runDir, 'gate-2-verdict.md'), verdictContent);
+      return { status: 'completed' };
+    });
+
+    const warnSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+
+    const state = {
+      phasePresets: { '2': 'codex-high' },
+      gateRetries: { '2': 0, '4': 0, '7': 0 },
+      phaseCodexSessions: { '2': null, '4': null, '7': null },
+      phaseAttemptId: { '2': 'light-flow-test-id' },
+      currentPhase: 2,
+      codexNoIsolate: false,
+      tmuxSession: undefined,
+      tmuxWorkspacePane: undefined,
+      flow: 'light',
+    } as any;
+
+    const result = await runGatePhase(2, state, '/fake-harness', runDir, '/cwd');
+
+    expect(result.type).toBe('verdict');
+    if (result.type === 'verdict') {
+      expect(result.verdict).toBe('APPROVE');
+    }
+    expect(result.clarityScores).toBeUndefined();
+    expect(result.ambiguity).toBeUndefined();
+    expect(result.ambiguityVetoed).toBeUndefined();
+    expect(warnSpy).not.toHaveBeenCalled();
+    warnSpy.mockRestore();
+  });
+
   it('after vetoed P2 live run, checkGateSidecars replays as REJECT scope:design', async () => {
     const { assembleGatePrompt: mockAssembler } = await import('../../src/context/assembler.js');
     const { spawnCodexInPane: mockSpawn } = await import('../../src/runners/codex.js');

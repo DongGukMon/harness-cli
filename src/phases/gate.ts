@@ -318,7 +318,7 @@ export async function runGatePhaseInteractive(
     const rawResult = await runClaudeGate(phase, preset, promptText, harnessDir, cwd);
     const durationMs = Date.now() - phaseStartTs;
     let result: GatePhaseResult = { ...rawResult, runner, promptBytes, durationMs };
-    if (phase === 2) {
+    if (phase === 2 && state.flow !== 'light') {
       const threshold = loadAmbiguityThreshold();
       result = applyAmbiguityGate(result, result.rawOutput ?? '', threshold);
     }
@@ -402,8 +402,8 @@ export async function runGatePhaseInteractive(
     };
   }
 
-  // Apply ambiguity gate for phase 2 (after verdict built, before sidecars)
-  if (phase === 2) {
+  // Apply ambiguity gate for full-flow phase 2 only (light-flow P2 is out of scope per spec B6)
+  if (phase === 2 && state.flow !== 'light') {
     const threshold = loadAmbiguityThreshold();
     gateResult = applyAmbiguityGate(gateResult, gateResult.rawOutput ?? '', threshold);
   }
