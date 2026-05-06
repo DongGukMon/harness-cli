@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { loadAmbiguityThreshold, applyAmbiguityGate, __resetAmbiguityWarning } from '../../src/phases/ambiguity.js';
+import { parseVerdict } from '../../src/phases/verdict.js';
 import type { GatePhaseResult } from '../../src/types.js';
 
 function makeApprove(rawOutput: string): GatePhaseResult {
@@ -160,6 +161,12 @@ describe('applyAmbiguityGate', () => {
       expect(result.clarityScores).toEqual({ goal: 0.45, constraint: 0.60, success: 0.85, context: 0.90 });
       expect(result.comments).toMatch(/\[P1\]/);
       expect(result.comments).toMatch(/Scope: design/);
+      // rawOutput must be rewritten so sidecar replay returns REJECT
+      expect(result.rawOutput).toBeDefined();
+      const parsed = parseVerdict(result.rawOutput!);
+      expect(parsed).not.toBeNull();
+      expect(parsed!.verdict).toBe('REJECT');
+      expect(parsed!.scope).toBe('design');
     }
   });
 

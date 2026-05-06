@@ -82,10 +82,23 @@ export function applyAmbiguityGate(
       ? syntheticComment + '\n' + existingComments.trim()
       : syntheticComment) + '\nScope: design';
 
+    const syntheticRawOutput = [
+      '## Verdict',
+      'REJECT',
+      'Scope: design',
+      '',
+      '## Comments',
+      syntheticComment,
+      '',
+      '## Summary',
+      `Ambiguity veto applied: spec ambiguity ${ambiguity.toFixed(2)} > threshold ${threshold.toFixed(2)}.`,
+    ].join('\n');
+
     return {
       ...withScores,
       verdict: 'REJECT',
       comments: newComments,
+      rawOutput: syntheticRawOutput,
       ambiguityVetoed: true,
       scope: 'design',
     };

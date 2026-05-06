@@ -97,6 +97,7 @@ export function checkGateSidecars(runDir: string, phase: number): GatePhaseResul
     verdict: parsed.verdict,
     comments: parsed.comments,
     rawOutput,
+    ...(parsed.scope !== undefined ? { scope: parsed.scope } : {}),
     ...metadata,
   };
 }

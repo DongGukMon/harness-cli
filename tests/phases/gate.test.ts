@@ -762,6 +762,57 @@ describe('runGatePhase — ambiguity gate (phase 2)', () => {
     expect(result.ambiguityVetoed).toBeUndefined();
   });
 
+  it('after vetoed P2 live run, checkGateSidecars replays as REJECT scope:design', async () => {
+    const { assembleGatePrompt: mockAssembler } = await import('../../src/context/assembler.js');
+    const { spawnCodexInPane: mockSpawn } = await import('../../src/runners/codex.js');
+    const { waitForPhaseCompletion: mockWait } = await import('../../src/phases/interactive.js');
+
+    vi.mocked(mockAssembler).mockReturnValue('mock prompt');
+    vi.mocked(mockSpawn).mockResolvedValue({ pid: null });
+
+    const runDir = makeTmpDir();
+    const verdictContent = [
+      '## Verdict', 'APPROVE',
+      '## Comments', '- looks fine',
+      '## Summary', 'OK.',
+      '## Clarity Scores',
+      '- goal: 0.45', '- constraint: 0.60', '- success: 0.85', '- context: 0.90',
+    ].join('\n');
+    // ambiguity = 0.3475 > 0.2 → veto
+
+    vi.mocked(mockWait).mockImplementationOnce(async () => {
+      fs.writeFileSync(path.join(runDir, 'gate-2-verdict.md'), verdictContent);
+      return { status: 'completed' };
+    });
+
+    const state = {
+      phasePresets: { '2': 'codex-high' },
+      gateRetries: { '2': 0, '4': 0, '7': 0 },
+      phaseCodexSessions: { '2': null, '4': null, '7': null },
+      phaseAttemptId: { '2': 'sidecar-replay-test-id' },
+      currentPhase: 2,
+      codexNoIsolate: false,
+      tmuxSession: undefined,
+      tmuxWorkspacePane: undefined,
+    } as any;
+
+    const liveResult = await runGatePhase(2, state, '/fake-harness', runDir, '/cwd');
+    expect(liveResult.type).toBe('verdict');
+    if (liveResult.type === 'verdict') {
+      expect(liveResult.verdict).toBe('REJECT');
+      expect(liveResult.ambiguityVetoed).toBe(true);
+    }
+
+    // Sidecar replay must also return REJECT (not the original APPROVE)
+    const replayResult = checkGateSidecars(runDir, 2);
+    expect(replayResult).not.toBeNull();
+    expect(replayResult!.type).toBe('verdict');
+    if (replayResult!.type === 'verdict') {
+      expect(replayResult!.verdict).toBe('REJECT');
+      expect(replayResult!.scope).toBe('design');
+    }
+  });
+
   it('sidecar replay of gate-2-result.json (no scores in raw) → verdict unchanged, no ambiguity fields', async () => {
     const runDir = makeTmpDir();
     // Use a sidecar with runner set (compatible with codex-high preset) but no ## Clarity Scores
