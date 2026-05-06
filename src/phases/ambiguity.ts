@@ -68,7 +68,7 @@ export function applyAmbiguityGate(
       .map((ax) => `${ax}=${(scores as ClarityScores)[ax as keyof ClarityScores].toFixed(2)}`)
       .join(', ');
     const scoresJson = Object.entries(scores)
-      .map(([k, v]) => `${k}: ${v}`)
+      .map(([k, v]) => `${k}: ${(v as number).toFixed(2)}`)
       .join(', ');
 
     const syntheticComment =
