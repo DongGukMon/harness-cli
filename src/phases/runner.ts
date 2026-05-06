@@ -18,6 +18,7 @@ import { commitEvalReport, normalizeArtifactCommit, resolveArtifact } from '../a
 import { runInteractivePhase } from './interactive.js';
 import { runGatePhase } from './gate.js';
 import { runVerifyPhase } from './verify.js';
+import { StagnationDetector, loadStagnationConfig } from './stagnation.js';
 import { readClaudeSessionUsage, claudeSessionJsonlExists } from '../runners/claude-usage.js';
 import {
   promptChoice,
@@ -28,6 +29,25 @@ import {
   printSuccess,
   printInfo,
 } from '../ui.js';
+
+// ─── Stagnation detector map ──────────────────────────────────────────────────
+// In-memory only; never serialised. Keyed by gate phase number.
+const detectorMap = new Map<string, StagnationDetector>();
+
+function getOrCreateDetector(phase: number, cfg: { threshold: number; run: number; window: number }): StagnationDetector {
+  const key = String(phase);
+  if (!detectorMap.has(key)) detectorMap.set(key, new StagnationDetector(cfg));
+  return detectorMap.get(key)!;
+}
+
+function dropDetector(phase: number): void {
+  detectorMap.delete(String(phase));
+}
+
+// Test hook — reset all detector state between test cases.
+export function __resetDetectors(): void {
+  detectorMap.clear();
+}
 
 // ─── Phase type dispatch helpers ──────────────────────────────────────────────
 
@@ -612,6 +632,7 @@ export async function handleGatePhase(
       });
 
       state.phases[String(phase)] = 'completed';
+      dropDetector(phase);
 
       // Post-success sidecar cleanup
       deleteGateSidecars(runDir, phase);
@@ -706,6 +727,20 @@ export async function handleGateReject(
 ): Promise<void> {
   state.phases[String(phase)] = 'pending';
 
+  // Stagnation setup — fail-open: any exception skips detection for this call.
+  let cfg: { enabled: boolean; threshold: number; run: number; window: number } | undefined;
+  let detector: StagnationDetector | undefined;
+  try {
+    cfg = loadStagnationConfig(state.autoMode);
+    if (cfg.enabled) {
+      const det = getOrCreateDetector(phase, cfg);
+      det.record(comments);
+      detector = det;
+    }
+  } catch (err) {
+    console.warn(`[stagnation] setup error: ${(err as Error).message} — detection skipped`);
+  }
+
   // Increment retry counter AFTER capturing retryIndex (pre-mutation)
   state.gateRetries[String(phase)] = retryIndex + 1;
 
@@ -725,6 +760,33 @@ export async function handleGateReject(
 
   if (retryCount < retryLimit || state.autoMode) {
     if (retryCount >= retryLimit && state.autoMode) {
+      if (cfg?.enabled && detector !== undefined) {
+        let triggered = false;
+        let similarities: number[] = [];
+        try {
+          const r = detector.shouldEscalate();
+          triggered = r.triggered;
+          similarities = r.similarities;
+        } catch (err) {
+          console.warn(`[stagnation] detector error: ${(err as Error).message} — falling back to force-pass`);
+        }
+        if (triggered) {
+          logger.logEvent({
+            event: 'gate_stagnation',
+            phase, retryIndex,
+            similarities,
+            threshold: cfg.threshold,
+            run: cfg.run,
+            action: 'escalate',
+          });
+          await handleGateEscalation(
+            phase, comments, scope, retryIndex,
+            state, runDir, cwd, inputManager, logger,
+            { reason: 'gate-stagnation' },
+          );
+          return;
+        }
+      }
       // Auto-mode force pass (no gate_retry event — force_pass covers this path)
       await forcePassGate(phase, state, runDir, cwd, 'auto', logger);
       return;
@@ -805,6 +867,7 @@ export async function handleGateEscalation(
   cwd: string,
   inputManager: InputManager,
   logger: SessionLogger,
+  opts?: { reason?: 'gate-retry-limit' | 'gate-stagnation' },
 ): Promise<void> {
   const retryLimit = getGateRetryLimit(state.flow, phase);
   printWarning(`Gate ${phase} retry limit reached (${retryLimit})`);
@@ -823,7 +886,7 @@ export async function handleGateEscalation(
   logger.logEvent({
     event: 'escalation',
     phase,
-    reason: 'gate-retry-limit',
+    reason: opts?.reason ?? 'gate-retry-limit',
     userChoice: choice as 'C' | 'S' | 'Q',
   });
 
@@ -847,6 +910,7 @@ export async function handleGateEscalation(
 
     state.gateEscalationCycles = state.gateEscalationCycles ?? {};
     state.gateEscalationCycles[key] = (state.gateEscalationCycles[key] ?? 0) + 1;
+    dropDetector(phase);
 
     if (state.flow === 'light' && phase === 7) {
       state.carryoverFeedback = {
@@ -909,6 +973,7 @@ export async function forcePassGate(
 
   // Emit force_pass as the sole terminal event for this path
   logger.logEvent({ event: 'force_pass', phase, by });
+  dropDetector(phase);
 
   // Side effects: cleanup, advance
   deleteGateSidecars(runDir, phase);
