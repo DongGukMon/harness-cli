@@ -2231,3 +2231,68 @@ describe('Stagnation — Test 9b: WINDOW env set to non-2 value → stagnation s
     }
   });
 });
+
+describe('handleGatePhase — gate_verdict with clarity fields (phase 2 only)', () => {
+  it('emits gate_verdict with clarityScores/ambiguity/ambiguityVetoed when result has these fields (phase 2)', async () => {
+    const runDir = makeTmpDir();
+    const state = makeState({ currentPhase: 2 });
+    const { logger, eventsPath, cleanup } = makeTestLogger(state.runId);
+
+    vi.mocked(runGatePhase).mockResolvedValueOnce({
+      type: 'verdict',
+      verdict: 'REJECT',
+      comments: '- **[P1]** synthetic veto\nScope: design',
+      rawOutput: '',
+      runner: 'codex',
+      promptBytes: 1000,
+      durationMs: 5000,
+      clarityScores: { goal: 0.45, constraint: 0.60, success: 0.85, context: 0.90 },
+      ambiguity: 0.3475,
+      ambiguityThreshold: 0.2,
+      ambiguityVetoed: true,
+    } as any);
+
+    try {
+      await handleGatePhase(2, state, HDIR, runDir, CWD, createNoOpInputManager(), logger, { value: false });
+      const events = readEvents(eventsPath);
+      const verdict = events.find((e: any) => e.event === 'gate_verdict');
+      expect(verdict).toBeDefined();
+      expect(verdict.phase).toBe(2);
+      expect(verdict.clarityScores).toEqual({ goal: 0.45, constraint: 0.60, success: 0.85, context: 0.90 });
+      expect(verdict.ambiguity).toBeCloseTo(0.3475, 4);
+      expect(verdict.ambiguityThreshold).toBe(0.2);
+      expect(verdict.ambiguityVetoed).toBe(true);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('does NOT emit clarityScores/ambiguity fields on phase-4 gate_verdict', async () => {
+    const runDir = makeTmpDir();
+    const state = makeState({ currentPhase: 4 });
+    const { logger, eventsPath, cleanup } = makeTestLogger(state.runId);
+
+    vi.mocked(runGatePhase).mockResolvedValueOnce({
+      type: 'verdict',
+      verdict: 'APPROVE',
+      comments: '',
+      rawOutput: '',
+      runner: 'codex',
+      promptBytes: 1000,
+      durationMs: 5000,
+    } as any);
+
+    try {
+      await handleGatePhase(4, state, HDIR, runDir, CWD, createNoOpInputManager(), logger, { value: false });
+      const events = readEvents(eventsPath);
+      const verdict = events.find((e: any) => e.event === 'gate_verdict');
+      expect(verdict).toBeDefined();
+      expect(verdict.phase).toBe(4);
+      expect(verdict.clarityScores).toBeUndefined();
+      expect(verdict.ambiguity).toBeUndefined();
+      expect(verdict.ambiguityVetoed).toBeUndefined();
+    } finally {
+      cleanup();
+    }
+  });
+});

@@ -107,6 +107,57 @@ export function buildGateResult(
   };
 }
 
+// ─── Ambiguity scoring ────────────────────────────────────────────────────────
+
+export const AMBIGUITY_AXES = ['goal', 'constraint', 'success', 'context'] as const;
+export type AmbiguityAxis = typeof AMBIGUITY_AXES[number];
+
+export const CLARITY_WEIGHTS: Readonly<Record<AmbiguityAxis, number>> = Object.freeze({
+  goal: 0.35,
+  constraint: 0.25,
+  success: 0.30,
+  context: 0.10,
+});
+
+export type ClarityScores = Record<AmbiguityAxis, number>;
+
+export function parseClarityScores(rawOutput: string): ClarityScores | null {
+  const lines = rawOutput.split('\n');
+  const headerIdx = lines.findIndex(
+    (l) => l.trim().toLowerCase() === '## clarity scores',
+  );
+  if (headerIdx === -1) return null;
+
+  const found: Partial<Record<AmbiguityAxis, number>> = {};
+  for (let i = headerIdx + 1; i < lines.length; i++) {
+    const line = lines[i];
+    if (line.trim().startsWith('##')) break;
+    const m = line.match(/^\s*-\s*(goal|constraint|success|context)\s*:\s*(\d+(?:\.\d+)?)\s*$/i);
+    if (!m) continue;
+    const axis = m[1].toLowerCase() as AmbiguityAxis;
+    if (axis in found) continue; // first wins
+    const value = parseFloat(m[2]);
+    if (value > 1) return null;
+    found[axis] = value;
+  }
+
+  for (const axis of AMBIGUITY_AXES) {
+    if (!(axis in found)) return null;
+  }
+  return found as ClarityScores;
+}
+
+export function computeWeightedAmbiguity(scores: ClarityScores): number {
+  let clarity = 0;
+  for (const axis of AMBIGUITY_AXES) {
+    clarity += scores[axis] * CLARITY_WEIGHTS[axis];
+  }
+  // Round to 10 decimal places to eliminate IEEE-754 floating-point noise
+  // (e.g. 1 - 1.0 can yield ~1e-16 instead of exact 0).
+  const ambiguity = Math.round((1 - clarity) * 1e10) / 1e10;
+  return Math.min(1, Math.max(0, ambiguity));
+}
+
 /**
  * Read verdict from a file written by Codex (Output Protocol, R3).
  * Returns error result if file missing, unreadable, or has no ## Verdict header.

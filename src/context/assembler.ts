@@ -47,6 +47,28 @@ Scope rules:
 - Do NOT flag artifacts that are outside this phase's scope as "missing" — later harness phases produce plan/impl/eval artifacts.
 `;
 
+const CLARITY_SCORES_PROTOCOL = `
+## Clarity Scores (REQUIRED — Phase 2 only)
+After \`## Summary\`, append a section titled exactly \`## Clarity Scores\`
+with one line per axis, in this exact order:
+
+  - goal: <0.0–1.0>
+  - constraint: <0.0–1.0>
+  - success: <0.0–1.0>
+  - context: <0.0–1.0>
+
+Each score is your assessment of how clear/unambiguous that aspect of the
+spec is — independent of whether you ultimately APPROVE or REJECT:
+  - goal       — Is the desired outcome stated unambiguously?
+  - constraint — Are non-requirements / forbidden behaviors / boundary conditions explicit?
+  - success    — Are success criteria measurable and concrete?
+  - context    — Are assumptions, inputs, and prior decisions captured?
+
+Use 1.0 for "fully clear, no reviewer-to-reviewer drift expected" and 0.0 for
+"so vague that two reviewers would reasonably reach different conclusions".
+Emit numbers, not adjectives. Do not omit axes.
+`;
+
 const FIVE_AXIS_SPEC_GATE = `
 ## Five-Axis Evaluation (Phase 2 — spec gate)
 평가 대상은 spec 문서다. 다음 축만 적용:
@@ -55,7 +77,7 @@ const FIVE_AXIS_SPEC_GATE = `
 3. Scope — 단일 구현 plan으로 분해 가능한 크기인가? 여러 독립 프로젝트 섞이지 않음?
 
 Note: Phase 1 resolves design ambiguities live with the developer. Do not penalize for missing "Open Questions" / "TODO" / deferred-items sections — those are intentionally absent.
-`;
+` + CLARITY_SCORES_PROTOCOL;
 
 const FIVE_AXIS_PLAN_GATE = `
 ## Five-Axis Evaluation (Phase 4 — plan gate)
@@ -764,11 +786,17 @@ export function assembleGateResumePrompt(
   // and, for Variant A, the "prior concerns addressed" check + "APPROVE only if
   // zero P0/P1 findings" approval rule. REVIEWER_CONTRACT itself is already in the
   // session, so we do not re-include it — only the per-turn instruction tail.
+  // Light-flow P2 reviews a combined design+plan artifact via FIVE_AXIS_DESIGN_GATE_LIGHT
+  // and is explicitly out of scope for clarity scoring; only full-flow P2 gets the bullet.
+  const clarityScoresBullet = phase === 2 && state.flow !== 'light'
+    ? '- `## Clarity Scores` (4 lines: goal/constraint/success/context, each 0.0–1.0)\n'
+    : '';
   const structuredOutputReminder =
     'Respond with the same structured sections as before:\n' +
     '- `## Verdict` (exactly `APPROVE` or `REJECT`)\n' +
     '- `## Comments` (each finding labeled `[P0|P1|P2|P3]`, with Location/Issue/Suggestion/Evidence)\n' +
     '- `## Summary` (1–2 sentences)\n' +
+    clarityScoresBullet +
     'Approval rule: `APPROVE` only if there are zero P0 and zero P1 findings.\n';
 
   let prompt: string;

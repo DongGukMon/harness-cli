@@ -11,6 +11,7 @@ import { ensureCodexIsolation, CodexIsolationError } from '../runners/codex-isol
 import { writeState } from '../state.js';
 import { readCodexSessionUsage } from '../runners/codex-usage.js';
 import { parseVerdict, buildGateResult, buildGateResultFromFile } from './verdict.js';
+import { loadAmbiguityThreshold, applyAmbiguityGate } from './ambiguity.js';
 import { waitForPhaseCompletion } from './interactive.js';
 import { sendKeysToPane } from '../tmux.js';
 import { killProcessGroup } from '../process.js';
@@ -69,6 +70,12 @@ export function checkGateSidecars(runDir: string, phase: number): GatePhaseResul
     tokensTotal: gateResult.tokensTotal,
     codexSessionId: gateResult.codexSessionId,
     sourcePreset: gateResult.sourcePreset,
+    // Ambiguity fields (Phase 2 only; absent on legacy sidecars and non-P2 gates).
+    ...(gateResult.clarityScores !== undefined ? { clarityScores: gateResult.clarityScores } : {}),
+    ...(gateResult.ambiguity !== undefined ? { ambiguity: gateResult.ambiguity } : {}),
+    ...(gateResult.ambiguityThreshold !== undefined ? { ambiguityThreshold: gateResult.ambiguityThreshold } : {}),
+    ...(gateResult.ambiguityVetoed !== undefined ? { ambiguityVetoed: gateResult.ambiguityVetoed } : {}),
+    ...(gateResult.clarityParseError !== undefined ? { clarityParseError: gateResult.clarityParseError } : {}),
   };
 
   if (gateResult.exitCode !== 0) {
@@ -96,6 +103,7 @@ export function checkGateSidecars(runDir: string, phase: number): GatePhaseResul
     verdict: parsed.verdict,
     comments: parsed.comments,
     rawOutput,
+    ...(parsed.scope !== undefined ? { scope: parsed.scope } : {}),
     ...metadata,
   };
 }
@@ -160,6 +168,11 @@ async function _persistSidecars(
     ...(result.tokensTotal !== undefined ? { tokensTotal: result.tokensTotal } : {}),
     ...(effectiveSessionId !== undefined ? { codexSessionId: effectiveSessionId } : {}),
     ...(runner === 'codex' ? { sourcePreset: { model: preset.model, effort: preset.effort } } : {}),
+    ...(result.clarityScores !== undefined ? { clarityScores: result.clarityScores } : {}),
+    ...(result.ambiguity !== undefined ? { ambiguity: result.ambiguity } : {}),
+    ...(result.ambiguityThreshold !== undefined ? { ambiguityThreshold: result.ambiguityThreshold } : {}),
+    ...(result.ambiguityVetoed !== undefined ? { ambiguityVetoed: result.ambiguityVetoed } : {}),
+    ...(result.clarityParseError !== undefined ? { clarityParseError: result.clarityParseError } : {}),
   };
   try {
     fs.writeFileSync(rawPath, stdout);
@@ -315,7 +328,11 @@ export async function runGatePhaseInteractive(
     const phaseStartTs = Date.now();
     const rawResult = await runClaudeGate(phase, preset, promptText, harnessDir, cwd);
     const durationMs = Date.now() - phaseStartTs;
-    const result: GatePhaseResult = { ...rawResult, runner, promptBytes, durationMs };
+    let result: GatePhaseResult = { ...rawResult, runner, promptBytes, durationMs };
+    if (phase === 2 && state.flow !== 'light') {
+      const threshold = loadAmbiguityThreshold();
+      result = applyAmbiguityGate(result, result.rawOutput ?? '', threshold);
+    }
     if (state.currentPhase !== phase) return result;
     await _persistSidecars(result, runDir, phase, runner, promptBytes, durationMs, preset);
     return result;
@@ -394,6 +411,12 @@ export async function runGatePhaseInteractive(
       resumeFallback: false,
       sourcePreset: { model: preset.model, effort: preset.effort },
     };
+  }
+
+  // Apply ambiguity gate for full-flow phase 2 only (light-flow P2 is out of scope per spec B6)
+  if (phase === 2 && state.flow !== 'light') {
+    const threshold = loadAmbiguityThreshold();
+    gateResult = applyAmbiguityGate(gateResult, gateResult.rawOutput ?? '', threshold);
   }
 
   // Step 11: Collect codexTokens from JSONL

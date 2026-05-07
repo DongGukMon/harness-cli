@@ -49,6 +49,8 @@ P1 spec → P2 spec gate → P3 plan → P4 plan gate → P5 implement → P6 ve
 
 Use the full flow when independent pre-implementation review matters: migrations, API/contract work, security-sensitive changes, or anything where the extra gate cost is worth it.
 
+Spec gate (P2) additionally computes a weighted ambiguity score from Codex's `## Clarity Scores` output and vetoes APPROVE→REJECT when `ambiguity > HARNESS_GATE_AMBIGUITY_THRESHOLD` (default 0.2).
+
 ### Light flow (`phase-harness start --light "task"`)
 
 ```text
@@ -236,6 +238,7 @@ When running with `--auto`, harness detects *stagnant* gate retry cycles — whe
 | `HARNESS_GATE_STAGNATION_THRESHOLD` | `0.70` | Jaccard similarity threshold [0, 1]; higher = stricter |
 | `HARNESS_GATE_STAGNATION_RUN` | `2` | Consecutive stagnant pairs required before escalation (min 2) |
 | `HARNESS_GATE_STAGNATION_WINDOW` | `2` | Reserved for future use; currently fixed at 2 (pair comparison) |
+| `HARNESS_GATE_AMBIGUITY_THRESHOLD` | `0.2` | P2 spec gate ambiguity veto threshold [0, 1]. Set to `off` to disable veto (scores still logged). Invalid value → veto disabled + one stderr warning. |
 
 Any invalid value for the first three variables disables the feature for that process and emits one warning to stderr. The feature is always off in manual mode.
 

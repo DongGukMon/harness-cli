@@ -1,3 +1,5 @@
+import type { ClarityScores } from './phases/verdict.js';
+
 export type PhaseNumber = 1 | 2 | 3 | 4 | 5 | 6 | 7;
 export type InteractivePhase = 1 | 3 | 5;
 export type GatePhase = 2 | 4 | 7;
@@ -135,6 +137,13 @@ export interface GateResult {
   codexSessionId?: string;
   // Preset lineage at write time — used by sidecar replay compatibility gate (§4.7)
   sourcePreset?: { model: string; effort: string };
+  // Ambiguity gate fields (Phase 2 only; persisted so sidecar replay
+  // re-emits the same gate_verdict shape after a resume).
+  clarityScores?: ClarityScores;
+  ambiguity?: number;
+  ambiguityThreshold?: number;
+  ambiguityVetoed?: boolean;
+  clarityParseError?: boolean;
 }
 
 export interface VerifyResult {
@@ -163,6 +172,12 @@ export interface GateOutcome {
   // Session resume metadata (§4.6)
   resumedFrom?: string | null;
   resumeFallback?: boolean;
+  // Ambiguity gate fields (Phase 2 only)
+  clarityScores?: ClarityScores;
+  ambiguity?: number;
+  ambiguityThreshold?: number;
+  ambiguityVetoed?: boolean;
+  clarityParseError?: boolean;
 }
 
 export interface GateError {
@@ -182,6 +197,12 @@ export interface GateError {
   // Session resume metadata (§4.6)
   resumedFrom?: string | null;
   resumeFallback?: boolean;
+  // Ambiguity gate fields (Phase 2 only)
+  clarityScores?: ClarityScores;
+  ambiguity?: number;
+  ambiguityThreshold?: number;
+  ambiguityVetoed?: boolean;
+  clarityParseError?: boolean;
 }
 
 export type GatePhaseResult = GateOutcome | GateError;
@@ -256,6 +277,12 @@ export type LogEvent =
       resumedFrom?: string | null;
       resumeFallback?: boolean;
       preset?: { id: string; runner: 'claude' | 'codex'; model: string; effort: string };
+      // New (Phase 2 only):
+      clarityScores?: ClarityScores;
+      ambiguity?: number;
+      ambiguityThreshold?: number;
+      ambiguityVetoed?: boolean;
+      clarityParseError?: boolean;
     })
   | (LogEventBase & {
       event: 'gate_error';
