@@ -19,6 +19,27 @@ import { codexHomeFor } from '../runners/codex-isolation.js';
 import type { SessionLogger, HarnessState } from '../types.js';
 import { promptForTask } from '../task-prompt.js';
 
+export async function emitRetroHook(
+  logger: Pick<SessionLogger, 'getEventsPath'>,
+  harnessDir: string,
+  runId: string,
+): Promise<void> {
+  const eventsPath = logger.getEventsPath();
+  if (!eventsPath) return;
+  try {
+    const { generateRetrospective } = await import('../phases/retrospective.js');
+    const { markdown } = generateRetrospective(eventsPath);
+    const outDir  = join(harnessDir, runId);
+    fs.mkdirSync(outDir, { recursive: true });
+    const outPath = join(outDir, 'retrospective.md');
+    const tmp     = outPath + '.tmp';
+    fs.writeFileSync(tmp, markdown);
+    fs.renameSync(tmp, outPath);
+  } catch (err) {
+    process.stderr.write(`[retro] failed to generate retrospective: ${(err as Error).message}\n`);
+  }
+}
+
 export interface InnerOptions {
   root?: string;
   controlPane?: string;
@@ -284,6 +305,7 @@ export async function innerCommand(runId: string, options: InnerOptions = {}): P
     process.removeListener('SIGWINCH', footerTimer.forceTick);
     logger.logEvent({ event: 'session_end', status: sessionEndStatus, totalWallMs: Date.now() - logger.getStartedAt() });
     logger.finalizeSummary(state);
+    await emitRetroHook(logger, harnessDir, runId);
     logger.close();
     unmountInk();
     inputManager.stop();
