@@ -267,6 +267,8 @@ function renderMarkdown(stats: RetrospectiveStats, eventsPath: string, events: a
     if (stats.spike.flagged) {
       const top = stats.spike.topPhases[0];
       lines.push(`> Token spike detected: phase ${top.phase} is ${stats.spike.ratio.toFixed(1)}× median`);
+    } else {
+      lines.push('_No notable spike._');
     }
   }
   lines.push('');

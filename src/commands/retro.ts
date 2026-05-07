@@ -12,10 +12,27 @@ export interface RetroOptions {
 }
 
 export async function retroCommand(runId: string, options: RetroOptions): Promise<void> {
+  if (/[/\\]|\.\./.test(runId)) {
+    process.stderr.write(`[retro] invalid runId (path separators not allowed): ${runId}\n`);
+    process.exit(1);
+  }
   const harnessDir   = findHarnessRoot(options.root);
   const repoKey      = computeRepoKey(harnessDir);
   const sessionsRoot = options.sessionsRoot ?? path.join(os.homedir(), '.harness', 'sessions');
   const eventsPath   = path.join(sessionsRoot, repoKey, runId, 'events.jsonl');
+  const resolvedEventsPath = path.resolve(eventsPath);
+  const resolvedEventsBase = path.resolve(path.join(sessionsRoot, repoKey)) + path.sep;
+  if (!resolvedEventsPath.startsWith(resolvedEventsBase)) {
+    process.stderr.write(`[retro] invalid runId: path traversal detected\n`);
+    process.exit(1);
+  }
+  const outDir       = path.join(harnessDir, runId);
+  const resolvedOutDir = path.resolve(outDir);
+  const resolvedHarnessDir = path.resolve(harnessDir) + path.sep;
+  if (!resolvedOutDir.startsWith(resolvedHarnessDir)) {
+    process.stderr.write(`[retro] invalid runId: output path traversal detected\n`);
+    process.exit(1);
+  }
 
   if (!fs.existsSync(eventsPath)) {
     process.stderr.write(`[retro] events.jsonl not found at ${eventsPath}\n`);
@@ -35,7 +52,6 @@ export async function retroCommand(runId: string, options: RetroOptions): Promis
     return;
   }
 
-  const outDir  = path.join(harnessDir, runId);
   fs.mkdirSync(outDir, { recursive: true });
   const outPath = path.join(outDir, 'retrospective.md');
   const tmp     = outPath + '.tmp';

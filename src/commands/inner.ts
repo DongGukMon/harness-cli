@@ -338,7 +338,7 @@ export interface ConfigCancelHandlerArgs {
 
 export function buildConfigCancelHandler(args: ConfigCancelHandlerArgs): () => void {
   const { state, runDir, harnessDir, runId, isResume, logger, inputManager } = args;
-  return () => {
+  return async () => {
     state.status = 'paused';
     state.pauseReason = 'config-cancel';
     state.pendingAction = {
@@ -363,8 +363,8 @@ export function buildConfigCancelHandler(args: ConfigCancelHandlerArgs): () => v
     }
     logger.logEvent({ event: 'session_end', status: 'paused', totalWallMs: Date.now() - logger.getStartedAt() });
     logger.finalizeSummary(state);
+    await emitRetroHook(logger, harnessDir, runId);
     logger.close();
-
     releaseLock(harnessDir, runId);
     unmountInk();
     inputManager.stop();
