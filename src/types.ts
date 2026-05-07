@@ -137,6 +137,13 @@ export interface GateResult {
   codexSessionId?: string;
   // Preset lineage at write time — used by sidecar replay compatibility gate (§4.7)
   sourcePreset?: { model: string; effort: string };
+  // Ambiguity gate fields (Phase 2 only; persisted so sidecar replay
+  // re-emits the same gate_verdict shape after a resume).
+  clarityScores?: ClarityScores;
+  ambiguity?: number;
+  ambiguityThreshold?: number;
+  ambiguityVetoed?: boolean;
+  clarityParseError?: boolean;
 }
 
 export interface VerifyResult {

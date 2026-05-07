@@ -70,6 +70,12 @@ export function checkGateSidecars(runDir: string, phase: number): GatePhaseResul
     tokensTotal: gateResult.tokensTotal,
     codexSessionId: gateResult.codexSessionId,
     sourcePreset: gateResult.sourcePreset,
+    // Ambiguity fields (Phase 2 only; absent on legacy sidecars and non-P2 gates).
+    ...(gateResult.clarityScores !== undefined ? { clarityScores: gateResult.clarityScores } : {}),
+    ...(gateResult.ambiguity !== undefined ? { ambiguity: gateResult.ambiguity } : {}),
+    ...(gateResult.ambiguityThreshold !== undefined ? { ambiguityThreshold: gateResult.ambiguityThreshold } : {}),
+    ...(gateResult.ambiguityVetoed !== undefined ? { ambiguityVetoed: gateResult.ambiguityVetoed } : {}),
+    ...(gateResult.clarityParseError !== undefined ? { clarityParseError: gateResult.clarityParseError } : {}),
   };
 
   if (gateResult.exitCode !== 0) {
@@ -162,6 +168,11 @@ async function _persistSidecars(
     ...(result.tokensTotal !== undefined ? { tokensTotal: result.tokensTotal } : {}),
     ...(effectiveSessionId !== undefined ? { codexSessionId: effectiveSessionId } : {}),
     ...(runner === 'codex' ? { sourcePreset: { model: preset.model, effort: preset.effort } } : {}),
+    ...(result.clarityScores !== undefined ? { clarityScores: result.clarityScores } : {}),
+    ...(result.ambiguity !== undefined ? { ambiguity: result.ambiguity } : {}),
+    ...(result.ambiguityThreshold !== undefined ? { ambiguityThreshold: result.ambiguityThreshold } : {}),
+    ...(result.ambiguityVetoed !== undefined ? { ambiguityVetoed: result.ambiguityVetoed } : {}),
+    ...(result.clarityParseError !== undefined ? { clarityParseError: result.clarityParseError } : {}),
   };
   try {
     fs.writeFileSync(rawPath, stdout);

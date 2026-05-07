@@ -393,6 +393,42 @@ describe('checkGateSidecars — legacy vs extended sidecar', () => {
     expect((result as any).durationMs).toBe(30000);
   });
 
+  it('hydrates ambiguity fields from extended P2 sidecar', () => {
+    const runDir = makeTmpDir();
+    const ext = {
+      exitCode: 0,
+      timestamp: 1700000000,
+      runner: 'codex',
+      promptBytes: 1000,
+      durationMs: 30000,
+      tokensTotal: 45000,
+      sourcePreset: { model: 'gpt-5.5', effort: 'high' },
+      clarityScores: { goal: 0.45, constraint: 0.60, success: 0.85, context: 0.90 },
+      ambiguity: 0.34,
+      ambiguityThreshold: 0.2,
+      ambiguityVetoed: true,
+      clarityParseError: false,
+    };
+    fs.writeFileSync(path.join(runDir, 'gate-2-result.json'), JSON.stringify(ext));
+    fs.writeFileSync(
+      path.join(runDir, 'gate-2-raw.txt'),
+      '## Verdict\nREJECT\nScope: design\n\n## Comments\n- **[P1]** synthetic\n',
+    );
+
+    const result = checkGateSidecars(runDir, 2);
+    expect(result?.type).toBe('verdict');
+    expect((result as any).clarityScores).toEqual({
+      goal: 0.45,
+      constraint: 0.60,
+      success: 0.85,
+      context: 0.90,
+    });
+    expect((result as any).ambiguity).toBeCloseTo(0.34, 5);
+    expect((result as any).ambiguityThreshold).toBe(0.2);
+    expect((result as any).ambiguityVetoed).toBe(true);
+    expect((result as any).clarityParseError).toBe(false);
+  });
+
   it('hydrates metadata on error sidecar replay (non-zero exitCode)', () => {
     const runDir = makeTmpDir();
     const ext = {
