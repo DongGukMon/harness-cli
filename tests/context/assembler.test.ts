@@ -1344,4 +1344,14 @@ describe('CLARITY_SCORES_PROTOCOL — assembleGateResumePrompt', () => {
     expect(typeof result).toBe('string');
     expect(result as string).not.toContain('## Clarity Scores');
   });
+
+  it('Light-flow Phase-2 assembleGateResumePrompt output does NOT contain "## Clarity Scores" bullet', () => {
+    const cwd = makeTmpDir();
+    const runDir = path.join(cwd, '.harness', 'my-run');
+    const state = makeState({ flow: 'light' });
+    writeSpec(cwd, state);
+    const result = assembleGateResumePrompt(2, state, cwd, 'reject', 'P1 feedback', runDir);
+    expect(typeof result).toBe('string');
+    expect(result as string).not.toContain('## Clarity Scores');
+  });
 });

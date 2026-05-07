@@ -786,7 +786,9 @@ export function assembleGateResumePrompt(
   // and, for Variant A, the "prior concerns addressed" check + "APPROVE only if
   // zero P0/P1 findings" approval rule. REVIEWER_CONTRACT itself is already in the
   // session, so we do not re-include it — only the per-turn instruction tail.
-  const clarityScoresBullet = phase === 2
+  // Light-flow P2 reviews a combined design+plan artifact via FIVE_AXIS_DESIGN_GATE_LIGHT
+  // and is explicitly out of scope for clarity scoring; only full-flow P2 gets the bullet.
+  const clarityScoresBullet = phase === 2 && state.flow !== 'light'
     ? '- `## Clarity Scores` (4 lines: goal/constraint/success/context, each 0.0–1.0)\n'
     : '';
   const structuredOutputReminder =
