@@ -19,7 +19,8 @@
 | `tests/phases/retrospective.test.ts` | Create | Fixture-driven unit tests (8 fixtures + determinism) |
 | `tests/commands/retro.test.ts` | Create | Subcommand behavior tests (4 cases) |
 | `src/commands/inner.ts` | Modify | Auto-emit hook in `finally` block (~12 lines) |
-| `bin/harness.ts` | Modify | Register `retro` subcommand (~8 lines) |
+| `bin/harness.ts` | Modify | Register `retro` subcommand (~10 lines) _(note: actual repo path; spec doc erroneously lists `src/bin/harness.ts`)_ |
+| `tests/commands/retro-hook.test.ts` | Create | `emitRetroHook` unit tests with mocked logger (3 cases) |
 
 ---
 
@@ -211,7 +212,7 @@ const RESUMED_LINES = [
   JSON.stringify({ v:1, ts:BASE+120000,  runId:'r3', event:'session_start', task:'t', autoMode:false, baseCommit:'abc', harnessVersion:'2.0.0' }),
   JSON.stringify({ v:1, ts:BASE+120100,  runId:'r3', event:'phase_start',   phase:5,  attemptId:'e1' }),
   JSON.stringify({ v:1, ts:BASE+240100,  runId:'r3', event:'phase_end',     phase:5,  attemptId:'e1', status:'completed', durationMs:120000 }),
-  JSON.stringify({ v:1, ts:BASE+240200,  runId:'r3', event:'session_end',   status:'completed', totalWallMs:240200 }),
+  JSON.stringify({ v:1, ts:BASE+240200,  runId:'r3', event:'session_end',   status:'completed', totalWallMs:999999 }),
 ];
 
 describe('fixture-resumed', () => {
@@ -221,11 +222,13 @@ describe('fixture-resumed', () => {
     expect(stats.phases.map(ph => ph.phase)).toEqual(expect.arrayContaining([1, 5]));
   });
 
-  it('startedAt = first session_start.ts, endedAt = last session_end.ts', () => {
+  it('startedAt = first session_start.ts, endedAt = last session_end.ts, totalWallMs = endedAt − startedAt', () => {
     const p = writeFixture(tmpDir, RESUMED_LINES);
     const { stats } = generateRetrospective(p);
     expect(stats.startedAt).toBe(BASE + 0);
     expect(stats.endedAt).toBe(BASE + 240200);
+    // totalWallMs = endedAt - startedAt (NOT session_end.totalWallMs which is 999999)
+    expect(stats.totalWallMs).toBe(240200);
   });
 });
 
@@ -430,7 +433,7 @@ export function generateRetrospective(eventsPath: string): { markdown: string; s
   const startedAt: number = sessionStarts.length > 0 ? sessionStarts[0].ts : events[0].ts;
   const lastSessionEnd = sessionEnds.length > 0 ? sessionEnds[sessionEnds.length - 1] : null;
   const endedAt: number = lastSessionEnd ? lastSessionEnd.ts : events[events.length - 1].ts;
-  const totalWallMs: number = lastSessionEnd ? lastSessionEnd.totalWallMs : (endedAt - startedAt);
+  const totalWallMs: number = endedAt - startedAt; // spec: first session_start.ts → last session_end.ts delta
 
   const runId: string        = (sessionStarts[0] ?? events[0])?.runId ?? 'unknown';
   const harnessVersion       = sessionStarts[0]?.harnessVersion ?? null;
@@ -935,10 +938,11 @@ Add before `program.parseAsync(process.argv)`:
 program
   .command('retro <runId>')
   .description("generate retrospective markdown from a run's events.jsonl")
+  .option('--root <dir>', 'explicit .harness/ parent directory')
   .option('--stdout', 'print markdown to stdout instead of writing to file')
-  .action(async (runId: string, opts: { stdout?: boolean }) => {
+  .action(async (runId: string, opts: { root?: string; stdout?: boolean }) => {
     const globalOpts = program.opts();
-    await retroCommand(runId, { stdout: opts.stdout, root: globalOpts.root });
+    await retroCommand(runId, { stdout: opts.stdout, root: opts.root ?? globalOpts.root });
   });
 ```
 
@@ -965,36 +969,42 @@ git commit -m "feat(retro): add retro subcommand and register in CLI"
 
 ---
 
-### Task 6: Auto-emit hook in `inner.ts`
+### Task 6: Auto-emit hook in `inner.ts` (extracted as named export)
 
 **Files:**
-- Modify: `src/commands/inner.ts`
-- Modify: `tests/commands/inner.test.ts` (append hook smoke tests)
+- Modify: `src/commands/inner.ts` — add `emitRetroHook` named export, call it in `finally`
+- Create: `tests/commands/retro-hook.test.ts` — 3 hook tests with mocked logger
 
-- [ ] **Step 1: Add auto-emit hook to `inner.ts` finally block**
+- [ ] **Step 1: Extract `emitRetroHook` in `src/commands/inner.ts`**
 
-In `src/commands/inner.ts`, locate the `finally` block (lines 282–291). After `logger.finalizeSummary(state)` and **before** `logger.close()`, insert the following block:
+Add the following named export to `src/commands/inner.ts` (place after existing imports, before the `run` function):
 
 ```typescript
-    // Auto-emit retrospective — fail-open, single warn on error
-    const eventsPath = logger.getEventsPath();
-    if (eventsPath) {
-      try {
-        const { generateRetrospective } = await import('../phases/retrospective.js');
-        const { markdown } = generateRetrospective(eventsPath);
-        const outDir = join(harnessDir, runId);
-        fs.mkdirSync(outDir, { recursive: true });
-        const outPath = join(outDir, 'retrospective.md');
-        const tmp = outPath + '.tmp';
-        fs.writeFileSync(tmp, markdown);
-        fs.renameSync(tmp, outPath);
-      } catch (err) {
-        process.stderr.write(`[retro] failed to generate retrospective: ${(err as Error).message}\n`);
-      }
-    }
+import type { SessionLogger } from '../types.js';
+
+export async function emitRetroHook(
+  logger: Pick<SessionLogger, 'getEventsPath'>,
+  harnessDir: string,
+  runId: string,
+): Promise<void> {
+  const eventsPath = logger.getEventsPath();
+  if (!eventsPath) return;
+  try {
+    const { generateRetrospective } = await import('../phases/retrospective.js');
+    const { markdown } = generateRetrospective(eventsPath);
+    const outDir  = join(harnessDir, runId);
+    fs.mkdirSync(outDir, { recursive: true });
+    const outPath = join(outDir, 'retrospective.md');
+    const tmp     = outPath + '.tmp';
+    fs.writeFileSync(tmp, markdown);
+    fs.renameSync(tmp, outPath);
+  } catch (err) {
+    process.stderr.write(`[retro] failed to generate retrospective: ${(err as Error).message}\n`);
+  }
+}
 ```
 
-The resulting `finally` block:
+In the `finally` block, after `logger.finalizeSummary(state)` and before `logger.close()`, add a single call:
 
 ```typescript
   } finally {
@@ -1002,22 +1012,7 @@ The resulting `finally` block:
     process.removeListener('SIGWINCH', footerTimer.forceTick);
     logger.logEvent({ event: 'session_end', status: sessionEndStatus, totalWallMs: Date.now() - logger.getStartedAt() });
     logger.finalizeSummary(state);
-    // Auto-emit retrospective — fail-open, single warn on error
-    const eventsPath = logger.getEventsPath();
-    if (eventsPath) {
-      try {
-        const { generateRetrospective } = await import('../phases/retrospective.js');
-        const { markdown } = generateRetrospective(eventsPath);
-        const outDir = join(harnessDir, runId);
-        fs.mkdirSync(outDir, { recursive: true });
-        const outPath = join(outDir, 'retrospective.md');
-        const tmp = outPath + '.tmp';
-        fs.writeFileSync(tmp, markdown);
-        fs.renameSync(tmp, outPath);
-      } catch (err) {
-        process.stderr.write(`[retro] failed to generate retrospective: ${(err as Error).message}\n`);
-      }
-    }
+    await emitRetroHook(logger, harnessDir, runId);
     logger.close();
     unmountInk();
     inputManager.stop();
@@ -1025,54 +1020,62 @@ The resulting `finally` block:
   }
 ```
 
-- [ ] **Step 2: Append hook smoke tests to `tests/commands/inner.test.ts`**
-
-At the end of the existing file, add:
+- [ ] **Step 2: Create `tests/commands/retro-hook.test.ts`**
 
 ```typescript
-describe('auto-emit retrospective hook (isolation smoke tests)', () => {
-  it('is fail-open: when generateRetrospective throws, stderr is written and no re-throw', async () => {
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
+import { emitRetroHook } from '../../src/commands/inner.js';
+
+let tmpDir: string;
+beforeEach(() => { tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'retro-hook-test-')); });
+afterEach(() => { fs.rmSync(tmpDir, { recursive: true, force: true }); });
+
+const BASE = 1746612000000;
+const MINIMAL_EVENTS =
+  JSON.stringify({ v:1, ts:BASE, runId:'r0', event:'session_start', task:'t', autoMode:false, baseCommit:'abc', harnessVersion:'2.0.0' }) + '\n' +
+  JSON.stringify({ v:1, ts:BASE+100, runId:'r0', event:'session_end', status:'completed', totalWallMs:100 }) + '\n';
+
+describe('emitRetroHook', () => {
+  it('no-op when logger.getEventsPath() returns null', async () => {
+    const logger = { getEventsPath: () => null };
     const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
-
-    // Simulate the hook in isolation
-    const eventsPath = '/tmp/nonexistent-events.jsonl';
-    await (async () => {
-      try {
-        const { generateRetrospective } = await import('../../src/phases/retrospective.js');
-        generateRetrospective(eventsPath);
-      } catch (err) {
-        process.stderr.write(`[retro] failed to generate retrospective: ${(err as Error).message}\n`);
-      }
-    })();
-
-    expect(stderrSpy).toHaveBeenCalledWith(expect.stringContaining('[retro] failed to generate retrospective:'));
+    await emitRetroHook(logger, tmpDir, 'run-null');
+    expect(stderrSpy).not.toHaveBeenCalled();
+    expect(fs.existsSync(path.join(tmpDir, 'run-null', 'retrospective.md'))).toBe(false);
     stderrSpy.mockRestore();
   });
 
-  it('NoopLogger path: getEventsPath()===null means the if-block is skipped, no stderr', () => {
+  it('writes <harnessDir>/<runId>/retrospective.md on valid events.jsonl', async () => {
+    const eventsFile = path.join(tmpDir, 'events.jsonl');
+    fs.writeFileSync(eventsFile, MINIMAL_EVENTS);
+    const logger = { getEventsPath: () => eventsFile };
+    await emitRetroHook(logger, tmpDir, 'run-ok');
+    expect(fs.existsSync(path.join(tmpDir, 'run-ok', 'retrospective.md'))).toBe(true);
+  });
+
+  it('warns once to stderr and does NOT rethrow when events.jsonl is missing', async () => {
     const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
-
-    // Simulate the guard condition
-    const eventsPath: string | null = null;
-    if (eventsPath) {
-      process.stderr.write('[retro] should not be reached\n');
-    }
-
-    expect(stderrSpy).not.toHaveBeenCalled();
+    const logger = { getEventsPath: () => path.join(tmpDir, 'nonexistent.jsonl') };
+    await expect(emitRetroHook(logger, tmpDir, 'run-err')).resolves.toBeUndefined();
+    expect(stderrSpy).toHaveBeenCalledTimes(1);
+    expect(stderrSpy).toHaveBeenCalledWith(expect.stringContaining('[retro] failed to generate retrospective:'));
     stderrSpy.mockRestore();
   });
 });
 ```
 
-- [ ] **Step 3: Run inner tests — existing + new smoke tests all pass**
+- [ ] **Step 3: Run hook tests**
 
 ```bash
-pnpm vitest run tests/commands/inner.test.ts
+pnpm vitest run tests/commands/retro-hook.test.ts
 ```
 
-Expected: all tests (existing + 2 new) pass.
+Expected: all 3 tests pass.
 
-- [ ] **Step 4: Run the complete test suite — no regressions**
+- [ ] **Step 4: Run full test suite — no regressions**
 
 ```bash
 pnpm vitest run
@@ -1091,6 +1094,6 @@ Expected: no errors, `dist/` updated.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/commands/inner.ts tests/commands/inner.test.ts
-git commit -m "feat(retro): wire auto-emit hook in inner.ts finally block (fail-open)"
+git add src/commands/inner.ts tests/commands/retro-hook.test.ts
+git commit -m "feat(retro): wire auto-emit hook in inner.ts as emitRetroHook named export (fail-open)"
 ```
