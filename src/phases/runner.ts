@@ -945,6 +945,11 @@ export async function handleGateEscalation(
   const retryLimit = getGateRetryLimit(state.flow, phase);
   printWarning(`Gate ${phase} retry limit reached (${retryLimit})`);
 
+  // Issue #98: render the C/S/Q prompt through Ink so the user can actually
+  // see it. promptChoice's stderr write alone is invisible while Ink is
+  // mounted on the same TTY (Ink redraw covers it on the next loop tick).
+  renderControlPanel(state, logger, 'gate-escalation-pending');
+
   const choice = await promptChoice(
     `Gate ${phase} has been rejected ${retryLimit} times. What would you like to do?`,
     [
@@ -1076,6 +1081,9 @@ export async function handleGateError(
   logger: SessionLogger,
 ): Promise<void> {
   printError(`Gate ${phase} error: ${error}`);
+
+  // Issue #98: render the R/S/Q prompt through Ink (see handleGateEscalation).
+  renderControlPanel(state, logger, 'gate-error-pending');
 
   const choice = await promptChoice(
     `Gate ${phase} encountered an error. What would you like to do?`,
@@ -1292,6 +1300,9 @@ export async function handleVerifyEscalation(
 ): Promise<void> {
   printWarning(`Verify retry limit reached (${VERIFY_RETRY_LIMIT})`);
 
+  // Issue #98: render the C/S/Q prompt through Ink (see handleGateEscalation).
+  renderControlPanel(state, logger, 'verify-escalation-pending');
+
   const choice = await promptChoice(
     `Verify has failed ${VERIFY_RETRY_LIMIT} times. What would you like to do?`,
     [
@@ -1427,6 +1438,9 @@ export async function handleVerifyError(
 ): Promise<void> {
   const errorInfo = errorPath ? ` (see ${errorPath})` : '';
   printError(`Verify error${errorInfo}`);
+
+  // Issue #98: render the R/Q prompt through Ink (see handleGateEscalation).
+  renderControlPanel(state, logger, 'verify-error-pending');
 
   const choice = await promptChoice(
     'Verify encountered an error. What would you like to do?',

@@ -237,7 +237,11 @@ export type RenderCallsite =
   | 'verify-complete'
   | 'verify-redirect'
   | 'terminal-failed'
-  | 'terminal-complete';
+  | 'terminal-complete'
+  | 'gate-escalation-pending'
+  | 'gate-error-pending'
+  | 'verify-escalation-pending'
+  | 'verify-error-pending';
 
 // Distributive Omit: applies Omit to each member of a union separately,
 // preserving discriminated-union specificity (needed for LogEvent variants).
