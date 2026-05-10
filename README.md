@@ -221,7 +221,10 @@ Flags:
 - `--enable-logging` — write session logs under `~/.harness/sessions/...`
 - `--light` — use the 5-phase light flow (P1 design+plan → P2 pre-impl gate → P5 → P6 → P7)
 - `--codex-no-isolate` — disable per-run `CODEX_HOME` isolation for Codex subprocesses; not recommended
+- `--no-drift` — skip P5 → P6 drift detection for this run (equivalent to `HARNESS_PHASE_DRIFT_THRESHOLD=off`, but persisted per-run)
 - global `--root <dir>` — use `<dir>/.harness` as the harness root
+
+`phase-harness run` accepts all the same flags as `start`.
 
 Important behavior:
 - unstaged/untracked changes are allowed by default
@@ -239,13 +242,15 @@ When running with `--auto`, harness detects *stagnant* gate retry cycles — whe
 | `HARNESS_GATE_STAGNATION_RUN` | `2` | Consecutive stagnant pairs required before escalation (min 2) |
 | `HARNESS_GATE_STAGNATION_WINDOW` | `2` | Reserved for future use; currently fixed at 2 (pair comparison) |
 | `HARNESS_GATE_AMBIGUITY_THRESHOLD` | `0.2` | P2 spec gate ambiguity veto threshold [0, 1]. Set to `off` to disable veto (scores still logged). Invalid value → veto disabled + one stderr warning. |
-| `HARNESS_PHASE_DRIFT_THRESHOLD` | `0.3` (auto) / `null` (manual) | P5 → P6 drift detection threshold [0, 1]. Unset = auto-mode default 0.3 / manual disabled; numeric = enabled at that value (any mode); `off` = disabled. Invalid value → disabled + one stderr warning. Drift detection issues a single Codex call after a successful P5; when `score > threshold`, P5 is reopened with synthetic feedback. **Drift detection (P5→P6)**: see HOW-IT-WORKS for details. |
+| `HARNESS_PHASE_DRIFT_THRESHOLD` | `0.3` (auto) / `null` (manual) | P5 → P6 drift detection threshold [0, 1]. Unset = auto-mode default 0.3 / manual disabled; numeric = enabled at that value (any mode); `off` = disabled. Invalid value → disabled + one stderr warning. Drift detection issues a single Codex call after a successful P5; when `score > threshold`, P5 is reopened with synthetic feedback. **Drift detection (P5→P6)**: see HOW-IT-WORKS for details. `--no-drift` overrides `HARNESS_PHASE_DRIFT_THRESHOLD` when both are set. |
 
 Any invalid value for the first three variables disables the feature for that process and emits one warning to stderr. The feature is always off in manual mode.
 
 ### `phase-harness resume [runId]`
 
 Resumes the current run or a specific run.
+
+`--no-drift` is a start-time choice only. Drift policy is frozen at run creation; `phase-harness resume --no-drift` is rejected.
 
 ```bash
 phase-harness resume

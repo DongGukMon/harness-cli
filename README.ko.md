@@ -221,7 +221,10 @@ phase-harness start --root /tmp/demo "task"
 - `--enable-logging` — `~/.harness/sessions/...` 아래에 세션 로그 저장
 - `--light` — 5단계 light flow 사용 (P1 design+plan → P2 pre-impl gate → P5 → P6 → P7)
 - `--codex-no-isolate` — Codex subprocess의 per-run `CODEX_HOME` isolation 비활성화; 권장하지 않음
+- `--no-drift` — 이 run에서 P5 → P6 drift 검출을 비활성화 (`HARNESS_PHASE_DRIFT_THRESHOLD=off`와 동등하나 run 단위로 영구 저장됨)
 - 전역 `--root <dir>` — harness root를 `<dir>/.harness`로 강제
+
+`phase-harness run`도 `start`와 동일한 플래그를 모두 지원합니다.
 
 중요 동작:
 - 기본적으로 unstaged/untracked 변경은 허용됩니다
@@ -239,13 +242,15 @@ phase-harness start --root /tmp/demo "task"
 | `HARNESS_GATE_STAGNATION_RUN` | `2` | 에스컬레이션 전 연속 정체 쌍 수 (최소 2) |
 | `HARNESS_GATE_STAGNATION_WINDOW` | `2` | 향후 사용 예약; 현재 2로 고정 (쌍 비교) |
 | `HARNESS_GATE_AMBIGUITY_THRESHOLD` | `0.2` | P2 spec gate 모호성 거부권 임계값 [0, 1]. `off`로 비활성화(점수는 여전히 로깅). 유효하지 않은 값 → 거부권 비활성화 + stderr 경고 1회. |
-| `HARNESS_PHASE_DRIFT_THRESHOLD` | `0.3` (자율) / `null` (수동) | P5 → P6 드리프트 검출 임계값 [0, 1]. 미설정 = 자율 모드 기본 0.3 / 수동 비활성화; 숫자 = 모드와 무관하게 그 값으로 활성화; `off` = 비활성화. 유효하지 않은 값 → 비활성화 + stderr 경고 1회. P5 성공 후 Codex 1회 호출로 점수를 산출하고 `score > threshold`면 P5를 합성 피드백과 함께 reopen합니다. **드리프트 검출 (P5→P6)** 자세한 내용은 HOW-IT-WORKS 참고. |
+| `HARNESS_PHASE_DRIFT_THRESHOLD` | `0.3` (자율) / `null` (수동) | P5 → P6 드리프트 검출 임계값 [0, 1]. 미설정 = 자율 모드 기본 0.3 / 수동 비활성화; 숫자 = 모드와 무관하게 그 값으로 활성화; `off` = 비활성화. 유효하지 않은 값 → 비활성화 + stderr 경고 1회. P5 성공 후 Codex 1회 호출로 점수를 산출하고 `score > threshold`면 P5를 합성 피드백과 함께 reopen합니다. **드리프트 검출 (P5→P6)** 자세한 내용은 HOW-IT-WORKS 참고. 두 설정이 동시에 적용되면 `--no-drift`가 `HARNESS_PHASE_DRIFT_THRESHOLD`를 덮어씁니다. |
 
 처음 세 변수에 잘못된 값이 있으면 해당 프로세스에서 기능이 비활성화되고 stderr에 경고 하나가 출력됩니다. 수동 모드에서는 항상 비활성화됩니다.
 
 ### `phase-harness resume [runId]`
 
 현재 run 또는 특정 run을 재개합니다.
+
+`--no-drift`는 start 시점에만 유효합니다. Drift 정책은 run 생성 시 고정되므로 `phase-harness resume --no-drift`는 거부됩니다.
 
 ```bash
 phase-harness resume
