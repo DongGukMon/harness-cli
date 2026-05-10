@@ -502,3 +502,4 @@
 
 - P2 (prior round): `tests/unit/phases/drift.test.ts` path in spec does not match actual repo layout (`tests/phases/drift.test.ts`); no action needed beyond the note at the top of this plan.
 - plan-bug: gate-7 P1 — eval report shows "Verification skipped by user (escalation override)"; Phase 6 harness-verify.sh must re-run with actual results. Local verification confirmed all green: `pnpm tsc --noEmit` ✅ `pnpm vitest run` (1215 tests) ✅ `pnpm build` ✅. Phase 5 cannot update the eval report (Phase 6 artifact); requires Phase 6 re-execution.
+- plan-bug: checklist.json `docs-token-presence` command broken on macOS — `wc -l` outputs leading spaces (`       4\n`), causing `grep -q '^4$'` to fail. Fixed in-place: added `| xargs` before final grep to strip whitespace. Root cause of all Phase 6 verify-feedback `docs-token-presence: FAIL` reruns.
