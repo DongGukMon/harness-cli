@@ -90,10 +90,27 @@ In auto-mode, when a gate phase is rejected `retryLimit` times in a row, harness
 - `HARNESS_GATE_STAGNATION_RUN=2` (two consecutive stagnant pairs required)
 - `HARNESS_GATE_STAGNATION_WINDOW=2` (reserved; no-op in v1)
 - `HARNESS_GATE_AMBIGUITY_THRESHOLD=0.2` — P2 spec gate ambiguity veto threshold [0, 1]. `=off` to disable veto (scores still logged). Invalid value → veto disabled + one stderr warning.
+- `HARNESS_PHASE_DRIFT_THRESHOLD=0.3` (auto-mode default; manual mode default disabled) — P5 → P6 drift detection threshold [0, 1]. See **Drift detection (P5→P6)** below.
 
 Invalid values for the first three vars disable the feature fail-open (one stderr warn per key per process). The detector buffer is in-memory only; resuming a paused run starts empty.
 
 **New `events.jsonl` event:** `gate_stagnation` is emitted once per triggered detection, immediately before the `escalation` event, with fields `phase`, `retryIndex`, `similarities[]`, `threshold`, `run`, `action: 'escalate'`.
+
+### Drift detection (P5→P6)
+
+After a successful P5 (impl) phase, harness can optionally score how far the implementation has drifted from the approved spec/plan before advancing to P6 (verify). Drift detection issues exactly **one Codex call per P5 attempt** with the spec, plan, and `git diff planCommit..implCommit` as input, and Codex emits three axis scores (`goal`, `constraint`, `ontology`) inside a `## Drift Scores` fenced JSON block. The harness computes `score = 0.5·goal + 0.3·constraint + 0.2·ontology` and compares it against `HARNESS_PHASE_DRIFT_THRESHOLD`.
+
+- `score ≤ threshold` → P5 marked completed, P6 entered as today.
+- `score > threshold` → harness writes `<runDir>/drift-feedback.md`, reopens P5 with `phaseReopenSource['5']=5` and `pendingAction.type='reopen_phase'`, and emits `phase_end status='failed' details.reason='drift-reopen'`.
+- Codex failure (timeout / non-zero exit / parse error / oversized spec+plan) → fail-open: P5 succeeds, P6 enters as today. One stderr warning is emitted.
+
+Default activation is mode-driven: in auto-mode the threshold defaults to `0.3`; in manual mode the feature is disabled unless the env is set to a numeric value. `=off` disables it explicitly. Drift detection runs in both `flow='full'` and `flow='light'` runs, on phase 5 only. Per-axis weights and the 30 000-char prompt cap are baked in.
+
+**New `events.jsonl` event:** `phase_drift` is emitted once per P5 attempt when drift detection is active (i.e. threshold non-null). Fields: `phase: 5`, `attemptId`, `durationMs`, `threshold`, `score` (number or null), `axes` (object or null), `action: 'pass' | 'reopen' | 'error'`, `driftSource: 'codex-only' | 'codex-truncated' | 'error'`, optional `codexTokensTotal`, optional `rationale` (≤ 200 chars), optional `error`. Absence of the event = drift detection was disabled for that run; readers MUST treat absence as the default.
+
+**Extended schema:** `phase_end.details.reason` may now be `'drift-reopen'` on the P5 phase\_end that immediately follows a `phase_drift action='reopen'`.
+
+The deterministic floor described in the original design (grep-rule extraction from `## Success Criteria` / `## Invariants`) is deferred to a follow-up PR; v1 is Codex-only.
 
 **Extended schema:** `escalation.reason` now includes `'gate-stagnation'` in addition to the four pre-existing values.
 

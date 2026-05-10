@@ -239,6 +239,7 @@ When running with `--auto`, harness detects *stagnant* gate retry cycles — whe
 | `HARNESS_GATE_STAGNATION_RUN` | `2` | Consecutive stagnant pairs required before escalation (min 2) |
 | `HARNESS_GATE_STAGNATION_WINDOW` | `2` | Reserved for future use; currently fixed at 2 (pair comparison) |
 | `HARNESS_GATE_AMBIGUITY_THRESHOLD` | `0.2` | P2 spec gate ambiguity veto threshold [0, 1]. Set to `off` to disable veto (scores still logged). Invalid value → veto disabled + one stderr warning. |
+| `HARNESS_PHASE_DRIFT_THRESHOLD` | `0.3` (auto) / `null` (manual) | P5 → P6 drift detection threshold [0, 1]. Unset = auto-mode default 0.3 / manual disabled; numeric = enabled at that value (any mode); `off` = disabled. Invalid value → disabled + one stderr warning. Drift detection issues a single Codex call after a successful P5; when `score > threshold`, P5 is reopened with synthetic feedback. **Drift detection (P5→P6)**: see HOW-IT-WORKS for details. |
 
 Any invalid value for the first three variables disables the feature for that process and emits one warning to stderr. The feature is always off in manual mode.
 
