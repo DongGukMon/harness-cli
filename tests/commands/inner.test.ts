@@ -516,7 +516,7 @@ describe('buildConfigCancelHandler — lazy bootstrap', () => {
     (process as any).exit = origExit;
   });
 
-  it('fresh start: emits session_start before session_end(paused)', () => {
+  it('fresh start: emits session_start before session_end(paused)', async () => {
     const harnessDir = tempHarnessDir();
     const sessionsRoot = path.join(harnessDir, 'sessions');
     const runDir = path.join(harnessDir, 'runs', 'cc1');
@@ -532,7 +532,7 @@ describe('buildConfigCancelHandler — lazy bootstrap', () => {
       state, runDir, harnessDir, runId: 'cc1', isResume: false, logger, inputManager,
     });
 
-    try { handler(); } catch (e) { /* __EXIT_TRAP__ swallowed */ }
+    try { await handler(); } catch (e) { /* __EXIT_TRAP__ swallowed */ }
 
     expect(exitCode).toBe(0);
 
@@ -555,7 +555,7 @@ describe('buildConfigCancelHandler — lazy bootstrap', () => {
     fs.rmSync(harnessDir, { recursive: true, force: true });
   });
 
-  it('resume case: emits session_resumed + pushes resumedAt before session_end(paused)', () => {
+  it('resume case: emits session_resumed + pushes resumedAt before session_end(paused)', async () => {
     const harnessDir = tempHarnessDir();
     const sessionsRoot = path.join(harnessDir, 'sessions');
     const runDir = path.join(harnessDir, 'runs', 'cc2');
@@ -577,7 +577,7 @@ describe('buildConfigCancelHandler — lazy bootstrap', () => {
       state, runDir, harnessDir, runId: 'cc2', isResume: true, logger: logger2, inputManager,
     });
 
-    try { handler(); } catch (e) { /* __EXIT_TRAP__ swallowed */ }
+    try { await handler(); } catch (e) { /* __EXIT_TRAP__ swallowed */ }
 
     expect(exitCode).toBe(0);
 
@@ -600,7 +600,7 @@ describe('buildConfigCancelHandler — lazy bootstrap', () => {
     fs.rmSync(harnessDir, { recursive: true, force: true });
   });
 
-  it('fresh start persists meta.codexHome=<runDir>/codex-home (BUG-C Issue #13)', () => {
+  it('fresh start persists meta.codexHome=<runDir>/codex-home (BUG-C Issue #13)', async () => {
     const harnessDir = tempHarnessDir();
     const sessionsRoot = path.join(harnessDir, 'sessions');
     const runDir = path.join(harnessDir, 'runs', 'cc-iso-1');
@@ -613,7 +613,7 @@ describe('buildConfigCancelHandler — lazy bootstrap', () => {
     const handler = buildConfigCancelHandler({
       state, runDir, harnessDir, runId: 'cc-iso-1', isResume: false, logger, inputManager,
     });
-    try { handler(); } catch (e) { /* __EXIT_TRAP__ */ }
+    try { await handler(); } catch (e) { /* __EXIT_TRAP__ */ }
 
     const repoKey = computeRepoKey(harnessDir);
     const meta = JSON.parse(fs.readFileSync(path.join(sessionsRoot, repoKey, 'cc-iso-1', 'meta.json'), 'utf-8'));
@@ -622,7 +622,7 @@ describe('buildConfigCancelHandler — lazy bootstrap', () => {
     fs.rmSync(harnessDir, { recursive: true, force: true });
   });
 
-  it('codexNoIsolate=true: meta.codexHome is absent (no-isolate escape hatch)', () => {
+  it('codexNoIsolate=true: meta.codexHome is absent (no-isolate escape hatch)', async () => {
     const harnessDir = tempHarnessDir();
     const sessionsRoot = path.join(harnessDir, 'sessions');
     const runDir = path.join(harnessDir, 'runs', 'cc-iso-2');
@@ -635,7 +635,7 @@ describe('buildConfigCancelHandler — lazy bootstrap', () => {
     const handler = buildConfigCancelHandler({
       state, runDir, harnessDir, runId: 'cc-iso-2', isResume: false, logger, inputManager,
     });
-    try { handler(); } catch (e) { /* __EXIT_TRAP__ */ }
+    try { await handler(); } catch (e) { /* __EXIT_TRAP__ */ }
 
     const repoKey = computeRepoKey(harnessDir);
     const meta = JSON.parse(fs.readFileSync(path.join(sessionsRoot, repoKey, 'cc-iso-2', 'meta.json'), 'utf-8'));
@@ -644,7 +644,7 @@ describe('buildConfigCancelHandler — lazy bootstrap', () => {
     fs.rmSync(harnessDir, { recursive: true, force: true });
   });
 
-  it('resume branch preserves codexHome through lazy-bootstrap (regression guard for call site #5)', () => {
+  it('resume branch preserves codexHome through lazy-bootstrap (regression guard for call site #5)', async () => {
     const harnessDir = tempHarnessDir();
     const sessionsRoot = path.join(harnessDir, 'sessions');
     const runDir = path.join(harnessDir, 'runs', 'cc-iso-3');
@@ -659,7 +659,7 @@ describe('buildConfigCancelHandler — lazy bootstrap', () => {
     const handler = buildConfigCancelHandler({
       state, runDir, harnessDir, runId: 'cc-iso-3', isResume: true, logger, inputManager,
     });
-    try { handler(); } catch (e) { /* __EXIT_TRAP__ */ }
+    try { await handler(); } catch (e) { /* __EXIT_TRAP__ */ }
 
     const repoKey = computeRepoKey(harnessDir);
     const meta = JSON.parse(fs.readFileSync(path.join(sessionsRoot, repoKey, 'cc-iso-3', 'meta.json'), 'utf-8'));

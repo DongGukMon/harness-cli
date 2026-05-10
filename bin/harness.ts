@@ -10,6 +10,7 @@ import { innerCommand } from '../src/commands/inner.js';
 import { installSkillsCommand } from '../src/commands/install-skills.js';
 import { uninstallSkillsCommand } from '../src/commands/uninstall-skills.js';
 import { cleanupCommand } from '../src/commands/cleanup.js';
+import { retroCommand } from '../src/commands/retro.js';
 import { HARNESS_VERSION } from '../src/version.js';
 
 const program = new Command();
@@ -130,6 +131,16 @@ program
   .action(async (opts: { dryRun?: boolean; yes?: boolean }) => {
     const globalOpts = program.opts();
     await cleanupCommand({ ...opts, root: globalOpts.root });
+  });
+
+program
+  .command('retro <runId>')
+  .description("generate retrospective markdown from a run's events.jsonl")
+  .option('--root <dir>', 'explicit .harness/ parent directory')
+  .option('--stdout', 'print markdown to stdout instead of writing to file')
+  .action(async (runId: string, opts: { root?: string; stdout?: boolean }) => {
+    const globalOpts = program.opts();
+    await retroCommand(runId, { stdout: opts.stdout, root: opts.root ?? globalOpts.root });
   });
 
 program.parseAsync(process.argv).catch((err) => {
