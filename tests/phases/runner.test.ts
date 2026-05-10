@@ -1445,6 +1445,43 @@ describe('handleGatePhase — gate_error emission', () => {
 });
 
 describe('escalation — handleGateEscalation emission', () => {
+  // Issue #98: harness wedged at "Starting phase…" after the third gate REJECT
+  // in manual mode. Root cause: handleGateEscalation called promptChoice which
+  // wrote the C/S/Q prompt to stderr, but Ink (mounted on the same TTY) overwrote
+  // the prompt on its next loop tick. Users couldn't see the prompt → couldn't
+  // respond → wedge. Fix: render the prompt through Ink via a dedicated
+  // 'gate-escalation-pending' callsite BEFORE awaiting promptChoice.
+  it('calls renderControlPanel with gate-escalation-pending callsite before awaiting C/S/Q (issue #98 regression)', async () => {
+    const runDir = makeTmpDir();
+    const state = makeState({
+      currentPhase: 2,
+      gateRetries: { '2': FULL_GATE_RETRY_LIMIT, '4': 0, '7': 0 },
+    });
+    const { logger, cleanup } = makeTestLogger(state.runId);
+
+    vi.mocked(renderControlPanel).mockClear();
+    let promptCalledAt = -1;
+    let callsitesAtPromptTime: Array<unknown> = [];
+    vi.mocked(promptChoice).mockImplementationOnce(async () => {
+      const calls = vi.mocked(renderControlPanel).mock.calls;
+      promptCalledAt = calls.length;
+      callsitesAtPromptTime = calls.map((args) => args[2]);
+      return 'Q';
+    });
+
+    try {
+      await handleGateEscalation(2, 'Feedback', undefined, FULL_GATE_RETRY_LIMIT - 1, state, runDir, CWD, createNoOpInputManager(), logger);
+
+      // promptChoice must have observed at least one renderControlPanel call,
+      // and that call must carry the pending-callsite. Without this the user
+      // sees "Starting phase…" forever (issue #98 wedge).
+      expect(promptCalledAt).toBeGreaterThan(0);
+      expect(callsitesAtPromptTime).toContain('gate-escalation-pending');
+    } finally {
+      cleanup();
+    }
+  });
+
   it('emits exactly one escalation event with reason=gate-retry-limit after promptChoice', async () => {
     const runDir = makeTmpDir();
     const state = makeState({

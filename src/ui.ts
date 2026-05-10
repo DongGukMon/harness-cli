@@ -73,11 +73,17 @@ export async function promptChoice(
   choices: { key: string; label: string }[],
   inputManager: InputManager,
 ): Promise<string> {
-  const choiceText = choices.map((c) => `[${c.key.toUpperCase()}] ${c.label}`).join('  ');
-  process.stderr.write(`\n${message}\n${choiceText}\n`);
+  // Issue #98: when Ink is mounted, our stderr write here is hidden by the
+  // next Ink redraw. Callers that need a visible prompt MUST first call
+  // `renderControlPanel(state, logger, '<X>-pending')` so ActionMenu renders
+  // the matching action keys; this stderr write is a non-Ink fallback only.
+  if (!mounted) {
+    const choiceText = choices.map((c) => `[${c.key.toUpperCase()}] ${c.label}`).join('  ');
+    process.stderr.write(`\n${message}\n${choiceText}\n`);
+  }
   const validKeys = new Set(choices.map((c) => c.key.toLowerCase()));
   const key = await inputManager.waitForKey(validKeys);
-  process.stderr.write('\n');
+  if (!mounted) process.stderr.write('\n');
   return key;
 }
 
