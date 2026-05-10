@@ -313,6 +313,20 @@ export type LogEvent =
   | (LogEventBase & { event: 'force_pass'; phase: number; by: 'auto' | 'user' })
   | (LogEventBase & { event: 'verify_result'; passed: boolean; retryIndex: number; durationMs: number; failedChecks?: string[] })
   | (LogEventBase & { event: 'phase_end'; phase: number; attemptId?: string | null; status: 'completed' | 'failed'; durationMs: number; details?: { reason: string; error?: string }; claudeTokens?: ClaudeTokens | null; codexTokens?: ClaudeTokens | null; uncommittedRepos?: Array<{ path: string; count: number }> })
+  | (LogEventBase & {
+      event: 'phase_drift';
+      phase: 5;
+      attemptId: string;
+      durationMs: number;
+      threshold: number;
+      score: number | null;
+      axes: { goal: number; constraint: number; ontology: number } | null;
+      action: 'pass' | 'reopen' | 'error';
+      driftSource: 'codex-only' | 'codex-truncated' | 'error';
+      codexTokensTotal?: number;
+      rationale?: string;
+      error?: string;
+    })
   | (LogEventBase & { event: 'state_anomaly'; kind: string; details: Record<string, unknown> })
   | (LogEventBase & {
       event: 'ui_render';
