@@ -90,10 +90,27 @@ light flow 특이사항:
 - `HARNESS_GATE_STAGNATION_RUN=2` (연속 정체 쌍 2개 필요)
 - `HARNESS_GATE_STAGNATION_WINDOW=2` (예약됨; v1에서는 no-op)
 - `HARNESS_GATE_AMBIGUITY_THRESHOLD=0.2` — P2 spec gate 모호성 거부권 임계값 [0, 1]. `=off`로 비활성화(점수는 여전히 로깅). 유효하지 않은 값 → 거부권 비활성화 + stderr 경고 1회.
+- `HARNESS_PHASE_DRIFT_THRESHOLD=0.3` (자율 모드 기본값; 수동 모드에서는 기본 비활성) — P5 → P6 드리프트 검출 임계값 [0, 1]. 자세한 내용은 아래 **드리프트 검출 (P5→P6)** 참고.
 
 처음 세 변수의 잘못된 값은 기능을 fail-open으로 비활성화합니다 (프로세스당 키당 최대 1회 stderr 경고). 감지기 버퍼는 메모리 내에만 존재하며, 일시정지된 실행을 재개하면 빈 상태로 시작됩니다.
 
 **새 `events.jsonl` 이벤트:** `gate_stagnation`은 트리거된 감지당 한 번 `escalation` 이벤트 바로 전에 발생하며, `phase`, `retryIndex`, `similarities[]`, `threshold`, `run`, `action: 'escalate'` 필드를 포함합니다.
+
+### 드리프트 검출 (P5→P6)
+
+P5(구현) 페이즈가 성공한 직후, harness는 P6(검증) 진입 전에 구현이 spec/plan에서 얼마나 어긋났는지 선택적으로 측정할 수 있다. 드리프트 검출은 P5 시도당 정확히 **Codex 1회 호출**을 발생시키며, spec / plan / `git diff planCommit..implCommit` 을 입력으로 보내고 Codex가 `## Drift Scores` 코드 펜스 안에 세 축 점수(`goal`, `constraint`, `ontology`)를 JSON으로 emit한다. harness는 `score = 0.5·goal + 0.3·constraint + 0.2·ontology`를 계산해 `HARNESS_PHASE_DRIFT_THRESHOLD`와 비교한다.
+
+- `score ≤ threshold` → P5 completed, P6 진입.
+- `score > threshold` → harness가 `<runDir>/drift-feedback.md`를 작성하고 `phaseReopenSource['5']=5`, `pendingAction.type='reopen_phase'`로 P5를 reopen한 뒤 `phase_end status='failed' details.reason='drift-reopen'`을 emit.
+- Codex 실패(timeout / non-zero exit / parse error / spec+plan 캡 초과) → fail-open: P5는 정상 success path로, P6 진입. stderr 경고 1회만.
+
+활성화 기본값은 모드에 의해 결정된다 — 자율 모드에서는 임계값 `0.3`, 수동 모드에서는 env가 명시적인 숫자가 아닌 한 비활성화. `=off`는 명시적 비활성화. 드리프트 검출은 `flow='full'` / `flow='light'` 양쪽 모두에서 페이즈 5 한정으로 동작한다. 축별 가중치와 30 000자 프롬프트 캡은 코드에 baked-in.
+
+**새 `events.jsonl` 이벤트:** 드리프트 검출이 활성화된 P5 시도(즉 임계값이 non-null)에서 한 번씩 `phase_drift`가 emit된다. 필드: `phase: 5`, `attemptId`, `durationMs`, `threshold`, `score` (number 또는 null), `axes` (object 또는 null), `action: 'pass' | 'reopen' | 'error'`, `driftSource: 'codex-only' | 'codex-truncated' | 'error'`, optional `codexTokensTotal`, optional `rationale` (≤ 200자), optional `error`. 이벤트 부재 = 드리프트 검출이 그 run에서 비활성. reader는 부재를 기본값으로 처리해야 한다.
+
+**확장된 스키마:** `phase_drift action='reopen'` 직후의 P5 phase\_end는 `details.reason: 'drift-reopen'`을 가질 수 있다.
+
+원래 설계에 있던 결정론적 floor (spec의 `## Success Criteria` / `## Invariants`에서 grep 규칙 추출)는 follow-up PR로 deferred됨; v1은 Codex-only.
 
 **확장된 스키마:** `escalation.reason`은 기존 네 가지 값에 더해 `'gate-stagnation'`을 포함합니다.
 

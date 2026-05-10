@@ -19,6 +19,7 @@ import { runInteractivePhase } from './interactive.js';
 import { runGatePhase } from './gate.js';
 import { runVerifyPhase } from './verify.js';
 import { StagnationDetector, loadStagnationConfig } from './stagnation.js';
+import { scoreP5Drift, resolveDriftAction, writeDriftFeedback } from './drift.js';
 import { readClaudeSessionUsage, claudeSessionJsonlExists } from '../runners/claude-usage.js';
 import {
   promptChoice,
@@ -476,6 +477,68 @@ export async function handleInteractivePhase(
         if (phase === 5) syncLegacyMirror(state); // implHead already set by validatePhaseArtifacts
       } catch {
         // getHead unavailable — leave anchor as-is
+      }
+
+      // Drift detection (P5 → P6 — issue #2 / phase_drift event).
+      // Disabled by default in manual mode; opt-in via HARNESS_PHASE_DRIFT_THRESHOLD
+      // (default 0.3 in autonomous). Strict fail-open: any failure leaves the
+      // success path unchanged. Spec: docs/specs/2026-05-11-...drift...-design.md
+      if (phase === 5) {
+        try {
+          const driftResult = await scoreP5Drift({ state, runDir, cwd });
+          if (driftResult.activated) {
+            const { outcome } = driftResult;
+            const action = resolveDriftAction(outcome);
+            let feedbackPath: string | null = null;
+            if (action === 'reopen') {
+              try { feedbackPath = writeDriftFeedback(runDir, outcome); } catch { feedbackPath = null; }
+            }
+            // resolveDriftAction (v1) only ever returns one of the LogEvent-compatible values.
+            const eventAction = action as 'pass' | 'reopen' | 'error';
+            logger.logEvent({
+              event: 'phase_drift',
+              phase: 5,
+              attemptId,
+              durationMs: outcome.durationMs,
+              threshold: outcome.threshold,
+              score: outcome.score,
+              axes: outcome.axes,
+              action: eventAction,
+              driftSource: outcome.driftSource,
+              ...(outcome.codexTokensTotal !== undefined ? { codexTokensTotal: outcome.codexTokensTotal } : {}),
+              ...(outcome.rationale ? { rationale: outcome.rationale } : {}),
+              ...(outcome.error ? { error: outcome.error } : {}),
+            });
+            if (action === 'reopen' && feedbackPath !== null) {
+              state.phases['5'] = 'pending';
+              state.phaseReopenFlags['5'] = true;
+              state.phaseReopenSource['5'] = 5;
+              state.pendingAction = {
+                type: 'reopen_phase',
+                targetPhase: 5,
+                sourcePhase: 5,
+                feedbackPaths: [feedbackPath],
+              };
+              clearWatchdog();
+              writeState(runDir, state);
+              const driftTokens = collectClaudeTokens();
+              logger.logEvent({
+                event: 'phase_end',
+                phase: 5,
+                attemptId,
+                status: 'failed',
+                durationMs: Date.now() - phaseStartTs,
+                details: { reason: 'drift-reopen' },
+                ...(driftTokens !== undefined ? { claudeTokens: driftTokens } : {}),
+              });
+              return;
+            }
+            // action === 'pass' or 'error' — fall through to success path.
+          }
+        } catch (err) {
+          // scoreP5Drift never throws by contract, but defensively swallow.
+          process.stderr.write(`[drift] unexpected throw, fail-open: ${(err as Error).message}\n`);
+        }
       }
 
       // Clear pendingAction now that phase succeeded
