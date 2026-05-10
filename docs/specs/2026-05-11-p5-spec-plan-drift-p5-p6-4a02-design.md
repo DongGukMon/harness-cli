@@ -12,7 +12,7 @@
 P5 implementations regularly satisfy interactive completion criteria yet violate the spec/plan in ways that only surface at the P7 eval gate. The two most recent dogfood runs (#1, #4) both burned a P7 R1 REJECT → P5 R2 cycle for the same root cause: drift was caught too late. We need a quantitative drift signal at P5 phase\_end that can short-circuit the P6 entry when implementation has measurably diverged from the approved spec/plan.
 
 ### Decisions made up-front (rationale moved to decisions.md)
-- **D1. Hybrid scorer**: Codex 1-call + deterministic floor; final axis = `max(codex_axis, floor_axis)`. Codex captures semantic drift; floor (grep rules from `## Success Criteria` / `## Invariants`) gives a noise-resistant lower bound.
+- **D1. Codex 1-call scorer (v1)**: a single Codex non-interactive call returns the three axis scores directly. The deterministic floor (grep-rule extraction + per-axis floor mapping) was reviewed and accepted at design time but is **deferred to a follow-up PR** (see `## Deferred`) to keep this iteration shippable; without the floor, score = Codex axes directly. D6 (strict fail-open on Codex failure) already specifies that the floor never gates without Codex, so removing it preserves the P5 success-path semantics.
 - **D2. Mode-driven branch on threshold-exceeded**: `autoMode=true` → hard reopen P5; `autoMode=false` → user prompt (C/S/Q).
 - **D3. Mode-driven activation default via single env**: `HARNESS_PHASE_DRIFT_THRESHOLD`. unset+autoMode → 0.3, unset+manual → disabled, numeric → enabled at that value, `off` → disabled, invalid → disabled + one stderr warn.
 - **D4. New `phase_drift` event**, not a `phase_end` extension. Keeps reader/aggregator changes additive.
@@ -36,7 +36,7 @@ Medium — single new module (`src/phases/drift.ts`) plus targeted edits in `run
   - Manual mode → prompt the user with C/S/Q; route accordingly.
 - **G4.** When drift detection is disabled (env=off, manual default, or env invalid), behaviour is byte-identical to today's P5 success path (no `phase_drift` event, no extra Codex call, no `phase_end.details` change).
 - **G5.** Make threshold and activation user-tunable through a single env var; document defaults / disable / fail-open semantics in README + HOW-IT-WORKS (en + ko).
-- **G6.** Telemetry survives crash and resume — drift detection is idempotent across resume of an in-flight P5.
+- **G6.** Drift detection re-runs cleanly on resume — when a crashed P5 is resumed, the next `phase_end` re-triggers `scoreP5Drift` from scratch (at most one Codex call per fresh P5 attempt). Byte-precision idempotency of crash mid-`phase_drift`-flush is explicitly out of scope and tracked in `## Deferred`.
 
 ## Non-Goals
 
@@ -52,10 +52,8 @@ Medium — single new module (`src/phases/drift.ts`) plus targeted edits in `run
 ### Module layout
 - **`src/phases/drift.ts`** (new). Exports:
   - `loadDriftThreshold(autoMode: boolean): number | null`
-  - `extractDeterministicFloor(specText: string, cwd: string): { goal: number; constraint: number; ontology: number; ruleCount: number }`
   - `parseDriftScores(rawOutput: string): { goal: number; constraint: number; ontology: number; rationale?: string } | null`
   - `computeWeightedDrift(axes: { goal: number; constraint: number; ontology: number }): number`
-  - `mergeAxes(floor, codex): { goal; constraint; ontology }`
   - `scoreP5Drift(state, runDir, cwd, logger): Promise<DriftOutcome>` — orchestrator
   - `handleDriftEscalation(state, runDir, cwd, inputManager, logger, outcome): Promise<DriftAction>` — manual-mode prompt
   - `__resetDriftWarning()` — test hook (mirrors `__resetAmbiguityWarning`).
@@ -130,6 +128,7 @@ Carry-over via `state.carryoverFeedback` is **not** used — drift reopen routes
 - `planText`: read from `state.artifacts.plan` (full file).
 - `diffText`: `git diff <state.planCommit>..<state.implCommit> --` executed in `state.trackedRepos[0].path` (fallback to `cwd` if `trackedRepos` is empty).
 - **Truncation cap**: assemble the prompt; if `len(spec)+len(plan)+len(diff) > 30 000` chars, truncate the diff tail (preserving header + first ≈ 20 000 chars of diff). On cap hit, set `driftSource: 'codex-truncated'`. Spec / plan are never truncated.
+- **Oversized spec/plan boundary**: if `len(spec)+len(plan) > 30 000` alone (i.e. the cap cannot be satisfied even with `diff = ""`), `scoreP5Drift` does NOT call Codex; it short-circuits to `action='error'`, `driftSource='error'`, `score=null`, `axes=null`, fail-open. This keeps the cap a hard contract instead of an undefined-behavior region. Single stderr warn line: `[drift] spec+plan exceeds 30 000-char cap (...) — drift detection skipped for this attempt`.
 
 ### Codex 1-call
 - Function: `runCodexDriftScorer(...)` — one shot, non-interactive Codex CLI invocation, sandbox=read-only.
@@ -146,33 +145,16 @@ Carry-over via `state.carryoverFeedback` is **not** used — drift reopen routes
   - `rationale` is a single-line string (newlines stripped, length-clamped to 200 chars at scorer side).
   - Token budget recorded as `codexTokensTotal` on the event when reported by the runner.
 
-### Deterministic floor
-- Walk the spec text, isolate the bodies of `## Success Criteria` and `## Invariants` (case-insensitive matching at the heading level).
-- Within those bodies, harvest **machine-checkable rules** of the following shapes only:
-  1. A fenced code block whose first line begins with `grep -E ` / `grep -P ` / `rg -e ` (entire fenced block treated as a single shell rule).
-  2. An inline backtick-quoted regex on a bullet that starts with `must`, `MUST`, `반드시`, `항상`, `forbidden`, `must not`, `금지` (case-insensitive English / Korean keywords). The regex is the literal between backticks.
-- Execute each rule against the working tree at `cwd` (`git ls-files | xargs grep -E ...` for grep rules; `find` + per-file `RegExp` for regex rules) — **read-only**, no writes. Time budget: ≤ 5 s total; if exceeded, abort the floor and treat it as no-op (`ruleCount = 0`).
-- Mapping rule violations → axis floors:
-  | Violation kind | Axis | Floor contribution |
-  |---|---|---|
-  | "must contain X" rule with no match | `goal` | 0.5 (1 violation) → 1.0 (≥ 2) |
-  | "forbidden / must not / 금지" rule with ≥ 1 match | `constraint` | 0.7 |
-  | Other violations (general regex misses) | `ontology` | 0.3 |
-- If `ruleCount === 0`, the floor is `{ goal: 0, constraint: 0, ontology: 0 }` (no-op). No false positives on specs lacking machine rules.
-
-### Merge & weighted score
+### Weighted score
 ```
-axes        = { goal: max(floor.goal, codex.goal ?? 0),
-                constraint: max(floor.constraint, codex.constraint ?? 0),
-                ontology: max(floor.ontology, codex.ontology ?? 0) }
+axes        = { goal: codex.goal, constraint: codex.constraint, ontology: codex.ontology }
 score       = clamp01(0.5*axes.goal + 0.3*axes.constraint + 0.2*axes.ontology)
 ```
 
 ### `driftSource` taxonomy
-- `'codex+floor'` — Codex parsed AND floor produced findings (`ruleCount > 0`); axes merged via `max`
-- `'codex-only'` — Codex parsed AND floor was no-op (`ruleCount === 0`)
-- `'codex-truncated'` — prompt cap hit; Codex output still parsed; floor merged or no-op as above
-- `'error'` — Codex did not produce a parsable response (throw / non-zero exit / timeout / parse failure / out-of-range axes). Emit `phase_drift` with `score=null`, `axes=null`, `action='error'`, fail-open. The deterministic floor's findings are NOT used to drive `pass`/`reopen` in this branch — see D6.
+- `'codex-only'` — Codex parsed within budget (no truncation, no error). The default success label.
+- `'codex-truncated'` — prompt cap hit (D5 truncation rule applied); Codex output still parsed.
+- `'error'` — Codex did not produce a parsable response (throw / non-zero exit / timeout / parse failure / out-of-range axes / spec+plan over cap per D5 oversized-boundary). Emit `phase_drift` with `score=null`, `axes=null`, `action='error'`, fail-open.
 
 ## Threshold & action
 
@@ -215,10 +197,9 @@ Contains: drift score, threshold, axes table, source, Codex rationale (escaped),
   action: 'pass' | 'reopen'
         | 'escalate-continue' | 'escalate-skip' | 'escalate-quit'
         | 'error';
-  driftSource: 'codex+floor' | 'codex-only' | 'codex-truncated' | 'error';
+  driftSource: 'codex-only' | 'codex-truncated' | 'error';
   codexTokensTotal?: number;  // only when Codex produced a response (success or parse-fail)
   rationale?: string;         // ≤ 200 chars, single line
-  floorRules?: number;        // rule count extracted by deterministic floor
   error?: string;             // only when action='error'; one-line cause
 }
 ```
@@ -300,7 +281,7 @@ A `grep -l` chain over those four files is part of the eval checklist; absence i
 - **S2.** When `state.autoMode === false` and env unset, a P5 success run never emits `phase_drift` and never invokes Codex; `phase_end` payload matches today's snapshot byte-for-byte (regression fixture).
 - **S3.** With env=`off`, behaviour matches S2.
 - **S4.** With env=`abc` (invalid), behaviour matches S2 plus exactly one stderr line containing the literal `[drift] invalid HARNESS_PHASE_DRIFT_THRESHOLD`.
-- **S5.** Codex failure (mock throws / non-zero exit / non-JSON / out-of-range axes) produces `phase_drift` with `action='error'`, `score=null`, `axes=null`, `driftSource='error'`; `phase_end` is `completed`; `currentPhase` advances to 6; exactly one stderr warn line is emitted. This holds **regardless** of deterministic-floor `ruleCount` — including the case where one or more "must contain X" rules would have matched (verified by an explicit test fixture per D6 strict fail-open).
+- **S5.** Codex failure (mock throws / non-zero exit / non-JSON / out-of-range axes / spec+plan over cap) produces `phase_drift` with `action='error'`, `score=null`, `axes=null`, `driftSource='error'`; `phase_end` is `completed`; `currentPhase` advances to 6; exactly one stderr warn line is emitted (per D6 strict fail-open).
 - **S6.** With `state.autoMode === false` and threshold-exceeded, the C/S/Q prompt routes to: 'C' = reopen branch identical to S1 except `action='escalate-continue'`; 'S' = success path with `action='escalate-skip'`; 'Q' = paused state with `pauseReason='drift-escalation'`.
 - **S7.** Codex is invoked at most once per P5 attempt (verified by mock call-count assertion in integration tests).
 - **S8.** No new npm dependency: `git diff` on `package.json` and `pnpm-lock.yaml` from baseline shows no added entries (only churn allowed is version bump if scope demands).
@@ -313,7 +294,7 @@ A `grep -l` chain over those four files is part of the eval checklist; absence i
 - **I2.** `phase_drift` always precedes the paired `phase_end` in `events.jsonl`; both share the same `attemptId`.
 - **I3.** Per single P5 attempt (one phase\_start → one phase\_end), at most one `phase_drift` event is emitted and at most one Codex drift call is made.
 - **I4.** Drift detection never converts a `result.status === 'failed'` P5 into `completed`, and never converts a `result.status === 'completed'` P5 into `completed` _and_ advances `currentPhase` past 5 when `action ∈ {'reopen','escalate-continue','escalate-quit'}`.
-- **I5.** A scorer/Codex failure (any throw, any timeout, any parse error, any out-of-range axis) MUST NOT raise out of `scoreP5Drift`; it returns `action='error'` with `score=null`, `axes=null`, `driftSource='error'`, and the P5 success path proceeds. Deterministic-floor findings never gate when Codex fails — they are silently discarded in the error branch (per D6).
+- **I5.** A scorer/Codex failure (any throw, any timeout, any parse error, any out-of-range axis) MUST NOT raise out of `scoreP5Drift`; it returns `action='error'` with `score=null`, `axes=null`, `driftSource='error'`, and the P5 success path proceeds (per D6).
 - **I6.** No write to `state.json` from inside `scoreP5Drift` other than the existing reopen-branch state mutation already performed in the runner; the scorer itself is read-only against state.
 - **I7.** `state.json` schema is unchanged. No new top-level field. The new `PauseReason='drift-escalation'` / `PendingActionType='show_drift_escalation'` are union-additive and never written by code paths outside drift escalation.
 - **I8.** `phase_drift.threshold` always equals the number returned by `loadDriftThreshold` for that run; `phase_drift.score`, when non-null, is in `[0, 1]`; each axis, when non-null, is in `[0, 1]`.
@@ -326,7 +307,6 @@ A `grep -l` chain over those four files is part of the eval checklist; absence i
 |---|---|---|
 | Codex 1-call returns hallucinated high drift on a correct impl | medium | Hybrid (`max` with floor), low default threshold (0.3), C/S/Q escape hatch in manual mode, autoMode reopen capped by existing P5 retry loop. Telemetry retains rationale for post-hoc audit. |
 | Codex parse drift if Codex CLI changes output schema | low | Single regex parser (`## Drift Scores` → fenced JSON); parse failure is fail-open (no run-blocking); per-version Codex change requires updating the parser only. |
-| Deterministic floor false-positives on freeform specs | medium | Floor only fires when explicit `must / forbidden / 반드시 / 금지` keywords + machine-checkable patterns are present; no rules → floor is no-op. |
 | Token cost overrun | low | 30 000-char prompt cap (≈ 8K tokens); ≤ 1 call per attempt; budget documented in spec & README. |
 | Reopen loop (drift score never falls below threshold) | medium | Existing P5 stagnation handling and overall harness pause/exit semantics already cover infinite reopen patterns; no new reopen budget added in this iteration (to be revisited in a follow-up if dogfood shows the symptom). |
 | Resume mid-drift (process killed between Codex call and event flush) | low | Drift detection is idempotent: on resume, `runInteractivePhase` will re-run P5 → re-trigger drift on the next phase\_end. Worst case is a duplicate Codex call across two attempts, never within one. |
@@ -343,3 +323,4 @@ A `grep -l` chain over those four files is part of the eval checklist; absence i
 ## Deferred
 
 - **P2 (gate-2 R1) — crash-window resume contract.** Crash between `phase_drift` flush and the paired `phase_end`/state mutation is not specified at byte-precision in this iteration. Planned semantics: at-least-once telemetry with reader-side dedupe by `(attemptId, event='phase_drift')`; no Codex re-call on resume of the same attempt (P5 will re-run as a new attempt, drift will rescore once for that new attempt). Properly specifying and testing the resume code path requires touching `state.ts` resume helpers and is deferred to a follow-up to keep this spec scoped to a single implementation plan.
+- **Deterministic floor (advisor-trimmed).** The original D1 hybrid scorer added a `## Success Criteria` / `## Invariants` grep-rule extraction layer that floors per-axis scores when machine-checkable patterns are violated. v1 ships Codex-only because D6 already specifies the floor never gates without Codex (so removing it preserves P5 success-path semantics). The floor remains valuable as a noise-resistant guardrail when Codex underestimates drift; it lands as a follow-up PR. v1's `driftSource` taxonomy has space for the future `'codex+floor'` value without an enum-breaking change.
