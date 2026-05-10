@@ -71,19 +71,34 @@ Medium — single new module (`src/phases/drift.ts`) plus targeted edits in `run
 - **Docs**: README.md, README.ko.md, docs/HOW-IT-WORKS.md, docs/HOW-IT-WORKS.ko.md (env table + events.jsonl table + new "Drift detection (P5→P6)" subsection).
 
 ### Insertion-point sequence inside `handleInteractivePhase` for P5
+
+The drift code resolves the **final** `action` value before any `phase_drift` event is emitted, so the emitted event always carries one of the final-state values from the action union (no provisional / intermediate `'escalate'` value ever reaches events.jsonl).
+
 ```
 runInteractivePhase → 'completed'
   ├─ normalizeInteractiveArtifacts(5)        // existing
   ├─ commit-anchor update (state.implCommit) // existing
-  ├─ NEW: scoreP5Drift(state, runDir, cwd, logger)
-  ├─ NEW: emit 'phase_drift' (when activated)
-  └─ branch on outcome.action:
-       'pass' | 'disabled' | 'error'        → existing success path (phase_end completed, currentPhase=6)
-       'reopen' (auto)                       → reopen branch (state mutate, phase_end failed reason='drift-reopen')
-       'escalate'                            → handleDriftEscalation → 'C'/'S'/'Q'
-                                                'C' → reopen branch (action='escalate-continue')
-                                                'S' → success path  (action='escalate-skip')
-                                                'Q' → pause          (action='escalate-quit', pauseReason='drift-escalation')
+  ├─ NEW: outcome ← scoreP5Drift(state, runDir, cwd, logger)
+  │        // returns { activated, score, axes, threshold, driftSource,
+  │        //          codexTokensTotal, rationale, floorRules, error }
+  ├─ NEW: action ← resolveDriftAction(outcome, state.autoMode):
+  │        not activated (env null)               → no event will be emitted
+  │        outcome.error / driftSource='error'    → 'error'
+  │        score ≤ threshold                      → 'pass'
+  │        score > threshold ∧ autoMode=true      → 'reopen'
+  │        score > threshold ∧ autoMode=false     → handleDriftEscalation prompts C/S/Q →
+  │                                                  'C' → 'escalate-continue'
+  │                                                  'S' → 'escalate-skip'
+  │                                                  'Q' → 'escalate-quit'
+  ├─ NEW: if activated, emit single 'phase_drift' event (action is FINAL)
+  └─ apply branch on action:
+       'pass'                                  → existing success path (phase_end completed, currentPhase=6)
+       'error'                                 → existing success path (fail-open)
+       'reopen'                                → reopen branch (state mutate, phase_end failed reason='drift-reopen')
+       'escalate-continue'                     → reopen branch (same as 'reopen')
+       'escalate-skip'                         → existing success path
+       'escalate-quit'                         → pause branch (state mutate, phase_end failed reason='drift-pause',
+                                                                pauseReason='drift-escalation')
 ```
 
 The reopen branch performs:
@@ -215,10 +230,14 @@ Existing values: `'redirected'`. Add: `'drift-reopen'`, `'drift-pause'`. Both ap
 ### Emission ordering (per single P5 attempt)
 ```
 phase_start(5) … (P5 work) … artifact-normalize …
-  → phase_drift          (only when threshold non-null)
+  → scoreP5Drift (Codex 1-call + deterministic floor)
+  → if score > threshold ∧ state.autoMode=false:
+        handleDriftEscalation prompts user (C/S/Q)
+        ↓ produces final action ∈ {escalate-continue, escalate-skip, escalate-quit}
+  → phase_drift          (only when threshold non-null; action is FINAL)
   → phase_end(5, …)
 ```
-`phase_drift` always precedes its paired `phase_end`, never replaces or duplicates it. When drift is disabled, `phase_drift` is absent and `phase_end` is byte-compatible with today's emission.
+`phase_drift` always precedes its paired `phase_end`, never replaces or duplicates it, and is emitted **after** any C/S/Q user input has been collected so the `action` field is one of the final-state values from the action union — there is no provisional / intermediate `'escalate'` value in events.jsonl. When drift is disabled, `phase_drift` is absent and `phase_end` is byte-compatible with today's emission.
 
 ## Backward compatibility
 
@@ -320,3 +339,7 @@ A `grep -l` chain over those four files is part of the eval checklist; absence i
 - A second Codex pass / disagreement reconciliation.
 - Replacement of P7 eval gate.
 - A new CLI flag for drift detection (env-only is the contract).
+
+## Deferred
+
+- **P2 (gate-2 R1) — crash-window resume contract.** Crash between `phase_drift` flush and the paired `phase_end`/state mutation is not specified at byte-precision in this iteration. Planned semantics: at-least-once telemetry with reader-side dedupe by `(attemptId, event='phase_drift')`; no Codex re-call on resume of the same attempt (P5 will re-run as a new attempt, drift will rescore once for that new attempt). Properly specifying and testing the resume code path requires touching `state.ts` resume helpers and is deferred to a follow-up to keep this spec scoped to a single implementation plan.
