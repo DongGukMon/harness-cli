@@ -57,6 +57,7 @@ function makeState(): HarnessState {
     loggingEnabled: false,
     phaseReopenSource: { '1': null, '3': null, '5': null },
     codexNoIsolate: false,
+    noDrift: false,
     dirtyBaseline: [],
   };
 }

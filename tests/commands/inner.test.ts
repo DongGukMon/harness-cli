@@ -298,6 +298,7 @@ describe('inner.ts: tmux top-bottom workspace pane setup', () => {
       trackedRepos: [{ path: tmpDir, baseCommit: 'abc123', implRetryBase: 'abc123', implHead: null }],
       codexPath: null,
       codexNoIsolate: false,
+      noDrift: false,
       externalCommitsDetected: false,
       artifacts: { spec: 's', plan: 'p', decisionLog: 'd', checklist: 'c', evalReport: 'e' },
       phases: { '1': 'completed', '2': 'completed', '3': 'completed', '4': 'completed', '5': 'completed', '6': 'completed', '7': 'completed' },
@@ -411,6 +412,7 @@ describe('bootstrapSessionLogger', () => {
       tmuxControlWindow: '', tmuxWorkspacePane: '', tmuxControlPane: '',
       loggingEnabled: true,
       codexNoIsolate: false,
+      noDrift: false,
       dirtyBaseline: [],
     };
     return { ...base, ...overrides };
@@ -496,6 +498,7 @@ describe('buildConfigCancelHandler — lazy bootstrap', () => {
       tmuxControlWindow: '', tmuxWorkspacePane: '', tmuxControlPane: '',
       loggingEnabled: true,
       codexNoIsolate: false,
+      noDrift: false,
       dirtyBaseline: [],
     };
     return { ...base, ...overrides };
@@ -699,6 +702,7 @@ describe('bootstrapSessionLogger — codexHome integration (Issue #13)', () => {
       tmuxControlWindow: '', tmuxWorkspacePane: '', tmuxControlPane: '',
       loggingEnabled: true,
       codexNoIsolate: false,
+      noDrift: false,
       dirtyBaseline: [],
     };
     return { ...base, ...overrides };
