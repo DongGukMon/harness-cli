@@ -29,9 +29,10 @@ program
   .option('--enable-logging', 'enable session logging to ~/.harness/sessions')
   .option('--light', 'use the 4-phase light flow (P1 → P5 → P6 → P7)')
   .option('--codex-no-isolate', 'bypass CODEX_HOME isolation for codex subprocesses (not recommended)')
+  .option('--no-drift', 'skip P5 → P6 drift detection for this run (equivalent to HARNESS_PHASE_DRIFT_THRESHOLD=off, but persisted per-run)')
   .option('--track <path>', 'explicit tracked repo (repeatable; first = docs home)', (val: string, prev: string[]) => [...prev, val], [] as string[])
   .option('--exclude <path>', 'exclude path from auto-detect (repeatable)', (val: string, prev: string[]) => [...prev, val], [] as string[])
-  .action(async (task: string | undefined, opts: { requireClean?: boolean; auto?: boolean; enableLogging?: boolean; light?: boolean; codexNoIsolate?: boolean; track?: string[]; exclude?: string[] }) => {
+  .action(async (task: string | undefined, opts: { requireClean?: boolean; auto?: boolean; enableLogging?: boolean; light?: boolean; codexNoIsolate?: boolean; noDrift?: boolean; track?: string[]; exclude?: string[] }) => {
     const globalOpts = program.opts();
     await startCommand(task, { ...opts, root: globalOpts.root, track: opts.track, exclude: opts.exclude });
   });
@@ -44,9 +45,10 @@ program
   .option('--enable-logging', 'enable session logging to ~/.harness/sessions')
   .option('--light', 'use the 4-phase light flow (P1 → P5 → P6 → P7)')
   .option('--codex-no-isolate', 'bypass CODEX_HOME isolation for codex subprocesses (not recommended)')
+  .option('--no-drift', 'skip P5 → P6 drift detection for this run (equivalent to HARNESS_PHASE_DRIFT_THRESHOLD=off, but persisted per-run)')
   .option('--track <path>', 'explicit tracked repo (repeatable; first = docs home)', (val: string, prev: string[]) => [...prev, val], [] as string[])
   .option('--exclude <path>', 'exclude path from auto-detect (repeatable)', (val: string, prev: string[]) => [...prev, val], [] as string[])
-  .action(async (task: string | undefined, opts: { requireClean?: boolean; auto?: boolean; enableLogging?: boolean; light?: boolean; codexNoIsolate?: boolean; track?: string[]; exclude?: string[] }) => {
+  .action(async (task: string | undefined, opts: { requireClean?: boolean; auto?: boolean; enableLogging?: boolean; light?: boolean; codexNoIsolate?: boolean; noDrift?: boolean; track?: string[]; exclude?: string[] }) => {
     const globalOpts = program.opts();
     await startCommand(task, { ...opts, root: globalOpts.root, track: opts.track, exclude: opts.exclude });
   });
@@ -55,7 +57,8 @@ program
   .command('resume [runId]')
   .description('resume an existing run')
   .option('--light', '(rejected — flow is frozen at run creation)')
-  .action(async (runId: string | undefined, opts: { light?: boolean }) => {
+  .option('--no-drift', '(rejected — drift policy is frozen at run creation)')
+  .action(async (runId: string | undefined, opts: { light?: boolean; noDrift?: boolean }) => {
     const globalOpts = program.opts();
     await resumeCommand(runId, { ...opts, root: globalOpts.root });
   });

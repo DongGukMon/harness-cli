@@ -21,6 +21,7 @@ export interface StartOptions {
   enableLogging?: boolean;
   light?: boolean;
   codexNoIsolate?: boolean;
+  noDrift?: boolean;
   track?: string[];    // explicit tracked repos (overrides auto-detect)
   exclude?: string[];  // paths to exclude from auto-detect
 }
@@ -242,6 +243,7 @@ export async function startCommand(task: string | undefined, options: StartOptio
       options.enableLogging ?? false,
       options.light ? 'light' : 'full',
       options.codexNoIsolate ?? false,
+      options.noDrift ?? false,
     );
 
     // Inject detected tracked repos (overrides the placeholder set by createInitialState)

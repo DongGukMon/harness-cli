@@ -77,7 +77,8 @@ function warnOnce(key: string, message: string): void {
  * Resolve HARNESS_PHASE_DRIFT_THRESHOLD per spec §Threshold & action.
  * Returns null when drift detection is disabled for this run.
  */
-export function loadDriftThreshold(autoMode: boolean): number | null {
+export function loadDriftThreshold(autoMode: boolean, noDrift: boolean = false): number | null {
+  if (noDrift) return null;
   const raw = process.env['HARNESS_PHASE_DRIFT_THRESHOLD'];
 
   if (raw === undefined || raw === '') {
@@ -452,7 +453,10 @@ export async function scoreP5Drift(input: {
   cwd: string;
 }): Promise<{ activated: false } | { activated: true; outcome: DriftOutcome }> {
   const startTs = Date.now();
-  const threshold = loadDriftThreshold(input.state.autoMode === true);
+  const threshold = loadDriftThreshold(
+    input.state.autoMode === true,
+    input.state.noDrift === true,
+  );
   if (threshold === null) {
     return { activated: false };
   }

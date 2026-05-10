@@ -219,6 +219,36 @@ describe('startCommand', () => {
     expect(stderr).not.toMatch(/CODEX_HOME isolation disabled/i);
   });
 
+  it('state.noDrift=true when --no-drift passed', async () => {
+    await startCommand('test task', { root: repo.path, noDrift: true });
+    const harnessDir = join(repo.path, '.harness');
+    const runId = readFileSync(join(harnessDir, 'current-run'), 'utf-8').trim();
+    const state = JSON.parse(readFileSync(join(harnessDir, runId, 'state.json'), 'utf-8'));
+    expect(state.noDrift).toBe(true);
+  });
+
+  it('state.noDrift=false (default) when flag omitted', async () => {
+    await startCommand('test task', { root: repo.path });
+    const harnessDir = join(repo.path, '.harness');
+    const runId = readFileSync(join(harnessDir, 'current-run'), 'utf-8').trim();
+    const state = JSON.parse(readFileSync(join(harnessDir, runId, 'state.json'), 'utf-8'));
+    expect(state.noDrift).toBe(false);
+  });
+
+  it('--no-drift + HARNESS_PHASE_DRIFT_THRESHOLD=0.3 → scoreP5Drift returns activated:false', async () => {
+    vi.stubEnv('HARNESS_PHASE_DRIFT_THRESHOLD', '0.3');
+    await startCommand('test task', { root: repo.path, noDrift: true });
+    const harnessDir = join(repo.path, '.harness');
+    const runId = readFileSync(join(harnessDir, 'current-run'), 'utf-8').trim();
+    const rawState = JSON.parse(readFileSync(join(harnessDir, runId, 'state.json'), 'utf-8'));
+    const { migrateState } = await import('../../src/state.js');
+    const { scoreP5Drift } = await import('../../src/phases/drift.js');
+    const persistedState = migrateState(rawState);
+    const result = await scoreP5Drift({ state: persistedState, runDir: join(harnessDir, runId), cwd: repo.path });
+    expect(result.activated).toBe(false);
+    vi.unstubAllEnvs();
+  });
+
 });
 
 describe('startCommand — non-git outer cwd, dirtyBaseline wiring (R3)', () => {

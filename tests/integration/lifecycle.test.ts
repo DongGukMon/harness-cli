@@ -127,6 +127,26 @@ describe('CLI lifecycle integration', () => {
   });
 });
 
+describe('CLI parser — --no-drift flag registration', () => {
+  it('start --help lists --no-drift', () => {
+    const res = runCli(['start', '--help']);
+    expect(res.status).toBe(0);
+    expect(res.stdout).toMatch(/--no-drift/);
+  });
+
+  it('run --help lists --no-drift', () => {
+    const res = runCli(['run', '--help']);
+    expect(res.status).toBe(0);
+    expect(res.stdout).toMatch(/--no-drift/);
+  });
+
+  it('resume --help lists --no-drift (captured so runtime can reject it)', () => {
+    const res = runCli(['resume', '--help']);
+    expect(res.status).toBe(0);
+    expect(res.stdout).toMatch(/--no-drift/);
+  });
+});
+
 describe('CLI parser — --light flag registration (Task 5 smoke test)', () => {
   it('start --help lists --light', () => {
     const res = runCli(['start', '--help']);

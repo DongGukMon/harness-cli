@@ -14,6 +14,7 @@ import { printError } from '../ui.js';
 export interface ResumeOptions {
   root?: string;
   light?: boolean;
+  noDrift?: boolean;
 }
 
 export async function resumeCommand(runId?: string, options: ResumeOptions = {}): Promise<void> {
@@ -21,6 +22,14 @@ export async function resumeCommand(runId?: string, options: ResumeOptions = {})
     process.stderr.write(
       "Error: --light is only valid on 'phase-harness start'. flow is frozen at run creation; " +
       "start a new run with 'phase-harness start --light' if you want the light flow.\n",
+    );
+    process.exit(1);
+  }
+
+  if (options.noDrift) {
+    process.stderr.write(
+      "Error: --no-drift is only valid on 'phase-harness start' / 'phase-harness run'. " +
+      "Drift policy is frozen at run creation; start a new run with --no-drift if you want to skip drift.\n",
     );
     process.exit(1);
   }

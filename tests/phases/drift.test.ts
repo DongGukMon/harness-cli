@@ -9,10 +9,12 @@ import {
   buildDriftPrompt,
   resolveDriftAction,
   writeDriftFeedback,
+  scoreP5Drift,
   __resetDriftWarning,
   DRIFT_WEIGHTS,
   type DriftOutcome,
 } from '../../src/phases/drift.js';
+import { createInitialState } from '../../src/state.js';
 
 beforeEach(() => {
   __resetDriftWarning();
@@ -76,6 +78,38 @@ describe('loadDriftThreshold', () => {
     expect(loadDriftThreshold(true)).toBe(null);
     expect(errSpy).toHaveBeenCalled();
     errSpy.mockRestore();
+  });
+
+  it('noDrift=true, autoMode=true → null (short-circuits before env)', () => {
+    expect(loadDriftThreshold(true, true)).toBe(null);
+  });
+
+  it('noDrift=true, autoMode=false → null', () => {
+    expect(loadDriftThreshold(false, true)).toBe(null);
+  });
+
+  it('noDrift=true, env="0.3" → null (CLI > env)', () => {
+    vi.stubEnv('HARNESS_PHASE_DRIFT_THRESHOLD', '0.3');
+    expect(loadDriftThreshold(true, true)).toBe(null);
+  });
+
+  it('noDrift=true, env="0.5", autoMode=false → null', () => {
+    vi.stubEnv('HARNESS_PHASE_DRIFT_THRESHOLD', '0.5');
+    expect(loadDriftThreshold(false, true)).toBe(null);
+  });
+
+  it('noDrift=true, env="invalid" → null and warnOnce NOT called', () => {
+    const errSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    vi.stubEnv('HARNESS_PHASE_DRIFT_THRESHOLD', 'invalid');
+    expect(loadDriftThreshold(true, true)).toBe(null);
+    const warnCalls = errSpy.mock.calls.filter((c) => String(c[0]).includes('[drift] invalid'));
+    expect(warnCalls.length).toBe(0);
+    errSpy.mockRestore();
+  });
+
+  it('noDrift=false (default) preserves existing env behaviour', () => {
+    vi.stubEnv('HARNESS_PHASE_DRIFT_THRESHOLD', '0.5');
+    expect(loadDriftThreshold(true, false)).toBe(0.5);
   });
 });
 
@@ -263,5 +297,23 @@ describe('writeDriftFeedback', () => {
     expect(body).toContain('unavailable');
     expect(body).toContain('error');
     fs.rmSync(tmp, { recursive: true, force: true });
+  });
+});
+
+describe('scoreP5Drift — noDrift flag', () => {
+  afterEach(() => { vi.unstubAllEnvs(); });
+
+  it('noDrift=true → activated:false even when HARNESS_PHASE_DRIFT_THRESHOLD=0.3', async () => {
+    vi.stubEnv('HARNESS_PHASE_DRIFT_THRESHOLD', '0.3');
+    const state = createInitialState('run-nd', 'task', 'abc', true, false, 'full', false, true);
+    const result = await scoreP5Drift({ state, runDir: '/tmp', cwd: '/tmp' });
+    expect(result.activated).toBe(false);
+  });
+
+  it('noDrift=false + env=off → activated:false (existing env-off behaviour unchanged)', async () => {
+    vi.stubEnv('HARNESS_PHASE_DRIFT_THRESHOLD', 'off');
+    const state = createInitialState('run-nd', 'task', 'abc', true);
+    const result = await scoreP5Drift({ state, runDir: '/tmp', cwd: '/tmp' });
+    expect(result.activated).toBe(false);
   });
 });
