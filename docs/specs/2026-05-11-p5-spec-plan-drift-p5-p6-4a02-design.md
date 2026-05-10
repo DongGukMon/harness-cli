@@ -17,7 +17,7 @@ P5 implementations regularly satisfy interactive completion criteria yet violate
 - **D3. Mode-driven activation default via single env**: `HARNESS_PHASE_DRIFT_THRESHOLD`. unset+autoMode → 0.3, unset+manual → disabled, numeric → enabled at that value, `off` → disabled, invalid → disabled + one stderr warn.
 - **D4. New `phase_drift` event**, not a `phase_end` extension. Keeps reader/aggregator changes additive.
 - **D5. Codex inputs**: spec full text + plan full text + `git diff planCommit..implCommit`, with a 30 000-char prompt cap; on cap hit, the diff tail is truncated and `driftSource: 'codex-truncated'` is set.
-- **D6. Fail-open everywhere**: scorer error / Codex hang / parse error / network failure must NOT flip a successful P5. They emit `phase_drift.action='error'` (or fall back to floor-only) and let P6 proceed.
+- **D6. Strict fail-open on Codex failure**: scorer error / Codex hang / parse error / network failure must NOT flip a successful P5. Any Codex failure (regardless of deterministic-floor findings) emits `phase_drift.action='error'` with `score=null`, `axes=null`, `driftSource='error'` and lets P6 proceed. The deterministic floor never gates by itself — it only contributes to the score when Codex also produced a parsable response. This keeps drift detection a single integrated signal: either both halves agree on a number, or the run is treated as unmeasured.
 - **D7. No new dependencies**. Reuses `runners/codex.ts` invocation primitives. No npm package added.
 - **D8. Backward compatibility**: drift event is purely additive; absence of the event must not change any existing reader / footer / retrospective behaviour. State schema unchanged.
 - **D9. Scope = both flows (full + light)**. P5 → P6 transition exists in both flow modes; drift detection runs in both.
@@ -154,11 +154,10 @@ score       = clamp01(0.5*axes.goal + 0.3*axes.constraint + 0.2*axes.ontology)
 ```
 
 ### `driftSource` taxonomy
-- `'codex+floor'` — both produced numbers
-- `'codex-only'` — floor was no-op (`ruleCount === 0`)
-- `'floor-only'` — Codex parse error / non-zero exit / timeout, but `ruleCount > 0`
-- `'codex-truncated'` — prompt cap hit; Codex output still consumed
-- `'error'` — both branches produced no number; emit `phase_drift` with all numeric fields `null`, `action='error'`, fail-open
+- `'codex+floor'` — Codex parsed AND floor produced findings (`ruleCount > 0`); axes merged via `max`
+- `'codex-only'` — Codex parsed AND floor was no-op (`ruleCount === 0`)
+- `'codex-truncated'` — prompt cap hit; Codex output still parsed; floor merged or no-op as above
+- `'error'` — Codex did not produce a parsable response (throw / non-zero exit / timeout / parse failure / out-of-range axes). Emit `phase_drift` with `score=null`, `axes=null`, `action='error'`, fail-open. The deterministic floor's findings are NOT used to drive `pass`/`reopen` in this branch — see D6.
 
 ## Threshold & action
 
@@ -201,7 +200,7 @@ Contains: drift score, threshold, axes table, source, Codex rationale (escaped),
   action: 'pass' | 'reopen'
         | 'escalate-continue' | 'escalate-skip' | 'escalate-quit'
         | 'error';
-  driftSource: 'codex+floor' | 'codex-only' | 'floor-only' | 'codex-truncated' | 'error';
+  driftSource: 'codex+floor' | 'codex-only' | 'codex-truncated' | 'error';
   codexTokensTotal?: number;  // only when Codex produced a response (success or parse-fail)
   rationale?: string;         // ≤ 200 chars, single line
   floorRules?: number;        // rule count extracted by deterministic floor
@@ -254,8 +253,8 @@ End-to-end through `handleInteractivePhase(phase=5, status=completed)` with `run
 - escalate-quit (manual, 'Q') → state.status='paused', pauseReason='drift-escalation', action='escalate-quit'.
 - disabled-manual-default (autoMode=false, env unset) → no phase\_drift event emitted, phase\_end byte-compatible with current path.
 - disabled-env-off (env=off) → identical to disabled-manual-default.
-- fail-open Codex throws → phase\_drift action='error', phase\_end completed, currentPhase=6, exactly one stderr warn line.
-- fail-open Codex parse error + ruleCount=0 → action='error'; ruleCount>0 → action='pass'/'reopen' driven by floor only with driftSource='floor-only'.
+- fail-open Codex throws → phase\_drift action='error', driftSource='error', score=null, axes=null, phase\_end completed, currentPhase=6, exactly one stderr warn line.
+- fail-open Codex parse error → identical outcome to "Codex throws" regardless of deterministic-floor `ruleCount` (i.e. action='error', driftSource='error', score=null, axes=null, success path). Test asserts that even when the floor would have matched a "must contain X" rule, P6 still advances. (Per D6 strict fail-open: floor never gates without Codex.)
 - truncation cap hit → driftSource='codex-truncated'.
 
 ### Backward-compat regression
@@ -282,7 +281,7 @@ A `grep -l` chain over those four files is part of the eval checklist; absence i
 - **S2.** When `state.autoMode === false` and env unset, a P5 success run never emits `phase_drift` and never invokes Codex; `phase_end` payload matches today's snapshot byte-for-byte (regression fixture).
 - **S3.** With env=`off`, behaviour matches S2.
 - **S4.** With env=`abc` (invalid), behaviour matches S2 plus exactly one stderr line containing the literal `[drift] invalid HARNESS_PHASE_DRIFT_THRESHOLD`.
-- **S5.** Codex failure (mock throws / non-zero exit / non-JSON) with `ruleCount === 0` produces `phase_drift` with `action='error'`, `score=null`, `axes=null`; `phase_end` is `completed`; `currentPhase` advances to 6; exactly one stderr warn line is emitted.
+- **S5.** Codex failure (mock throws / non-zero exit / non-JSON / out-of-range axes) produces `phase_drift` with `action='error'`, `score=null`, `axes=null`, `driftSource='error'`; `phase_end` is `completed`; `currentPhase` advances to 6; exactly one stderr warn line is emitted. This holds **regardless** of deterministic-floor `ruleCount` — including the case where one or more "must contain X" rules would have matched (verified by an explicit test fixture per D6 strict fail-open).
 - **S6.** With `state.autoMode === false` and threshold-exceeded, the C/S/Q prompt routes to: 'C' = reopen branch identical to S1 except `action='escalate-continue'`; 'S' = success path with `action='escalate-skip'`; 'Q' = paused state with `pauseReason='drift-escalation'`.
 - **S7.** Codex is invoked at most once per P5 attempt (verified by mock call-count assertion in integration tests).
 - **S8.** No new npm dependency: `git diff` on `package.json` and `pnpm-lock.yaml` from baseline shows no added entries (only churn allowed is version bump if scope demands).
@@ -295,7 +294,7 @@ A `grep -l` chain over those four files is part of the eval checklist; absence i
 - **I2.** `phase_drift` always precedes the paired `phase_end` in `events.jsonl`; both share the same `attemptId`.
 - **I3.** Per single P5 attempt (one phase\_start → one phase\_end), at most one `phase_drift` event is emitted and at most one Codex drift call is made.
 - **I4.** Drift detection never converts a `result.status === 'failed'` P5 into `completed`, and never converts a `result.status === 'completed'` P5 into `completed` _and_ advances `currentPhase` past 5 when `action ∈ {'reopen','escalate-continue','escalate-quit'}`.
-- **I5.** A scorer/Codex failure (any throw, any timeout, any parse error) MUST NOT raise out of `scoreP5Drift`; it returns `action='error'` (or floor-only) and the success path proceeds.
+- **I5.** A scorer/Codex failure (any throw, any timeout, any parse error, any out-of-range axis) MUST NOT raise out of `scoreP5Drift`; it returns `action='error'` with `score=null`, `axes=null`, `driftSource='error'`, and the P5 success path proceeds. Deterministic-floor findings never gate when Codex fails — they are silently discarded in the error branch (per D6).
 - **I6.** No write to `state.json` from inside `scoreP5Drift` other than the existing reopen-branch state mutation already performed in the runner; the scorer itself is read-only against state.
 - **I7.** `state.json` schema is unchanged. No new top-level field. The new `PauseReason='drift-escalation'` / `PendingActionType='show_drift_escalation'` are union-additive and never written by code paths outside drift escalation.
 - **I8.** `phase_drift.threshold` always equals the number returned by `loadDriftThreshold` for that run; `phase_drift.score`, when non-null, is in `[0, 1]`; each axis, when non-null, is in `[0, 1]`.
