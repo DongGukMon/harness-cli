@@ -8,6 +8,8 @@
 
 **Tech Stack:** TypeScript, Commander.js (CLI), Vitest (tests)
 
+> **Test file note:** The spec references `tests/unit/phases/drift.test.ts` and `tests/unit/state.test.ts`, but those paths do not exist in the repo. The actual files — `tests/phases/drift.test.ts` and `tests/state.test.ts` — are the correct targets and match the existing project structure.
+
 ---
 
 ## File map
@@ -20,9 +22,9 @@
 | `src/commands/start.ts` | `noDrift?: boolean` in `StartOptions`; pass to `createInitialState` |
 | `src/commands/resume.ts` | `noDrift?: boolean` in `ResumeOptions`; early reject before reading state |
 | `bin/harness.ts` | `--no-drift` option on `start`/`run`/`resume` |
-| `tests/phases/drift.test.ts` | New cases in `loadDriftThreshold` describe block |
-| `tests/state.test.ts` | New cases for migration + `createInitialState` |
-| `tests/commands/resume-cmd.test.ts` | New case for `--no-drift` reject |
+| `tests/phases/drift.test.ts` | New cases in `loadDriftThreshold` describe block; new `scoreP5Drift` integration describe |
+| `tests/state.test.ts` | New cases for migration + `createInitialState` + state round-trip |
+| `tests/commands/resume-cmd.test.ts` | New case for `--no-drift` reject (exit code + stderr + state unread) |
 | `README.md` | `--no-drift` flag + precedence sentence |
 | `README.ko.md` | Korean sync |
 | `docs/HOW-IT-WORKS.md` | Disabling per-run subsection; `noDrift` field in state schema list |
@@ -33,19 +35,19 @@
 ## Task 1: Core implementation + tests
 
 **Files:**
-- Modify: `src/types.ts` (line ~109, after `codexNoIsolate`)
-- Modify: `src/state.ts` (createInitialState signature + return; migrateState)
-- Modify: `src/phases/drift.ts` (loadDriftThreshold + scoreP5Drift caller)
-- Modify: `src/commands/start.ts` (StartOptions + createInitialState call)
-- Modify: `src/commands/resume.ts` (ResumeOptions + early reject)
-- Modify: `bin/harness.ts` (start/run/resume option declarations)
+- Modify: `src/types.ts`
+- Modify: `src/state.ts`
+- Modify: `src/phases/drift.ts`
+- Modify: `src/commands/start.ts`
+- Modify: `src/commands/resume.ts`
+- Modify: `bin/harness.ts`
 - Modify: `tests/phases/drift.test.ts`
 - Modify: `tests/state.test.ts`
 - Modify: `tests/commands/resume-cmd.test.ts`
 
-- [ ] **Step 1: Write failing tests — drift threshold with noDrift**
+- [ ] **Step 1: Write failing unit tests — `loadDriftThreshold` with `noDrift`**
 
-  Append to the `loadDriftThreshold` describe block in `tests/phases/drift.test.ts`:
+  Add to the `loadDriftThreshold` describe block in `tests/phases/drift.test.ts`:
 
   ```ts
   it('noDrift=true, autoMode=true → null (short-circuits before env)', () => {
@@ -81,9 +83,37 @@
   });
   ```
 
-- [ ] **Step 2: Write failing tests — state migration and createInitialState**
+- [ ] **Step 2: Write failing integration tests — `scoreP5Drift` with `noDrift`**
 
-  Append to `tests/state.test.ts` (inside any top-level describe or at file level, following existing pattern):
+  Add a new describe block at the bottom of `tests/phases/drift.test.ts`. This requires adding two imports at the top of the file:
+  - `import { scoreP5Drift } from '../../src/phases/drift.js';` (already imported via the existing named import; add `scoreP5Drift` to it)
+  - `import { createInitialState } from '../../src/state.js';`
+
+  ```ts
+  describe('scoreP5Drift integration — noDrift flag', () => {
+    afterEach(() => {
+      vi.unstubAllEnvs();
+    });
+
+    it('noDrift=true → activated:false even when HARNESS_PHASE_DRIFT_THRESHOLD=0.3', async () => {
+      vi.stubEnv('HARNESS_PHASE_DRIFT_THRESHOLD', '0.3');
+      const state = createInitialState('run-nd', 'task', 'abc', true, false, 'full', false, true);
+      const result = await scoreP5Drift({ state, runDir: '/tmp', cwd: '/tmp' });
+      expect(result.activated).toBe(false);
+    });
+
+    it('noDrift=false + env=off → activated:false (existing env-off behaviour unchanged)', async () => {
+      vi.stubEnv('HARNESS_PHASE_DRIFT_THRESHOLD', 'off');
+      const state = createInitialState('run-nd', 'task', 'abc', true);
+      const result = await scoreP5Drift({ state, runDir: '/tmp', cwd: '/tmp' });
+      expect(result.activated).toBe(false);
+    });
+  });
+  ```
+
+- [ ] **Step 3: Write failing unit tests — state migration and `createInitialState`**
+
+  Add to `tests/state.test.ts`:
 
   ```ts
   describe('noDrift field', () => {
@@ -110,52 +140,67 @@
       const state = createInitialState('run-abc', 'task', 'abc123', false, false, 'full', false, true);
       expect(state.noDrift).toBe(true);
     });
+
+    it('noDrift=true round-trips through writeState/readState (persistence integration)', () => {
+      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'noDrift-int-'));
+      tmpDirs.push(tmpDir);
+      const state = createInitialState('run-nd', 'task', 'abc123', false, false, 'full', false, true);
+      writeState(tmpDir, state);
+      const restored = readState(tmpDir);
+      expect(restored?.noDrift).toBe(true);
+    });
   });
   ```
 
-- [ ] **Step 3: Write failing test — resume rejects --no-drift**
+- [ ] **Step 4: Write failing test — resume rejects `--no-drift`, state unread**
 
-  Append to `tests/commands/resume-cmd.test.ts` (inside an appropriate describe block or at file level):
+  Add to `tests/commands/resume-cmd.test.ts`. This test creates a run dir with a real `state.json` and asserts its mtime is unchanged after rejection:
 
   ```ts
-  it('rejects --no-drift with exit(1) and stderr message before reading state', async () => {
+  it('rejects --no-drift with exit(1), stderr message, and state.json unread', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'resume-nd-'));
+    const stateFile = path.join(tmpDir, 'state.json');
+    fs.writeFileSync(stateFile, JSON.stringify({ dummy: true }));
+    const mtimeBefore = fs.statSync(stateFile).mtimeMs;
+
     const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
     const exitSpy = vi.spyOn(process, 'exit').mockImplementation((_code?: number) => {
       throw new Error('process.exit');
     });
+
     await expect(resumeCommand(undefined, { noDrift: true })).rejects.toThrow('process.exit');
     expect(exitSpy).toHaveBeenCalledWith(1);
     expect(stderrSpy.mock.calls.some((c) => String(c[0]).includes('--no-drift'))).toBe(true);
+    expect(fs.statSync(stateFile).mtimeMs).toBe(mtimeBefore);
+
     stderrSpy.mockRestore();
     exitSpy.mockRestore();
+    fs.rmSync(tmpDir, { recursive: true, force: true });
   });
   ```
 
-- [ ] **Step 4: Run tests to confirm failures**
+  Note: the mtime assertion validates that `resumeCommand` exits before ever touching `state.json` when `--no-drift` is passed.
+
+- [ ] **Step 5: Run tests to confirm failures**
 
   ```bash
   cd /Users/daniel/.grove/github.com/DongGukMon/harness-cli/worktrees/dogfood-no-drift
   pnpm vitest run tests/phases/drift.test.ts tests/state.test.ts tests/commands/resume-cmd.test.ts 2>&1 | tail -30
   ```
 
-  Expected: test failures mentioning wrong argument count / missing field / no noDrift rejection.
+  Expected: failures on the new test cases (wrong arg count / missing field / no rejection).
 
-- [ ] **Step 5: Implement — `src/types.ts`**
+- [ ] **Step 6: Implement — `src/types.ts`**
 
   Add `noDrift: boolean;` immediately after `codexNoIsolate: boolean;` in `HarnessState`:
 
   ```ts
-  // Before (around line 109):
-  codexNoIsolate: boolean;
-  dirtyBaseline: string[];
-
-  // After:
   codexNoIsolate: boolean;
   noDrift: boolean;
   dirtyBaseline: string[];
   ```
 
-- [ ] **Step 6: Implement — `src/state.ts` (migrateState)**
+- [ ] **Step 7: Implement — `src/state.ts` (migrateState)**
 
   Add migration line immediately after the `codexNoIsolate` migration line (~line 112):
 
@@ -164,9 +209,9 @@
   if (raw.noDrift === undefined) raw.noDrift = false;
   ```
 
-- [ ] **Step 7: Implement — `src/state.ts` (createInitialState)**
+- [ ] **Step 8: Implement — `src/state.ts` (createInitialState)**
 
-  Update the function signature to add `noDrift: boolean = false` as the last parameter:
+  Update signature to add `noDrift: boolean = false` as the last parameter:
 
   ```ts
   export function createInitialState(
@@ -181,7 +226,7 @@
   ): HarnessState {
   ```
 
-  Add `noDrift` to the return object, immediately after `codexNoIsolate`:
+  Add `noDrift` to the return object immediately after `codexNoIsolate`:
 
   ```ts
   codexNoIsolate,
@@ -189,15 +234,15 @@
   dirtyBaseline: [],
   ```
 
-- [ ] **Step 8: Implement — `src/phases/drift.ts`**
+- [ ] **Step 9: Implement — `src/phases/drift.ts`**
 
-  Update `loadDriftThreshold` signature and add short-circuit:
+  Update `loadDriftThreshold` signature and add short-circuit as the very first line of the function body (before the env read):
 
   ```ts
   export function loadDriftThreshold(autoMode: boolean, noDrift: boolean = false): number | null {
     if (noDrift) return null;
     const raw = process.env['HARNESS_PHASE_DRIFT_THRESHOLD'];
-    // ... rest of the function unchanged
+    // ... rest of function unchanged
   ```
 
   Update `scoreP5Drift`'s call to `loadDriftThreshold` (~line 455):
@@ -209,7 +254,7 @@
   );
   ```
 
-- [ ] **Step 9: Implement — `src/commands/start.ts`**
+- [ ] **Step 10: Implement — `src/commands/start.ts`**
 
   Add `noDrift?: boolean;` to `StartOptions` (after `codexNoIsolate`):
 
@@ -227,7 +272,7 @@
   }
   ```
 
-  Update the `createInitialState` call in `startCommand` (step 12, ~line 237) to pass `noDrift` as the last argument:
+  Update the `createInitialState` call in `startCommand` (~line 237) to pass `noDrift` as the last argument:
 
   ```ts
   const state = createInitialState(
@@ -242,7 +287,7 @@
   );
   ```
 
-- [ ] **Step 10: Implement — `src/commands/resume.ts`**
+- [ ] **Step 11: Implement — `src/commands/resume.ts`**
 
   Add `noDrift?: boolean;` to `ResumeOptions`:
 
@@ -254,7 +299,7 @@
   }
   ```
 
-  Add the `noDrift` early-reject block immediately after the existing `options.light` reject block (~line 20):
+  Add the `noDrift` early-reject block immediately after the existing `options.light` reject block (before `findHarnessRoot`, before any state reads):
 
   ```ts
   if (options.noDrift) {
@@ -266,7 +311,7 @@
   }
   ```
 
-- [ ] **Step 11: Implement — `bin/harness.ts`**
+- [ ] **Step 12: Implement — `bin/harness.ts`**
 
   Add `--no-drift` to the `start` command (after `--codex-no-isolate`):
 
@@ -280,34 +325,34 @@
   .action(async (task: string | undefined, opts: { requireClean?: boolean; auto?: boolean; enableLogging?: boolean; light?: boolean; codexNoIsolate?: boolean; noDrift?: boolean; track?: string[]; exclude?: string[] }) => {
   ```
 
-  Apply the same `--no-drift` option and updated opts type to the `run` command (identical to `start`).
+  Apply the identical `--no-drift` option and updated opts type to the `run` command.
 
-  Add `--no-drift` to the `resume` command:
+  Add `--no-drift` to the `resume` command and update its opts type:
 
   ```ts
   .option('--no-drift', '(rejected — drift policy is frozen at run creation)')
   .action(async (runId: string | undefined, opts: { light?: boolean; noDrift?: boolean }) => {
   ```
 
-  The `noDrift` value flows automatically via `{ ...opts }` spread in start/run; resume already forwards `opts` to `resumeCommand`.
+  `noDrift` flows via `{ ...opts }` spread in start/run; resume forwards `opts` to `resumeCommand` which rejects early.
 
-- [ ] **Step 12: Run tests — expect green**
+- [ ] **Step 13: Run focused tests — expect green**
 
   ```bash
   pnpm vitest run tests/phases/drift.test.ts tests/state.test.ts tests/commands/resume-cmd.test.ts 2>&1 | tail -30
   ```
 
-  Expected: all new cases pass; no regressions.
+  Expected: all new cases pass, no regressions.
 
-- [ ] **Step 13: Full typecheck + test suite**
+- [ ] **Step 14: Full typecheck + test suite + build**
 
   ```bash
-  pnpm tsc --noEmit && pnpm vitest run 2>&1 | tail -30
+  pnpm tsc --noEmit && pnpm vitest run && pnpm build 2>&1 | tail -30
   ```
 
-  Expected: zero type errors, all tests green.
+  Expected: zero type errors, all tests green, build succeeds.
 
-- [ ] **Step 14: Commit**
+- [ ] **Step 15: Commit**
 
   ```bash
   git add src/types.ts src/state.ts src/phases/drift.ts src/commands/start.ts src/commands/resume.ts bin/harness.ts tests/phases/drift.test.ts tests/state.test.ts tests/commands/resume-cmd.test.ts
@@ -332,13 +377,13 @@
   - `--no-drift` — skip P5 → P6 drift detection for this run (equivalent to `HARNESS_PHASE_DRIFT_THRESHOLD=off`, but persisted per-run)
   ```
 
-  In the `HARNESS_PHASE_DRIFT_THRESHOLD` row of the env-variable table, append the following sentence to the existing description:
+  In the `HARNESS_PHASE_DRIFT_THRESHOLD` row of the env-variable table, append to the existing description:
 
   ```
   `--no-drift` overrides `HARNESS_PHASE_DRIFT_THRESHOLD` when both are set.
   ```
 
-  In the `### phase-harness resume [runId]` section (around line 395), add a note analogous to the `--light` freeze note:
+  In the `### phase-harness resume [runId]` section, add a freeze note analogous to the `--light` note:
 
   ```
   `--no-drift` is a start-time choice only. Drift policy is frozen at run creation; `phase-harness resume --no-drift` is rejected.
@@ -348,12 +393,12 @@
 
   Apply the same three changes in Korean:
 
-  Under `start` Flags list (after `--codex-no-isolate`):
+  Flags 목록에 추가 (after `--codex-no-isolate`):
   ```
   - `--no-drift` — 이 run에서 P5 → P6 drift 검출을 비활성화 (`HARNESS_PHASE_DRIFT_THRESHOLD=off`와 동등하나 run 단위로 영구 저장됨)
   ```
 
-  `HARNESS_PHASE_DRIFT_THRESHOLD` 항목 설명 끝에 추가:
+  `HARNESS_PHASE_DRIFT_THRESHOLD` 항목 끝에 추가:
   ```
   두 설정이 동시에 적용되면 `--no-drift`가 `HARNESS_PHASE_DRIFT_THRESHOLD`를 덮어씁니다.
   ```
@@ -365,7 +410,7 @@
 
 - [ ] **Step 3: Update `docs/HOW-IT-WORKS.md`**
 
-  In the `### Drift detection (P5→P6)` section (~line 99), append a **Disabling per-run** paragraph after the existing content:
+  In the `### Drift detection (P5→P6)` section, append after the existing content:
 
   ```markdown
   **Disabling per-run (`--no-drift`):** Pass `--no-drift` to `phase-harness start` or `phase-harness run` to disable drift detection for that run entirely. The flag is persisted as `state.noDrift: true` at run creation and takes precedence over `HARNESS_PHASE_DRIFT_THRESHOLD` for the lifetime of the run. `phase-harness resume --no-drift` is rejected — drift policy is frozen at run creation. To re-enable drift detection, start a new run without the flag.
@@ -401,13 +446,13 @@
 
   Expected: all 4 filenames printed.
 
-- [ ] **Step 6: Typecheck + full test suite (regression guard)**
+- [ ] **Step 6: Typecheck + full test suite + build (regression guard)**
 
   ```bash
-  pnpm tsc --noEmit && pnpm vitest run 2>&1 | tail -20
+  pnpm tsc --noEmit && pnpm vitest run && pnpm build 2>&1 | tail -20
   ```
 
-  Expected: zero errors, all green.
+  Expected: zero errors, all green, build succeeds.
 
 - [ ] **Step 7: Commit**
 
@@ -415,3 +460,10 @@
   git add README.md README.ko.md docs/HOW-IT-WORKS.md docs/HOW-IT-WORKS.ko.md
   git commit -m "docs: add --no-drift to README and HOW-IT-WORKS (docs sync)"
   ```
+
+---
+
+## Deferred
+
+- P2: The resume-cmd test's mtime assertion requires the test creates a tmp `state.json` in the test body rather than using the existing test-repo helper — this is handled inline in Step 4 above.
+- P2: `tests/unit/phases/drift.test.ts` path used in spec's Testing section does not match the actual repo layout (`tests/phases/drift.test.ts`). No action needed beyond the clarification note at the top of this plan.
