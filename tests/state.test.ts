@@ -490,6 +490,41 @@ describe('trackedRepos — migration (FR-2, ADR-N3)', () => {
   });
 });
 
+describe('noDrift field', () => {
+  it('migrateState defaults noDrift=false when field missing', () => {
+    const legacy = JSON.parse(JSON.stringify(createInitialState('run-abc', 'task', 'abc123', false)));
+    delete legacy.noDrift;
+    const migrated = migrateState(legacy);
+    expect(migrated.noDrift).toBe(false);
+  });
+
+  it('migrateState preserves existing noDrift=true', () => {
+    const legacy = JSON.parse(JSON.stringify(createInitialState('run-abc', 'task', 'abc123', false)));
+    legacy.noDrift = true;
+    const migrated = migrateState(legacy);
+    expect(migrated.noDrift).toBe(true);
+  });
+
+  it('createInitialState defaults noDrift=false', () => {
+    const state = createInitialState('run-abc', 'task', 'abc123', false);
+    expect(state.noDrift).toBe(false);
+  });
+
+  it('createInitialState stores noDrift=true when passed', () => {
+    const state = createInitialState('run-abc', 'task', 'abc123', false, false, 'full', false, true);
+    expect(state.noDrift).toBe(true);
+  });
+
+  it('noDrift=true round-trips through writeState/readState', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'noDrift-int-'));
+    tmpDirs.push(tmpDir);
+    const state = createInitialState('run-nd', 'task', 'abc123', false, false, 'full', false, true);
+    writeState(tmpDir, state);
+    const restored = readState(tmpDir);
+    expect(restored?.noDrift).toBe(true);
+  });
+});
+
 describe('syncLegacyMirror (ADR-N3 mirror invariant)', () => {
   it('syncLegacyMirror keeps baseCommit in sync with trackedRepos[0]', () => {
     const state = makeState();

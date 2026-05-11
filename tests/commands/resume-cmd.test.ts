@@ -294,4 +294,17 @@ describe('resumeCommand', () => {
       expect(messages).toMatch(/flow is frozen|--light is only valid on start/i);
     });
   });
+
+  it('rejects --no-drift before reading state: exit(1) + stderr + readState not called', async () => {
+    setupRun(repo);
+    const stateModule = await import('../../src/state.js');
+    const readStateSpy = vi.spyOn(stateModule, 'readState');
+
+    await expect(resumeCommand(undefined, { noDrift: true, root: repo.path })).rejects.toThrow('__exit__');
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    expect(stderrSpy.mock.calls.map((c: any) => c[0]).join('')).toContain('--no-drift');
+    expect(readStateSpy).not.toHaveBeenCalled();
+
+    readStateSpy.mockRestore();
+  });
 });

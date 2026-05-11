@@ -112,6 +112,8 @@ Default activation is mode-driven: in auto-mode the threshold defaults to `0.3`;
 
 The deterministic floor described in the original design (grep-rule extraction from `## Success Criteria` / `## Invariants`) is deferred to a follow-up PR; v1 is Codex-only.
 
+**Disabling per-run (`--no-drift`):** Pass `--no-drift` to `phase-harness start` or `phase-harness run` to disable drift detection for that run entirely. The flag is persisted as `state.noDrift: true` at run creation and takes precedence over `HARNESS_PHASE_DRIFT_THRESHOLD` for the lifetime of the run. `phase-harness resume --no-drift` is rejected — drift policy is frozen at run creation. To re-enable drift detection, start a new run without the flag.
+
 **Extended schema:** `escalation.reason` now includes `'gate-stagnation'` in addition to the four pre-existing values.
 
 - on P7 `REJECT`:
@@ -315,7 +317,7 @@ Important fields include:
 - `phaseCodexSessions` — per-gate Codex session resume lineage
 - `phaseClaudeSessions` — per-interactive Claude session resume lineage (model + effort; `null` until first launch)
 - tmux/session bookkeeping
-- `loggingEnabled`, `codexNoIsolate`
+- `loggingEnabled`, `codexNoIsolate`, `noDrift`
 
 Artifact locations:
 - spec/design doc: `docs/specs/<runId>-design.md`
