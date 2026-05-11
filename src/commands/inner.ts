@@ -278,34 +278,43 @@ export async function innerCommand(runId: string, options: InnerOptions = {}): P
       }
     };
 
+    // Decide sessionEndStatus first WITHOUT blocking on the idle wait. The
+    // failed-terminal R/J/Q flow can mutate state.status, so it must run before
+    // we read the final status. The completed-idle wait, however, MUST run
+    // AFTER we flush session_end / retro to disk (see flush block below).
     if (state.status === 'completed') {
       sessionEndStatus = 'completed';
-      await enterIdle();
     } else if (state.status === 'paused') {
       sessionEndStatus = 'paused';
     } else if (anyPhaseFailed(state)) {
       await enterFailedTerminalState(state, harnessDir, runDir, cwd, inputManager, logger);
-      // After R/J flow returns: classify, and surface idle panel if it ended in completion.
-      // The else-if chain narrowed state.status to 'in_progress'; the call above can mutate it,
-      // so widen via indirect access before classifying.
+      // After R/J flow returns: classify. The else-if chain narrowed state.status
+      // to 'in_progress'; enterFailedTerminalState can mutate it, so widen via
+      // indirect access before classifying.
       const postStatus = (state as HarnessState).status;
-      if (postStatus === 'completed') {
-        sessionEndStatus = 'completed';
-        await enterIdle();
-      } else if (postStatus === 'paused') {
-        sessionEndStatus = 'paused';
-      } else {
-        sessionEndStatus = 'interrupted';
-      }
+      if (postStatus === 'completed') sessionEndStatus = 'completed';
+      else if (postStatus === 'paused') sessionEndStatus = 'paused';
+      else sessionEndStatus = 'interrupted';
     } else {
       sessionEndStatus = 'interrupted';
+    }
+
+    // Flush session_end / summary / retro BEFORE the completed-idle wait.
+    // Previously these lived in the outer finally, but when state.status was
+    // 'completed' the harness blocked in `await enterIdle()` and the user's
+    // Ctrl+C arrived through Node's SIGINT default path before the async
+    // finally got a chance to flush — session_end and retrospective.md never
+    // reached disk (issue #98 follow-up observed during PR #102 dogfood).
+    logger.logEvent({ event: 'session_end', status: sessionEndStatus, totalWallMs: Date.now() - logger.getStartedAt() });
+    logger.finalizeSummary(state);
+    await emitRetroHook(logger, harnessDir, runId);
+
+    if (sessionEndStatus === 'completed' && (state as HarnessState).status === 'completed') {
+      await enterIdle();
     }
   } finally {
     footerTimer.stop();
     process.removeListener('SIGWINCH', footerTimer.forceTick);
-    logger.logEvent({ event: 'session_end', status: sessionEndStatus, totalWallMs: Date.now() - logger.getStartedAt() });
-    logger.finalizeSummary(state);
-    await emitRetroHook(logger, harnessDir, runId);
     logger.close();
     unmountInk();
     inputManager.stop();
