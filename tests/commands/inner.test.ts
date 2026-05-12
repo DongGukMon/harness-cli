@@ -21,10 +21,13 @@ vi.mock('../../src/signal.js', () => ({
 }));
 vi.mock('../../src/tmux.js', () => ({
   killSession: vi.fn(),
+  killSessionDetached: vi.fn(),
   killWindow: vi.fn(),
+  killWindowDetached: vi.fn(),
   selectWindow: vi.fn(),
   splitPane: vi.fn(() => '%1'),
   paneExists: vi.fn(() => false),
+  selectPane: vi.fn(),
 }));
 vi.mock('../../src/root.js', () => ({
   findHarnessRoot: vi.fn(),

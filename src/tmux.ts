@@ -1,4 +1,4 @@
-import { execSync } from 'child_process';
+import { execSync, spawn } from 'child_process';
 
 /**
  * Create a detached tmux session.
@@ -60,6 +60,29 @@ export function killWindow(session: string, windowTarget: string): void {
 }
 
 /**
+ * Kill a window asynchronously via detached `tmux kill-window`. Use this
+ * variant when the caller may itself be running inside the window being
+ * killed (e.g. end-of-run cleanup from inner.ts in `reused` mode): the
+ * synchronous `killWindow` races with our own SIGHUP — `tmux kill-window`
+ * runs, returns, and the SIGHUP arriving in the same tick can take the
+ * Node process down before either the kill side-effect propagates or the
+ * follow-up `select-window` call runs. Detaching + `unref()` lets the
+ * tmux process keep going after we exit, so the window destruction is
+ * decoupled from this process's lifetime.
+ */
+export function killWindowDetached(session: string, windowTarget: string): void {
+  try {
+    const child = spawn('tmux', ['kill-window', '-t', `${session}:${windowTarget}`], {
+      detached: true,
+      stdio: 'ignore',
+    });
+    child.unref();
+  } catch {
+    // Spawn failure — best-effort
+  }
+}
+
+/**
  * Kill an entire tmux session. Best-effort — ignores errors (session may already be gone).
  */
 export function killSession(name: string): void {
@@ -67,6 +90,23 @@ export function killSession(name: string): void {
     execSync(`tmux kill-session -t ${esc(name)}`, { stdio: 'pipe' });
   } catch {
     // Session may already be gone
+  }
+}
+
+/**
+ * Kill a session asynchronously via detached `tmux kill-session`. Same
+ * rationale as `killWindowDetached` — use when the caller may be inside
+ * the session being killed (end-of-run cleanup in `dedicated` mode).
+ */
+export function killSessionDetached(name: string): void {
+  try {
+    const child = spawn('tmux', ['kill-session', '-t', name], {
+      detached: true,
+      stdio: 'ignore',
+    });
+    child.unref();
+  } catch {
+    // Spawn failure — best-effort
   }
 }
 
