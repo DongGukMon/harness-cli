@@ -3,7 +3,7 @@ import path from 'path';
 import { randomUUID } from 'crypto';
 import chokidar from 'chokidar';
 import type { HarnessState, InteractivePhase, Artifacts } from '../types.js';
-import { getPhaseArtifactFiles, getPresetById } from '../config.js';
+import { getPhaseArtifactFiles, getPresetById, INTERACTIVE_TIMEOUT_MS } from '../config.js';
 import { writeState, syncLegacyMirror } from '../state.js';
 import { getHead, detectUncommittedChanges, type UncommittedRepo } from '../git.js';
 import { isPidAlive } from '../process.js';
@@ -279,7 +279,8 @@ export async function runInteractivePhase(
     const sentinelPath = path.join(runDir, `phase-${phase}.done`);
     const resolvedAttemptId = updatedState.phaseAttemptId[String(phase)] ?? attemptId;
     const result = await waitForPhaseCompletion(
-      sentinelPath, resolvedAttemptId, claudePid, phase, updatedState, cwd, runDir
+      sentinelPath, resolvedAttemptId, claudePid, phase, updatedState, cwd, runDir,
+      INTERACTIVE_TIMEOUT_MS,
     );
     return { ...result, attemptId };
   } else {
@@ -324,6 +325,7 @@ export async function runInteractivePhase(
 
     const result: InteractiveResult = await waitForPhaseCompletion(
       sentinelPath, attemptId, codexPid, phase, updatedState, cwd, runDir,
+      INTERACTIVE_TIMEOUT_MS,
     );
 
     // Issue #84 — when Phase 5 fails under a Codex preset and Codex itself
@@ -368,7 +370,15 @@ export async function waitForPhaseCompletion(
   phase: number,
   state: HarnessState,
   cwd: string,
-  runDir: string
+  runDir: string,
+  // Absolute wall-clock timeout. Issue #107: when Codex CLI / Claude TUI keeps
+  // its PID alive past the verdict (e.g. drops into an interactive REPL prompt
+  // after emitting the response) but never writes the sentinel via tool use,
+  // the harness used to wait forever. Callers MUST pass a phase-appropriate
+  // timeout (GATE_TIMEOUT_MS for gates, INTERACTIVE_TIMEOUT_MS for P1/P3/P5).
+  // The parameter stays optional so existing test helpers compile, but
+  // production callers always set it.
+  timeoutMs?: number,
 ): Promise<InteractiveResult> {
   return new Promise<InteractiveResult>((resolve) => {
     let settled = false;
@@ -377,6 +387,7 @@ export async function waitForPhaseCompletion(
     let pidPollInterval: ReturnType<typeof setInterval> | null = null;
     let interruptPollInterval: ReturnType<typeof setInterval> | null = null;
     let nullPidTimeout: ReturnType<typeof setTimeout> | null = null;
+    let absTimeout: ReturnType<typeof setTimeout> | null = null;
 
     function settle(status: 'completed' | 'failed'): void {
       if (settled) return;
@@ -401,8 +412,25 @@ export async function waitForPhaseCompletion(
         clearTimeout(nullPidTimeout);
         nullPidTimeout = null;
       }
+      if (absTimeout !== null) {
+        clearTimeout(absTimeout);
+        absTimeout = null;
+      }
       // Workspace pane persists — no kill/select needed
       resolve({ status });
+    }
+
+    // Absolute timeout (issue #107). Fires even when claudePid is alive but
+    // the runner refuses to exit (TUI mode after verdict; sentinel never
+    // written). One stderr line so the operator knows why the phase failed.
+    if (timeoutMs !== undefined && timeoutMs > 0) {
+      absTimeout = setTimeout(() => {
+        if (settled) return;
+        process.stderr.write(
+          `[harness] phase ${phase} timed out after ${Math.round(timeoutMs / 1000)}s waiting for sentinel\n`,
+        );
+        settle('failed');
+      }, timeoutMs);
     }
 
     // Sentinel detection → evaluate artifacts

@@ -7,6 +7,7 @@ import {
   preparePhase,
   checkSentinelFreshness,
   validatePhaseArtifacts,
+  waitForPhaseCompletion,
 } from '../../src/phases/interactive.js';
 import { createInitialState, readState } from '../../src/state.js';
 import type { HarnessState } from '../../src/types.js';
@@ -1100,5 +1101,49 @@ describe('validatePhaseArtifacts — Phase 5 multi-repo (FR-6, ADR-D4)', () => {
     const runDir = makeTmpDir('rundir2-');
     const result = validatePhaseArtifacts(5, state, outer, runDir);
     expect(result).toBe(false);
+  });
+});
+
+// ─── waitForPhaseCompletion absolute timeout (issue #107) ───────────────────
+
+describe('waitForPhaseCompletion — absolute timeout (issue #107)', () => {
+  it('settles "failed" when timeoutMs elapses even though pid is still alive and no sentinel is written', async () => {
+    const runDir = makeTmpDir();
+    const sentinelPath = path.join(runDir, 'phase-4.done');
+    const state = makeState();
+    // Mocked isPidAlive returns false at module-mock level — flip it to true
+    // for this test so the PID-death backstop never fires.
+    const processMock = await import('../../src/process.js');
+    vi.mocked(processMock.isPidAlive).mockReturnValue(true);
+
+    // Pretend codex CLI is alive (pid=42) but never writes the sentinel.
+    // Without the timeout fix this Promise would hang forever; with it the
+    // 250 ms budget fires and resolves to 'failed'.
+    const t0 = Date.now();
+    const result = await waitForPhaseCompletion(
+      sentinelPath, 'fake-attempt-id', 42, 4, state, runDir, runDir, 250,
+    );
+    const elapsedMs = Date.now() - t0;
+
+    expect(result.status).toBe('failed');
+    expect(elapsedMs).toBeGreaterThanOrEqual(200);
+    expect(elapsedMs).toBeLessThan(1500); // generous upper bound for CI jitter
+
+    vi.mocked(processMock.isPidAlive).mockReturnValue(false);
+  });
+
+  it('does not start an absolute timer when timeoutMs is omitted (backwards compat)', async () => {
+    // With timeoutMs omitted and isPidAlive returning false (default mock),
+    // the PID-death backstop should fire and settle 'failed' quickly via the
+    // 1 s poll. This confirms we did NOT regress the existing behavior for
+    // callers that haven't been updated yet.
+    const runDir = makeTmpDir();
+    const sentinelPath = path.join(runDir, 'phase-4.done');
+    const state = makeState();
+
+    const result = await waitForPhaseCompletion(
+      sentinelPath, 'fake-attempt-id', 7777, 4, state, runDir, runDir,
+    );
+    expect(result.status).toBe('failed');
   });
 });

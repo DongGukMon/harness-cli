@@ -3,7 +3,7 @@ import os from 'os';
 import path from 'path';
 import type { HarnessState, GatePhaseResult, GateResult, GateSessionInfo, ClaudeTokens } from '../types.js';
 import { assembleGatePrompt, assembleGateResumePrompt } from '../context/assembler.js';
-import { getPresetById, SIGTERM_WAIT_MS } from '../config.js';
+import { getPresetById, SIGTERM_WAIT_MS, GATE_TIMEOUT_MS } from '../config.js';
 import type { ModelPreset } from '../config.js';
 import { runClaudeGate } from '../runners/claude.js';
 import { spawnCodexInPane } from '../runners/codex.js';
@@ -360,10 +360,15 @@ export async function runGatePhaseInteractive(
     sessionId: resumeSessionId ?? undefined,
   });
 
-  // Step 8: Wait for sentinel using existing waitForPhaseCompletion
+  // Step 8: Wait for sentinel using existing waitForPhaseCompletion.
+  // Pass GATE_TIMEOUT_MS so a Codex CLI that emits its verdict to stdout but
+  // refuses to exit (drops into TUI REPL prompt without writing the sentinel
+  // via tool use) fails the gate after the budget instead of wedging the
+  // main loop forever — issue #107.
   const attemptId = state.phaseAttemptId[String(phase)] ?? '';
   const sentinelResult = await waitForPhaseCompletion(
     sentinelPath, attemptId, spawnResult.pid, phase, state, cwd, runDir,
+    GATE_TIMEOUT_MS,
   );
 
   // Interrupt TUI and wait for process group to flush JSONL before reading usage
