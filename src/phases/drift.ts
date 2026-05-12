@@ -26,7 +26,14 @@ export const DRIFT_WEIGHTS: Readonly<DriftAxes> = Object.freeze({
   ontology: 0.2,
 });
 
-export const DRIFT_PROMPT_CAP_CHARS = 30_000;
+// PR #102 dogfood showed every phase_drift event in a phase-harness self-run
+// landed on the oversized-spec+plan boundary because the harness's own specs
+// and plans run 75-90K chars. The original 30K ceiling was tuned for small
+// task scopes and effectively disabled drift detection on the canonical
+// internal-dogfood use case. Raised to 100K so spec+plan + a head slice of
+// the diff fit; Codex GPT-5.5's context is 200K so the extra ~20K tokens per
+// call (≈$0.10 incremental) costs less than one wasted P7 retry round.
+export const DRIFT_PROMPT_CAP_CHARS = 100_000;
 export const DRIFT_DIFF_HEAD_RESERVE_CHARS = 20_000;
 
 export type DriftAction =

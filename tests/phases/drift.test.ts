@@ -214,20 +214,31 @@ describe('buildDriftPrompt', () => {
   });
 
   it('truncates the diff tail when assembled prompt > cap', () => {
-    const bigDiff = 'X'.repeat(40_000);
+    const bigDiff = 'X'.repeat(120_000);
     const r = buildDriftPrompt('spec', 'plan', bigDiff, 0.3);
     expect('oversized' in r).toBe(false);
     if ('oversized' in r) return;
     expect(r.truncated).toBe(true);
     expect(r.prompt).toContain('[... diff truncated ...]');
-    expect(r.prompt.length).toBeLessThanOrEqual(30_000 + 200); // some slack for marker text
+    // After tail-truncation the diff body is at most DRIFT_DIFF_HEAD_RESERVE_CHARS
+    // (20_000) plus the marker + header/spec/plan; well under the 100_000 cap.
+    expect(r.prompt.length).toBeLessThanOrEqual(100_000 + 200);
   });
 
   it('returns oversized when spec+plan alone exceed cap', () => {
-    const bigSpec = 'S'.repeat(20_000);
-    const bigPlan = 'P'.repeat(20_000);
+    const bigSpec = 'S'.repeat(60_000);
+    const bigPlan = 'P'.repeat(60_000);
     const r = buildDriftPrompt(bigSpec, bigPlan, '', 0.3);
     expect('oversized' in r && (r as { oversized: true }).oversized).toBe(true);
+  });
+
+  it('fits a typical phase-harness self-dogfood spec+plan combo (regression: PR #102 dogfood saw 75–90K)', () => {
+    // Approximates the largest observed in-tree spec+plan from PR #96 dogfood
+    // (89K total). Under the old 30K cap this short-circuited to oversized.
+    const realisticSpec = 'S'.repeat(31_000);
+    const realisticPlan = 'P'.repeat(58_000);
+    const r = buildDriftPrompt(realisticSpec, realisticPlan, 'diff body', 0.3);
+    expect('oversized' in r).toBe(false);
   });
 });
 
