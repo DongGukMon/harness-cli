@@ -53,6 +53,14 @@ P1 design+plan → P2 pre-impl gate → P5 implement → P6 verify → P7 eval g
 선택값은 `state.phasePresets`에 저장됩니다.
 기존 saved run은 자동으로 1M 기본값으로 마이그레이션되지 않고, 새로 만드는 run에만 1M 기본값이 자동 적용됩니다.
 
+### 사용자 config 오버라이드
+
+`phase-harness config set`으로 `~/.harness/config.json`에 페이즈별 프리셋 오버라이드를 저장할 수 있습니다. 새 `phase-harness start` / `phase-harness run` 실행 시, 하네스가 이 파일을 읽어 내장 `PHASE_DEFAULTS` 위에 오버라이드를 덮어쓴 후 `state.json`을 기록합니다. 저장된 프리셋 id가 카탈로그에 더 이상 없으면(stale) stderr 경고를 출력하고 내장 기본값을 사용합니다.
+
+`phase-harness resume`은 `~/.harness/config.json`을 읽지 않습니다. 기존 실행의 프리셋은 `state.json`이 기준입니다.
+
+`~/.harness/config.json`이 유효하지 않은 JSON이면, 모든 `config` 서브커맨드와 새 `start`/`run`은 즉시 non-zero로 종료됩니다.
+
 ---
 
 ## Full flow와 light flow

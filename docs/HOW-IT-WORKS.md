@@ -53,6 +53,14 @@ Users can change every non-verify phase preset during `phase-harness start` and 
 Selections persist in `state.phasePresets`.
 Existing saved runs are not auto-migrated to the new 1M defaults; only newly created runs pick them up automatically.
 
+### User config overrides
+
+Users can persist per-phase preset overrides in `~/.harness/config.json` via `phase-harness config set`. On every fresh `phase-harness start` / `phase-harness run`, the harness reads this file and overlays any saved overrides onto the built-in `PHASE_DEFAULTS` before writing `state.json`. If a saved preset id is no longer in the catalog (stale), a stderr warning is emitted and the built-in default is used instead.
+
+`phase-harness resume` never reads `~/.harness/config.json`; the presets in `state.json` are authoritative for existing runs.
+
+If `~/.harness/config.json` contains invalid JSON, every `config` subcommand and any new `start`/`run` exits non-zero immediately.
+
 ---
 
 ## Full flow vs light flow

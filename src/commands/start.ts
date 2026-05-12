@@ -9,6 +9,7 @@ import { findHarnessRoot, setCurrentRun } from '../root.js';
 import { cleanupOrphans } from '../orphan-cleanup.js';
 import { createInitialState, writeState } from '../state.js';
 import { captureDirtyBaseline } from '../artifact.js';
+import { applyUserConfigOverrides, UserConfigParseError } from '../userConfig.js';
 import { isInsideTmux, getCurrentSessionName, getActiveWindowId, createSession, createWindow, sendKeys, killSession, selectWindow, getDefaultPaneId } from '../tmux.js';
 import { openTerminalWindow } from '../terminal.js';
 import { HANDOFF_TIMEOUT_MS } from '../config.js';
@@ -254,6 +255,16 @@ export async function startCommand(task: string | undefined, options: StartOptio
     // in the depth-1 multi-repo mode the outer cwd may not be a git repo itself.
     // captureDirtyBaseline() returns [] when called on a non-git path.
     state.dirtyBaseline = captureDirtyBaseline(trackedRepos[0].path);
+
+    try {
+      applyUserConfigOverrides(state);
+    } catch (err) {
+      if (err instanceof UserConfigParseError) {
+        process.stderr.write(`Error: ${err.message}\n`);
+        process.exit(1);
+      }
+      throw err;
+    }
 
     if (options.codexNoIsolate) {
       // BUG-C risk surface: user explicitly bypassed isolation.
