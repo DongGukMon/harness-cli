@@ -150,6 +150,7 @@ async function _persistSidecars(
   promptBytes: number,
   durationMs: number,
   preset: ModelPreset,
+  retryIndex: number,
   codexSessionIdOverride?: string,
 ): Promise<void> {
   const rawPath = path.join(runDir, `gate-${phase}-raw.txt`);
@@ -165,6 +166,7 @@ async function _persistSidecars(
     runner,
     promptBytes,
     durationMs,
+    retryIndex,
     ...(result.tokensTotal !== undefined ? { tokensTotal: result.tokensTotal } : {}),
     ...(effectiveSessionId !== undefined ? { codexSessionId: effectiveSessionId } : {}),
     ...(runner === 'codex' ? { sourcePreset: { model: preset.model, effort: preset.effort } } : {}),
@@ -203,12 +205,38 @@ export async function runGatePhaseInteractive(
   allowSidecarReplay?: { value: boolean },
 ): Promise<GatePhaseResult & { codexTokens?: ClaudeTokens | null }> {
   const phaseKey = String(phase) as GatePhaseKey;
+  // Current retry index — handleGatePhase captured the same value at gate
+  // entry. Used both for sidecar staleness check (#94 Bug 1) and persisted
+  // into the new sidecar so a future replay can apply the same check.
+  const currentRetryIndex = state.gateRetries[phaseKey] ?? 0;
 
   // Step 1: One-shot sidecar replay
   if (allowSidecarReplay?.value) {
     allowSidecarReplay.value = false;
     const replay = checkGateSidecars(runDir, phase);
     if (replay !== null) {
+      // #94 Bug 1 staleness check: a sidecar from retry-N is invalid on
+      // resume when state.gateRetries[N] has already advanced. Without this,
+      // the old verdict gets re-emitted under the new retryIndex (consuming
+      // a retry slot with no actual gate run) — see
+      // https://github.com/DongGukMon/harness-cli/issues/94 Bug 1.
+      //
+      // Legacy sidecars (pre-PR) lack retryIndex. To preserve replay on the
+      // common "resume on first attempt" path (= currentRetryIndex 0) while
+      // still catching the bug for any prior-retry resume, treat absence as
+      // valid only when current=0. Any prior retries (current > 0) force a
+      // fresh gate run because we can't prove the sidecar matches.
+      const sidecarRetryIndex = (replay as GatePhaseResult & { retryIndex?: number }).retryIndex;
+      const replayMatchesCurrent =
+        sidecarRetryIndex === undefined
+          ? currentRetryIndex === 0
+          : sidecarRetryIndex === currentRetryIndex;
+      if (!replayMatchesCurrent) {
+        process.stderr.write(
+          `[harness] gate ${phase} sidecar replay skipped: sidecar retryIndex=${sidecarRetryIndex ?? '<absent>'} ≠ current retryIndex=${currentRetryIndex} (running fresh gate)\n`,
+        );
+        // Fall through to fresh gate run below.
+      } else {
       const currentPreset = getPresetById(state.phasePresets[phaseKey]);
       const replayCompatible =
         currentPreset !== undefined &&
@@ -246,6 +274,7 @@ export async function runGatePhaseInteractive(
           }
         }
         return { ...replay, recoveredFromSidecar: true };
+      }
       }
     }
   }
@@ -334,7 +363,7 @@ export async function runGatePhaseInteractive(
       result = applyAmbiguityGate(result, result.rawOutput ?? '', threshold);
     }
     if (state.currentPhase !== phase) return result;
-    await _persistSidecars(result, runDir, phase, runner, promptBytes, durationMs, preset);
+    await _persistSidecars(result, runDir, phase, runner, promptBytes, durationMs, preset, currentRetryIndex);
     return result;
   }
 
@@ -449,7 +478,7 @@ export async function runGatePhaseInteractive(
   // Step 12: Persist session + sidecars
   if (state.currentPhase === phase) {
     _persistCodexSession(state, phase, gateResult, resumeSessionId, discoveredSessionId, preset, runDir);
-    await _persistSidecars(gateResult, runDir, phase, 'codex', promptBytes, durationMs, preset, discoveredSessionId);
+    await _persistSidecars(gateResult, runDir, phase, 'codex', promptBytes, durationMs, preset, currentRetryIndex, discoveredSessionId);
   }
 
   return { ...gateResult, codexTokens };

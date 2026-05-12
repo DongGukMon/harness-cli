@@ -452,6 +452,88 @@ describe('checkGateSidecars — legacy vs extended sidecar', () => {
 // ─── runGatePhase — one-shot sidecar replay ───────────────────────────────────
 
 describe('runGatePhase — one-shot sidecar replay', () => {
+  it('skips sidecar replay when sidecar retryIndex differs from current state.gateRetries (issue #94 Bug 1)', async () => {
+    const runDir = makeTmpDir();
+    // Sidecar represents retry 0 (the first attempt). gate-N-result.json
+    // carries retryIndex=0 explicitly.
+    fs.writeFileSync(
+      path.join(runDir, 'gate-7-result.json'),
+      JSON.stringify({
+        exitCode: 0,
+        timestamp: Date.now(),
+        runner: 'codex',
+        promptBytes: 1000,
+        durationMs: 375626,
+        sourcePreset: { model: 'gpt-5.5', effort: 'high' },
+        retryIndex: 0, // retry-0 run produced this sidecar
+      }),
+    );
+    fs.writeFileSync(path.join(runDir, 'gate-7-raw.txt'), '## Verdict\nREJECT\n');
+
+    // After retry-0 REJECT, handleGateReject advanced gateRetries.7 to 1.
+    // On resume, currentRetryIndex computed from state is 1 — does NOT match
+    // the sidecar's retryIndex=0 → replay MUST be skipped to avoid double-
+    // counting the same verdict against retry-1's slot. Without the fix
+    // this would return `recoveredFromSidecar: true` with retry-0's verdict.
+    const state = {
+      phasePresets: { '7': 'codex-high' },
+      gateRetries: { '2': 0, '4': 0, '7': 1 },
+      phaseCodexSessions: { '2': null, '4': null, '7': null },
+      phaseAttemptId: { '7': 'fresh-attempt-id' },
+      currentPhase: 7,
+    } as any;
+
+    const { spawnCodexInPane } = await import('../../src/runners/codex.js');
+    vi.mocked(spawnCodexInPane).mockResolvedValueOnce({ pid: null });
+    const { assembleGatePrompt } = await import('../../src/context/assembler.js');
+    vi.mocked(assembleGatePrompt).mockReturnValue('mock prompt');
+
+    const flag = { value: true };
+    const result = await runGatePhase(7, state, '/fake-harness', runDir, '/cwd', flag);
+
+    // Stale sidecar must NOT be replayed.
+    expect((result as any).recoveredFromSidecar).not.toBe(true);
+    expect(flag.value).toBe(false); // flag still consumed (one-shot)
+    // Fresh gate run was attempted — spawnCodexInPane should have been called.
+    expect(vi.mocked(spawnCodexInPane)).toHaveBeenCalled();
+  });
+
+  it('skips replay when sidecar lacks retryIndex AND current retry > 0 (legacy sidecar safety)', async () => {
+    const runDir = makeTmpDir();
+    // Pre-PR sidecar without retryIndex field.
+    fs.writeFileSync(
+      path.join(runDir, 'gate-7-result.json'),
+      JSON.stringify({
+        exitCode: 0,
+        timestamp: Date.now(),
+        runner: 'codex',
+        promptBytes: 1000,
+        durationMs: 375626,
+        sourcePreset: { model: 'gpt-5.5', effort: 'high' },
+      }),
+    );
+    fs.writeFileSync(path.join(runDir, 'gate-7-raw.txt'), '## Verdict\nREJECT\n');
+
+    const state = {
+      phasePresets: { '7': 'codex-high' },
+      gateRetries: { '2': 0, '4': 0, '7': 1 }, // already past retry-0
+      phaseCodexSessions: { '2': null, '4': null, '7': null },
+      phaseAttemptId: { '7': 'fresh-attempt-id' },
+      currentPhase: 7,
+    } as any;
+
+    const { spawnCodexInPane } = await import('../../src/runners/codex.js');
+    vi.mocked(spawnCodexInPane).mockResolvedValueOnce({ pid: null });
+    const { assembleGatePrompt } = await import('../../src/context/assembler.js');
+    vi.mocked(assembleGatePrompt).mockReturnValue('mock prompt');
+
+    const flag = { value: true };
+    const result = await runGatePhase(7, state, '/fake-harness', runDir, '/cwd', flag);
+
+    // Conservative: can't prove the sidecar matches retry-1, so don't replay.
+    expect((result as any).recoveredFromSidecar).not.toBe(true);
+  });
+
   it('first call with allowSidecarReplay.value=true replays sidecar and consumes flag', async () => {
     const { assembleGatePrompt } = await import('../../src/context/assembler.js');
     // assembleGatePrompt mock not needed for replay path (sidecar exists before assembler is called)
