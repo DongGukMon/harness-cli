@@ -11,6 +11,12 @@ import { installSkillsCommand } from '../src/commands/install-skills.js';
 import { uninstallSkillsCommand } from '../src/commands/uninstall-skills.js';
 import { cleanupCommand } from '../src/commands/cleanup.js';
 import { retroCommand } from '../src/commands/retro.js';
+import {
+  configListCommand,
+  configGetCommand,
+  configSetCommand,
+  configResetCommand,
+} from '../src/commands/config.js';
 import { HARNESS_VERSION } from '../src/version.js';
 
 const program = new Command();
@@ -145,6 +151,30 @@ program
     const globalOpts = program.opts();
     await retroCommand(runId, { stdout: opts.stdout, root: opts.root ?? globalOpts.root });
   });
+
+const configCmd = program
+  .command('config')
+  .description('manage per-phase preset overrides in ~/.harness/config.json');
+
+configCmd
+  .command('list')
+  .description('list all phase preset keys with their current value and source')
+  .action(() => { configListCommand(); });
+
+configCmd
+  .command('get <key>')
+  .description('get the effective value for a config key (e.g. phase.1.preset)')
+  .action((key: string) => { configGetCommand(key); });
+
+configCmd
+  .command('set <key> <value>')
+  .description('set a config key to a preset id (e.g. phase.1.preset opus-1m-max)')
+  .action((key: string, value: string) => { configSetCommand(key, value); });
+
+configCmd
+  .command('reset <key>')
+  .description('remove the override for a config key, reverting to the built-in default')
+  .action((key: string) => { configResetCommand(key); });
 
 program.parseAsync(process.argv).catch((err) => {
   process.stderr.write(`Error: ${err.message}\n`);

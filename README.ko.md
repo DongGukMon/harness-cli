@@ -246,6 +246,21 @@ phase-harness start --root /tmp/demo "task"
 
 처음 세 변수에 잘못된 값이 있으면 해당 프로세스에서 기능이 비활성화되고 stderr에 경고 하나가 출력됩니다. 수동 모드에서는 항상 비활성화됩니다.
 
+### `phase-harness config`
+
+`~/.harness/config.json`에 저장되는 페이즈별 프리셋 오버라이드를 관리합니다. 오버라이드는 새 `start`/`run` 실행 시에만 적용되며, 기존 실행에는 영향을 주지 않습니다.
+
+```bash
+phase-harness config list                           # 전체 페이즈 키와 현재 값·출처 표시
+phase-harness config get phase.1.preset             # 유효 값 확인 (오버라이드 또는 기본값)
+phase-harness config set phase.1.preset opus-1m-max # 오버라이드 저장
+phase-harness config reset phase.1.preset           # 오버라이드 제거, 내장 기본값으로 복원
+```
+
+`start`/`run` 시 해결 우선순위: (1) 저장된 config 오버라이드, (2) 내장 `PHASE_DEFAULTS`.
+
+`resume`은 항상 실행 생성 시 `state.json`에 고정된 프리셋을 사용합니다. 저장된 config는 resume 시 재적용되지 않습니다.
+
 ### `phase-harness resume [runId]`
 
 현재 run 또는 특정 run을 재개합니다.

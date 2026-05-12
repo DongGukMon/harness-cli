@@ -246,6 +246,21 @@ When running with `--auto`, harness detects *stagnant* gate retry cycles — whe
 
 Any invalid value for the first three variables disables the feature for that process and emits one warning to stderr. The feature is always off in manual mode.
 
+### `phase-harness config`
+
+Manage per-phase preset overrides saved in `~/.harness/config.json`. Overrides apply to fresh `start`/`run` calls only; existing runs are unaffected.
+
+```bash
+phase-harness config list                           # show all phase keys with value and source
+phase-harness config get phase.1.preset             # effective value (override or default)
+phase-harness config set phase.1.preset opus-1m-max # persist override
+phase-harness config reset phase.1.preset           # remove override, revert to built-in default
+```
+
+Resolution precedence on `start`/`run`: (1) saved config override, (2) built-in `PHASE_DEFAULTS`.
+
+`resume` always uses the presets frozen in `state.json` at run-creation time — saved config is never re-applied on resume.
+
 ### `phase-harness resume [runId]`
 
 Resumes the current run or a specific run.
