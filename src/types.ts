@@ -145,6 +145,11 @@ export interface GateResult {
   ambiguityThreshold?: number;
   ambiguityVetoed?: boolean;
   clarityParseError?: boolean;
+  // Retry index captured at the time the gate ran — used by sidecar replay
+  // staleness check (#94 Bug 1). Without this, a resume after retry-N+1
+  // re-emits the old retry-N verdict labeled as retry-N+1, consuming a slot
+  // without an actual fresh attempt.
+  retryIndex?: number;
 }
 
 export interface VerifyResult {
