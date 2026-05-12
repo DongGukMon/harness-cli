@@ -7,7 +7,7 @@ import { readState, writeState, invalidatePhaseSessionsOnPresetChange, invalidat
 import { startFooterTicker } from './footer-ticker.js';
 import { runPhaseLoop, handleVerifyError } from '../phases/runner.js';
 import { registerSignalHandlers } from '../signal.js';
-import { killSession, killWindow, selectWindow, splitPane, paneExists, selectPane } from '../tmux.js';
+import { killSession, killSessionDetached, killWindow, killWindowDetached, selectWindow, splitPane, paneExists, selectPane } from '../tmux.js';
 import { renderWelcome, promptModelConfig } from '../ui.js';
 import { unmountInk } from '../ink/render.js';
 import { InputManager } from '../input.js';
@@ -319,18 +319,34 @@ export async function innerCommand(runId: string, options: InnerOptions = {}): P
     unmountInk();
     inputManager.stop();
     releaseLock(harnessDir, runId);
-  }
 
-  // 7. Cleanup tmux on completion
-  if (state.tmuxMode === 'dedicated') {
-    killSession(state.tmuxSession);
-  } else {
-    // Reused mode: kill only harness-owned windows
-    for (const windowId of state.tmuxWindows) {
-      killWindow(state.tmuxSession, windowId);
-    }
-    if (state.tmuxOriginalWindow) {
-      selectWindow(state.tmuxSession, state.tmuxOriginalWindow);
+    // Restore the pre-run pane layout: kill the harness-owned tmux window(s)
+    // (reused) or the whole dedicated session, then refocus the original
+    // window the user was on. This used to live AFTER the finally block,
+    // which meant it never ran when `await enterIdle()` returned via SIGINT
+    // — the harness left dangling `harness-ctrl` windows after every
+    // completed run (observed during PR #102 dogfood). Moving it into the
+    // finally guarantees execution on all exit paths.
+    //
+    // Self-kill race: in `reused` mode the inner Node process is itself
+    // running inside the window we're about to kill, so the synchronous
+    // `tmux kill-window` races our incoming SIGHUP — Node sometimes dies
+    // before tmux's kill side-effect propagates, leaving the window alive.
+    // `killWindowDetached` / `killSessionDetached` fire the tmux command
+    // as a detached child so it lives past this process's exit.
+    if (state.tmuxMode === 'dedicated') {
+      process.stderr.write(`[harness] cleanup: killing dedicated session ${state.tmuxSession}\n`);
+      killSessionDetached(state.tmuxSession);
+    } else if (state.tmuxWindows.length > 0) {
+      process.stderr.write(`[harness] cleanup: killing ${state.tmuxWindows.length} harness window(s) in session ${state.tmuxSession}\n`);
+      // Refocus the original window FIRST while it's still selectable —
+      // doing so after kill-window can race with the destruction.
+      if (state.tmuxOriginalWindow) {
+        selectWindow(state.tmuxSession, state.tmuxOriginalWindow);
+      }
+      for (const windowId of state.tmuxWindows) {
+        killWindowDetached(state.tmuxSession, windowId);
+      }
     }
   }
 }
