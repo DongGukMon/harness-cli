@@ -71,6 +71,14 @@ export interface HarnessState {
   phases: Record<string, PhaseStatus>; // keys "1"-"7"
   gateRetries: Record<string, number>; // keys "2","4","7"
   gateEscalationCycles?: Partial<Record<'2' | '4' | '7', number>>;
+  // Per-phase reject history with parsed requirement IDs (gate-retry-convergence spec).
+  // Persisted so resume restores detector state. Empty/missing = feature inert.
+  gateRejectHistory?: Partial<Record<'2' | '4' | '7', GateRejectEntry[]>>;
+  // Requirements that crossed the stubborn-ID threshold and were deferred.
+  deferredRequirements?: Partial<Record<'2' | '4' | '7', DeferredRequirement[]>>;
+  // Opt-in: shell out to `gh issue create` when a requirement is deferred.
+  // File stub is written regardless. Persisted at start; resume honors it.
+  autoDeferIssues?: boolean;
   verifyRetries: number;
   pauseReason: PauseReason | null;
   specCommit: string | null;
@@ -125,6 +133,24 @@ export interface LockData {
   handoff?: boolean;
   outerPid?: number;
   tmuxSession?: string;
+}
+
+export interface GateRejectEntry {
+  cycle: number;
+  retry: number;
+  feedbackPath: string;
+  requirementIds: string[];
+  ts: number;
+}
+
+export interface DeferredRequirement {
+  requirementId: string;
+  phase: 2 | 4 | 7;
+  rejectCount: number;
+  feedbackPaths: string[];
+  stubPath: string;
+  deferredAt: number;
+  ghIssueUrl?: string;
 }
 
 export interface GateResult {
@@ -319,8 +345,22 @@ export type LogEvent =
       run: number;
       action: 'escalate';
     })
-  | (LogEventBase & { event: 'escalation'; phase: number; reason: 'gate-retry-limit' | 'gate-error' | 'verify-limit' | 'verify-error' | 'gate-stagnation'; userChoice?: 'C' | 'S' | 'Q' | 'R' })
-  | (LogEventBase & { event: 'force_pass'; phase: number; by: 'auto' | 'user' })
+  | (LogEventBase & {
+      event: 'escalation';
+      phase: number;
+      reason: 'gate-retry-limit' | 'gate-error' | 'verify-limit' | 'verify-error' | 'gate-stagnation' | 'gate-stubborn-id';
+      userChoice?: 'C' | 'S' | 'Q' | 'R' | 'D';
+      requirementIds?: string[];
+    })
+  | (LogEventBase & {
+      event: 'gate_stubborn_id';
+      phase: number;
+      retryIndex: number;
+      requirementIds: string[];
+      threshold: number;
+      action: 'defer-and-continue' | 'defer-and-force-pass' | 'already-deferred';
+    })
+  | (LogEventBase & { event: 'force_pass'; phase: number; by: 'auto' | 'user' | 'auto-stubborn' })
   | (LogEventBase & { event: 'verify_result'; passed: boolean; retryIndex: number; durationMs: number; failedChecks?: string[] })
   | (LogEventBase & { event: 'phase_end'; phase: number; attemptId?: string | null; status: 'completed' | 'failed'; durationMs: number; details?: { reason: string; error?: string }; claudeTokens?: ClaudeTokens | null; codexTokens?: ClaudeTokens | null; uncommittedRepos?: Array<{ path: string; count: number }> })
   | (LogEventBase & {
