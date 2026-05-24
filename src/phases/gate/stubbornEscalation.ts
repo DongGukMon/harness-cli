@@ -26,6 +26,8 @@ export function handleStubbornEscalationAuto(
   input: StubbornEscalationInput,
 ): StubbornEscalationResult {
   const { phase, retryIndex, stubbornIds, comments, state, runDir, threshold, logger } = input;
+  // Mutates state.deferredRequirements in-place; caller is responsible for writeState.
+  // Writes deferred stub files to <runDir>/deferred/ and an optional filtered.md.
   const histKey = String(phase) as '2' | '4' | '7';
 
   state.deferredRequirements = state.deferredRequirements ?? {};
@@ -101,10 +103,14 @@ function tryCreateGhIssue(entry: DeferredRequirement, runId: string, runDir: str
       '--body', body,
       '--label', 'harness/auto-deferred',
       '--label', `phase-${entry.phase}`,
-    ], { cwd: runDir, encoding: 'utf-8' });
+    ], { cwd: runDir, encoding: 'utf-8', timeout: 15000 });
     if (out.status === 0 && out.stdout) {
       const url = out.stdout.trim().split('\n').pop();
       if (url && url.startsWith('http')) entry.ghIssueUrl = url;
+    } else if (out.signal === 'SIGTERM' || (out.error as NodeJS.ErrnoException | undefined)?.code === 'ETIMEDOUT') {
+      process.stderr.write(
+        `[stubborn-id] gh issue create timed out (15s); file stub retained at ${entry.stubPath}\n`,
+      );
     } else {
       process.stderr.write(
         `[stubborn-id] gh issue create failed (status=${out.status}); file stub retained at ${entry.stubPath}\n`,
