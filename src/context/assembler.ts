@@ -14,6 +14,87 @@ import {
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 /**
+ * Render the {{feedback_paths}} block for interactive reopen prompts.
+ *
+ * Backward-compat invariant: when `history` is empty, the output is byte-for-byte
+ * identical to the prior one-liner list (`- 이전 피드백 (반드시 반영): <path>`)
+ * so wrapper skills and thin phase templates do not need to change.
+ *
+ * With trajectory history present, renders:
+ *   - The latest (this-attempt) reject path(s)
+ *   - The accumulated reject list (oldest → newest)
+ *   - A per-requirement-ID counter
+ *   - A ⚠ marker when any ID has hit `threshold` rejects (auto-defer warning)
+ *
+ * Soft-caps total output around ~3KB by truncating the oldest history entries
+ * (latest entry is always preserved), so the prompt stays bounded even after
+ * very long retry streaks.
+ */
+export function renderRejectTrajectory(
+  latestPaths: string[],
+  history: import('../types.js').GateRejectEntry[],
+  threshold: number = 4,
+): string {
+  if (history.length === 0) {
+    return latestPaths.map(p => `- 이전 피드백 (반드시 반영): ${p}`).join('\n');
+  }
+
+  const lines: string[] = ['이전 피드백 (반드시 반영):'];
+  for (const p of latestPaths) {
+    lines.push(`- 가장 최근 (this attempt's reject): ${p}`);
+  }
+  lines.push('');
+  lines.push('이 phase 누적 reject 이력 (oldest → newest):');
+
+  // Truncate from the front if history would push us over ~3KB.
+  const SOFT_CAP_BYTES = 3000;
+  const baseLen = lines.join('\n').length;
+  let workingHistory = history;
+  let truncated = 0;
+  const estimate = (h: typeof history) =>
+    h.reduce((s, e) => s + e.feedbackPath.length + e.requirementIds.join(', ').length + 40, baseLen);
+
+  while (workingHistory.length > 1 && estimate(workingHistory) > SOFT_CAP_BYTES) {
+    workingHistory = workingHistory.slice(1);
+    truncated++;
+  }
+  if (truncated > 0) {
+    lines.push(`(${truncated} earlier rejects truncated)`);
+  }
+  workingHistory.forEach((entry, i) => {
+    const ids = entry.requirementIds.length > 0 ? entry.requirementIds.join(', ') : '(no IDs)';
+    lines.push(`${i + 1}. cycle ${entry.cycle} retry ${entry.retryIndex} — ${ids} — ${entry.feedbackPath}`);
+  });
+  lines.push('');
+
+  // Per-ID counter
+  const counts = new Map<string, number>();
+  const order: string[] = [];
+  for (const entry of history) {
+    for (const id of new Set(entry.requirementIds)) {
+      if (!counts.has(id)) order.push(id);
+      counts.set(id, (counts.get(id) ?? 0) + 1);
+    }
+  }
+  if (order.length > 0) {
+    lines.push('요건별 reject 횟수:');
+    for (const id of order) {
+      const n = counts.get(id)!;
+      const marker = n >= threshold ? ` ← ${threshold}회 이상은 다음 cycle에서 자동 deferred 처리됨` : '';
+      lines.push(`- ${id}: ${n}회${marker}`);
+    }
+    lines.push('');
+
+    const overThresh = order.filter(id => (counts.get(id) ?? 0) >= threshold);
+    if (overThresh.length > 0) {
+      lines.push(`⚠ ${overThresh.join(', ')}는(은) 이미 ${threshold}회 이상 다른 형태로 깨졌다. spec의 literal shape를 그대로 보존하라.`);
+    }
+  }
+
+  return lines.join('\n');
+}
+
+/**
  * Shared reviewer contract — common preamble across all gates (2, 4, 7).
  * Per-gate 5-axis rubric is appended via REVIEWER_CONTRACT_BY_GATE below.
  */
@@ -615,9 +696,13 @@ export function assembleInteractivePrompt(
   }
   const feedbackPaths = [...pendingPaths, ...carryoverPaths];
   const feedbackPath = feedbackPaths[0];
-  const feedbackPathsList = feedbackPaths
-    .map((p) => `- 이전 피드백 (반드시 반영): ${p}`)
-    .join('\n');
+  const sourcePhase =
+    state.pendingAction?.sourcePhase ?? (state.phaseReopenSource?.[String(phase)] as number | null | undefined) ?? null;
+  const histKey = sourcePhase != null && (sourcePhase === 2 || sourcePhase === 4 || sourcePhase === 7)
+    ? (String(sourcePhase) as '2' | '4' | '7')
+    : null;
+  const trajectoryHistory = histKey ? (state.gateRejectHistory?.[histKey] ?? []) : [];
+  const feedbackPathsList = renderRejectTrajectory(feedbackPaths, trajectoryHistory);
 
   // playbookDir: resolved at runtime from assembler module location.
   // dev: src/context/playbooks/ ; dist: dist/src/context/playbooks/
