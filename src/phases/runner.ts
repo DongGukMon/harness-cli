@@ -905,6 +905,7 @@ export async function handleGateReject(
         const result = handleStubbornEscalationAuto({
           phase, retryIndex, stubbornIds: stubborn, comments,
           state, runDir, threshold, logger,
+          emitEvent: false, // manual-D already logs `escalation`; avoid double-fire of gate_stubborn_id
         });
         if (result.action === 'defer-and-force-pass') {
           await forcePassGate(phase, state, runDir, cwd, 'auto-stubborn', logger);
@@ -949,8 +950,21 @@ export async function handleGateReject(
         // Fall through to existing retry path (do NOT return) so reopen happens.
       }
       if (choice === 'Q') {
+        // Mirror the C/S/Q escalation Q-pause pattern (~line 1170): set
+        // pendingAction to show_escalation so resume routes through the
+        // standard pause-then-prompt path instead of the
+        // synthesizeFailedFromInconsistentPause failure path (inner.ts:65).
+        const targetInteractive = getGateRejectReopenTarget(state, phase, scope);
+        state.pendingAction = {
+          type: 'show_escalation',
+          targetPhase: phase as PhaseNumber,
+          sourcePhase: targetInteractive as PhaseNumber,
+          feedbackPaths: [feedbackPathNow],
+          scope,
+        };
         state.status = 'paused';
         state.pauseReason = 'gate-stubborn-id';
+        savePausedAtHead(state, cwd);
         writeState(runDir, state);
         return;
       }

@@ -116,6 +116,25 @@ describe('handleStubbornEscalationAuto', () => {
     }));
   });
 
+  it('suppresses gate_stubborn_id event when emitEvent=false (manual-D path)', () => {
+    const state = mkState();
+    state.gateRejectHistory!['4'] = [
+      e(['R1.b'], 0, 0, 'a.md'), e(['R1.b'], 0, 1, 'b.md'),
+      e(['R1.b'], 1, 0, 'c.md'), e(['R1.b'], 1, 1, 'd.md'),
+    ];
+    const comments = `- **[P1]** — Location: R1.b\n  Issue: stuck-only.`;
+    handleStubbornEscalationAuto({
+      phase: 4, retryIndex: 1, stubbornIds: ['R1.b'], comments,
+      state, runDir, threshold: 4, logger: logger as any,
+      emitEvent: false,
+    });
+    // Verify gate_stubborn_id was NOT emitted; the caller (runner.ts manual-D)
+    // is responsible for emitting its own `escalation` event in this path.
+    const calls = logger.logEvent.mock.calls.map(c => c[0]);
+    const stubbornEvents = calls.filter((e: any) => e?.event === 'gate_stubborn_id');
+    expect(stubbornEvents).toHaveLength(0);
+  });
+
   it('falls back to full feedback when filter parse fails', () => {
     const state = mkState();
     state.gateRejectHistory!['4'] = [

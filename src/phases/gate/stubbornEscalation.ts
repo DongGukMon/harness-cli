@@ -14,6 +14,14 @@ export interface StubbornEscalationInput {
   runDir: string;
   threshold: number;
   logger: { logEvent: (e: any) => void };
+  /**
+   * When false, suppresses the `gate_stubborn_id` event emission. Callers that
+   * also emit their own terminal event (e.g. manual-D path in runner.ts which
+   * already logs an `escalation` event) pass `false` to preserve the invariant
+   * "exactly one `gate_stubborn_id` OR exactly one `escalation` per fire".
+   * Defaults to true (auto-mode paths emit the event normally).
+   */
+  emitEvent?: boolean;
 }
 
 export interface StubbornEscalationResult {
@@ -82,13 +90,15 @@ export function handleStubbornEscalationAuto(
     }
   }
 
-  logger.logEvent({
-    event: 'gate_stubborn_id',
-    phase, retryIndex,
-    requirementIds: stubbornIds,
-    threshold,
-    action,
-  });
+  if (input.emitEvent !== false) {
+    logger.logEvent({
+      event: 'gate_stubborn_id',
+      phase, retryIndex,
+      requirementIds: stubbornIds,
+      threshold,
+      action,
+    });
+  }
 
   return { action, filteredFeedbackPath, stubPaths };
 }
