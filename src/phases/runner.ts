@@ -833,6 +833,7 @@ export async function handleGateReject(
     });
 
     const threshold = loadStubbornIdThreshold();
+    // push before read so this reject counts toward the threshold
     const stubborn = findStubbornIds(state.gateRejectHistory[histKey]!, threshold);
     if (stubborn.length > 0 && state.autoMode) {
       const result = handleStubbornEscalationAuto({
@@ -855,6 +856,22 @@ export async function handleGateReject(
           sourcePhase: phase as PhaseNumber,
           feedbackPaths,
         };
+        // Light Phase-7 special: reopen target chains through P1, so put feedback
+        // on carryoverFeedback (pendingAction clears mid-chain), reset downstream
+        // phases, and invalidate gate-7 codex session + sidecars.
+        if (state.flow === 'light' && phase === 7) {
+          state.carryoverFeedback = {
+            sourceGate: 7,
+            paths: feedbackPaths,
+            deliverToPhase: 5,
+          };
+          state.phases['5'] = 'pending';
+          state.phases['6'] = 'pending';
+          state.phaseReopenFlags['5'] = true;
+          state.phaseReopenSource['5'] = 7;
+          state.phaseCodexSessions['7'] = null;
+          deleteGateSidecars(runDir, 7);
+        }
         state.phases[String(targetInteractive)] = 'pending';
         state.phaseReopenFlags[String(targetInteractive)] = true;
         state.phaseReopenSource[String(targetInteractive)] = phase;
