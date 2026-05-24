@@ -222,6 +222,7 @@ Flags:
 - `--light` — use the 5-phase light flow (P1 design+plan → P2 pre-impl gate → P5 → P6 → P7)
 - `--codex-no-isolate` — disable per-run `CODEX_HOME` isolation for Codex subprocesses; not recommended
 - `--no-drift` — skip P5 → P6 drift detection for this run (equivalent to `HARNESS_PHASE_DRIFT_THRESHOLD=off`, but persisted per-run)
+- `--auto-defer-issues` — when stubborn-requirement detection defers a requirement, also file a GitHub issue via `gh issue create` (file stub is always written; flag only adds the issue). Start-only; persisted as `state.autoDeferIssues`.
 - global `--root <dir>` — use `<dir>/.harness` as the harness root
 
 `phase-harness run` accepts all the same flags as `start`.
@@ -241,10 +242,13 @@ When running with `--auto`, harness detects *stagnant* gate retry cycles — whe
 | `HARNESS_GATE_STAGNATION_THRESHOLD` | `0.70` | Jaccard similarity threshold [0, 1]; higher = stricter |
 | `HARNESS_GATE_STAGNATION_RUN` | `2` | Consecutive stagnant pairs required before escalation (min 2) |
 | `HARNESS_GATE_STAGNATION_WINDOW` | `2` | Reserved for future use; currently fixed at 2 (pair comparison) |
+| `HARNESS_STUBBORN_ID_THRESHOLD` | `4` | Stubborn-requirement detector threshold. When the same spec requirement ID (e.g. `R1.b`) is rejected this many times across distinct retries, the requirement is deferred (auto mode) or prompted for via `[D/R/Q]` (manual mode). Integer ≥ 2. Invalid value → default 4 + one stderr warning. |
 | `HARNESS_GATE_AMBIGUITY_THRESHOLD` | `0.2` | P2 spec gate ambiguity veto threshold [0, 1]. Set to `off` to disable veto (scores still logged). Invalid value → veto disabled + one stderr warning. |
 | `HARNESS_PHASE_DRIFT_THRESHOLD` | `0.3` (auto) / `null` (manual) | P5 → P6 drift detection threshold [0, 1]. Unset = auto-mode default 0.3 / manual disabled; numeric = enabled at that value (any mode); `off` = disabled. Invalid value → disabled + one stderr warning. Drift detection issues a single Codex call after a successful P5; when `score > threshold`, P5 is reopened with synthetic feedback. **Drift detection (P5→P6)**: see HOW-IT-WORKS for details. `--no-drift` overrides `HARNESS_PHASE_DRIFT_THRESHOLD` when both are set. |
 
 Any invalid value for the first three variables disables the feature for that process and emits one warning to stderr. The feature is always off in manual mode.
+
+**Stubborn-requirement detection (per-ID retry budget):** orthogonal to the count-based limit and the stagnation detector. Every reject's requirement IDs (e.g. `R1.b`) are parsed from the reviewer's `Location:` pointers and tracked across retries. When any single ID is rejected ≥ `HARNESS_STUBBORN_ID_THRESHOLD` times across distinct retries (default 4) — even with different reviewer wording — the harness defers that requirement to `.harness/<run>/deferred/phase-<N>-<id>.md` and continues with the remaining concerns. In `--auto` mode this is automatic (stuck items dropped from the next reopen; force-pass if nothing else survives). In manual mode a `[D/R/Q]` Ink prompt asks whether to defer, retry once more (drops oldest history entry for stuck IDs), or quit. The `--auto-defer-issues` flag additionally files a GitHub issue via `gh issue create` on each defer; the file stub is always written. Both modes work across full and light flows and survive `phase-harness resume`. See `docs/HOW-IT-WORKS.md` and `docs/specs/2026-05-15-gate-retry-convergence-design.md` for the full mechanism.
 
 ### `phase-harness config`
 

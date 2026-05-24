@@ -104,6 +104,27 @@ Invalid values for the first three vars disable the feature fail-open (one stder
 
 **New `events.jsonl` event:** `gate_stagnation` is emitted once per triggered detection, immediately before the `escalation` event, with fields `phase`, `retryIndex`, `similarities[]`, `threshold`, `run`, `action: 'escalate'`.
 
+### Stubborn requirement detection (per-ID retry budget)
+
+Orthogonal to the count-based `gateRetries[phase]` limit and the Jaccard adjacent-pair stagnation detector. Every reject also has its **requirement IDs** (e.g. `R1.b`, `R8`) parsed from the reviewer's `Location: ... R<id>` evidence pointers and persisted to `state.gateRejectHistory[phase]`. The pure detector `findStubbornIds(history, threshold)` flags any ID that crosses the threshold across **distinct retries** (one strike per retry, dedup within retry).
+
+Default threshold: `4`. Override via `HARNESS_STUBBORN_ID_THRESHOLD` (integer ≥ 2; invalid value → default + one stderr warning). Active in both auto and manual modes, full and light flows, on all gate phases (2/4/7).
+
+When fired:
+- **auto mode**: the reviewer feedback is split by `- **[P0|P1|P2]**` item headers (regex `/^- \*\*\[P[0-2]\]\*\* /m`); items whose IDs are all stuck are dropped from the next reopen. If nothing survives, the gate is force-passed (`force_pass.by = 'auto-stubborn'`). A markdown stub at `<runDir>/deferred/phase-<N>-<id>.md` records the deferral. Optional `--auto-defer-issues` also spawns `gh issue create` (with a short timeout; failures are warned, not fatal).
+- **manual mode**: a single-key `[D]efer / [R]etry-once / [Q]uit` Ink prompt is rendered (distinct from the existing C/S/Q stagnation prompt). `D` runs the same auto-mode defer path. `R` drops the oldest history entry for each stuck ID — one-shot reset, re-fires on the next reject if the ID gets struck again. `Q` pauses the run (`status='paused'`, `pauseReason='gate-stubborn-id'`).
+
+State persistence:
+- `gateRejectHistory: Record<'2'|'4'|'7', GateRejectEntry[]>` — one entry per reject with `retryIndex`, `requirementIds`, `feedbackPath`, `at`. Survives `phase-harness resume`.
+- `deferredRequirements: Record<'2'|'4'|'7', DeferredRequirement[]>` — surfaced in the retrospective and as a one-line Ink banner in the Current Phase pane.
+- `autoDeferIssues: boolean` — frozen at run creation from the `--auto-defer-issues` start flag.
+
+Events: `gate_stubborn_id` (auto branch — `{ phase, retryIndex, threshold, requirementIds: string[], action: 'defer-and-continue' | 'defer-and-force-pass' | 'already-deferred' }`) and extended `escalation { reason: 'gate-stubborn-id', userChoice: 'D'|'R'|'Q', requirementIds: string[] }` (manual branch). Exactly one of the two per fire.
+
+**Reopen prompt trajectory:** every Phase 1/3/5 reopen now sees the *full* per-phase reject trajectory in the `{{feedback_paths}}` block — prior cycle reject paths, per-ID counters, and a `⚠` marker for IDs at or above threshold. This is independent of whether the detector itself fires; it is intended to give the implementer agent a clear "you have already addressed R1.b twice; reviewer keeps marking it" signal.
+
+See spec/plan: `docs/specs/2026-05-15-gate-retry-convergence-design.md`, `docs/plans/2026-05-15-gate-retry-convergence.md`.
+
 ### Drift detection (P5→P6)
 
 After a successful P5 (impl) phase, harness can optionally score how far the implementation has drifted from the approved spec/plan before advancing to P6 (verify). Drift detection issues exactly **one Codex call per P5 attempt** with the spec, plan, and `git diff planCommit..implCommit` as input, and Codex emits three axis scores (`goal`, `constraint`, `ontology`) inside a `## Drift Scores` fenced JSON block. The harness computes `score = 0.5·goal + 0.3·constraint + 0.2·ontology` and compares it against `HARNESS_PHASE_DRIFT_THRESHOLD`.
@@ -122,7 +143,7 @@ The deterministic floor described in the original design (grep-rule extraction f
 
 **Disabling per-run (`--no-drift`):** Pass `--no-drift` to `phase-harness start` or `phase-harness run` to disable drift detection for that run entirely. The flag is persisted as `state.noDrift: true` at run creation and takes precedence over `HARNESS_PHASE_DRIFT_THRESHOLD` for the lifetime of the run. `phase-harness resume --no-drift` is rejected — drift policy is frozen at run creation. To re-enable drift detection, start a new run without the flag.
 
-**Extended schema:** `escalation.reason` now includes `'gate-stagnation'` in addition to the four pre-existing values.
+**Extended schema:** `escalation.reason` now includes `'gate-stagnation'` and `'gate-stubborn-id'` in addition to the four pre-existing values. The stubborn variant additionally carries `requirementIds: string[]` and `userChoice: 'D'|'R'|'Q'`.
 
 - on P7 `REJECT`:
   - `Scope: impl` → reopen P5
@@ -375,7 +396,7 @@ When enabled, harness writes under:
   summary.json
 ```
 
-Important logged events include `phase_start`, `phase_end`, `gate_verdict`, `gate_error`, `gate_retry`, `gate_stagnation`, `verify_result`, `ui_render`, `terminal_action`, and `session_end`. The `gate_stagnation` event carries fields `phase`, `retryIndex`, `similarities` (number[]), `threshold`, `run`, `action: 'escalate'`. The `gate_verdict` event for Phase 2 additionally carries five optional fields when the ambiguity gate ran: `clarityScores` (object with goal/constraint/success/context), `ambiguity` (weighted score), `ambiguityThreshold` (threshold in effect), `ambiguityVetoed` (true if APPROVE was rewritten to REJECT), `clarityParseError` (true if score parsing failed). These fields are absent on P4/P7 events.
+Important logged events include `phase_start`, `phase_end`, `gate_verdict`, `gate_error`, `gate_retry`, `gate_stagnation`, `gate_stubborn_id`, `verify_result`, `ui_render`, `terminal_action`, and `session_end`. The `gate_stagnation` event carries fields `phase`, `retryIndex`, `similarities` (number[]), `threshold`, `run`, `action: 'escalate'`. The `gate_stubborn_id` event carries fields `phase`, `retryIndex`, `threshold`, `requirementIds` (string[]), and `action: 'defer-and-continue' | 'defer-and-force-pass' | 'already-deferred'`; it is the auto-mode counterpart to the manual-mode `escalation { reason: 'gate-stubborn-id' }` event. The `gate_verdict` event for Phase 2 additionally carries five optional fields when the ambiguity gate ran: `clarityScores` (object with goal/constraint/success/context), `ambiguity` (weighted score), `ambiguityThreshold` (threshold in effect), `ambiguityVetoed` (true if APPROVE was rewritten to REJECT), `clarityParseError` (true if score parsing failed). These fields are absent on P4/P7 events.
 The control-pane footer aggregates elapsed time plus Claude/gate token totals from those logs.
 
 ---

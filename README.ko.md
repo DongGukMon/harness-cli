@@ -222,6 +222,7 @@ phase-harness start --root /tmp/demo "task"
 - `--light` — 5단계 light flow 사용 (P1 design+plan → P2 pre-impl gate → P5 → P6 → P7)
 - `--codex-no-isolate` — Codex subprocess의 per-run `CODEX_HOME` isolation 비활성화; 권장하지 않음
 - `--no-drift` — 이 run에서 P5 → P6 drift 검출을 비활성화 (`HARNESS_PHASE_DRIFT_THRESHOLD=off`와 동등하나 run 단위로 영구 저장됨)
+- `--auto-defer-issues` — 고집스러운 요건 감지가 발동해 defer할 때 `gh issue create`로 GitHub issue도 자동 생성 (file stub은 항상 작성됨; 이 플래그는 issue 생성만 추가). start 전용; `state.autoDeferIssues`로 저장.
 - 전역 `--root <dir>` — harness root를 `<dir>/.harness`로 강제
 
 `phase-harness run`도 `start`와 동일한 플래그를 모두 지원합니다.
@@ -241,10 +242,13 @@ phase-harness start --root /tmp/demo "task"
 | `HARNESS_GATE_STAGNATION_THRESHOLD` | `0.70` | Jaccard 유사도 임계값 [0, 1]; 높을수록 엄격 |
 | `HARNESS_GATE_STAGNATION_RUN` | `2` | 에스컬레이션 전 연속 정체 쌍 수 (최소 2) |
 | `HARNESS_GATE_STAGNATION_WINDOW` | `2` | 향후 사용 예약; 현재 2로 고정 (쌍 비교) |
+| `HARNESS_STUBBORN_ID_THRESHOLD` | `4` | 고집스러운 요건 감지 임계값. 동일한 spec 요건 ID(예: `R1.b`)가 서로 다른 retry에서 이 횟수 이상 reject되면, 자율 모드에서는 자동 deferred, 수동 모드에서는 `[D/R/Q]` 프롬프트가 뜹니다. 정수 ≥ 2. 유효하지 않은 값 → 기본값 4 + stderr 경고 1회. |
 | `HARNESS_GATE_AMBIGUITY_THRESHOLD` | `0.2` | P2 spec gate 모호성 거부권 임계값 [0, 1]. `off`로 비활성화(점수는 여전히 로깅). 유효하지 않은 값 → 거부권 비활성화 + stderr 경고 1회. |
 | `HARNESS_PHASE_DRIFT_THRESHOLD` | `0.3` (자율) / `null` (수동) | P5 → P6 드리프트 검출 임계값 [0, 1]. 미설정 = 자율 모드 기본 0.3 / 수동 비활성화; 숫자 = 모드와 무관하게 그 값으로 활성화; `off` = 비활성화. 유효하지 않은 값 → 비활성화 + stderr 경고 1회. P5 성공 후 Codex 1회 호출로 점수를 산출하고 `score > threshold`면 P5를 합성 피드백과 함께 reopen합니다. **드리프트 검출 (P5→P6)** 자세한 내용은 HOW-IT-WORKS 참고. 두 설정이 동시에 적용되면 `--no-drift`가 `HARNESS_PHASE_DRIFT_THRESHOLD`를 덮어씁니다. |
 
 처음 세 변수에 잘못된 값이 있으면 해당 프로세스에서 기능이 비활성화되고 stderr에 경고 하나가 출력됩니다. 수동 모드에서는 항상 비활성화됩니다.
+
+**고집스러운 요건 감지 (per-ID retry budget):** 횟수 기반 retry limit 및 stagnation 감지와 직교하는 별도 메커니즘입니다. 매 reject에서 reviewer의 `Location:` 포인터에 적힌 요건 ID(예: `R1.b`)를 파싱해 retry 간 누적합니다. 단일 ID가 서로 다른 retry에서 `HARNESS_STUBBORN_ID_THRESHOLD`회 이상 reject되면 (기본 4) — reviewer 표현이 매번 달라도 — 해당 요건을 `.harness/<run>/deferred/phase-<N>-<id>.md`로 deferred 처리하고 나머지 issue는 계속 진행합니다. `--auto` 모드에서는 자동으로 동작합니다 (stuck 항목은 다음 reopen에서 drop, 남는 항목이 없으면 force-pass). 수동 모드에서는 `[D/R/Q]` Ink 프롬프트로 defer / 한 번 더 retry(stuck ID의 가장 오래된 history 1개 제거) / quit 중 선택합니다. `--auto-defer-issues` 플래그를 함께 주면 defer 시 `gh issue create`로 GitHub issue도 추가 생성합니다 (file stub은 항상 작성됨). 두 모드 모두 full / light flow에서 동작하며 `phase-harness resume` 후에도 유지됩니다. 자세한 메커니즘은 `docs/HOW-IT-WORKS.ko.md`와 `docs/specs/2026-05-15-gate-retry-convergence-design.md`를 참고하세요.
 
 ### `phase-harness config`
 

@@ -104,6 +104,27 @@ light flow 특이사항:
 
 **새 `events.jsonl` 이벤트:** `gate_stagnation`은 트리거된 감지당 한 번 `escalation` 이벤트 바로 전에 발생하며, `phase`, `retryIndex`, `similarities[]`, `threshold`, `run`, `action: 'escalate'` 필드를 포함합니다.
 
+### 고집스러운 요건 감지 (per-ID retry budget)
+
+횟수 기반 `gateRetries[phase]` limit 및 인접 쌍 Jaccard stagnation 감지와 **직교**합니다. 매 reject마다 reviewer의 `Location: ... R<id>` 증거 포인터에서 **요건 ID**(예: `R1.b`, `R8`)를 파싱해 `state.gateRejectHistory[phase]`에 누적합니다. 순수 감지 함수 `findStubbornIds(history, threshold)`는 **서로 다른 retry**에서 임계값을 넘긴 모든 ID를 플래그합니다 (retry당 1점, retry 내부에서는 중복 제거).
+
+기본 임계값: `4`. `HARNESS_STUBBORN_ID_THRESHOLD` (정수 ≥ 2; 유효하지 않은 값 → 기본값 + stderr 경고 1회)로 오버라이드. 자율 모드와 수동 모드, full / light flow, 모든 gate phase (2/4/7)에서 동작합니다.
+
+트리거 시:
+- **자율 모드**: reviewer feedback을 `- **[P0|P1|P2]**` item header (regex `/^- \*\*\[P[0-2]\]\*\* /m`)로 분할하고, 모든 ID가 stuck인 항목을 다음 reopen에서 drop합니다. 남는 항목이 없으면 force-pass (`force_pass.by = 'auto-stubborn'`). `<runDir>/deferred/phase-<N>-<id>.md` markdown stub에 defer 사실을 기록합니다. `--auto-defer-issues`가 켜져 있으면 `gh issue create`도 스폰합니다 (짧은 timeout 적용; 실패는 경고만, 치명적이지 않음).
+- **수동 모드**: 단일 키 `[D]efer / [R]etry-once / [Q]uit` Ink 프롬프트를 띄웁니다 (기존 stagnation C/S/Q 프롬프트와 별개). `D`는 자율 모드와 같은 defer 경로를 실행합니다. `R`은 각 stuck ID의 가장 오래된 history 1개를 제거합니다 — one-shot reset이므로 ID가 또 stuck되면 다음 reject에서 다시 발화합니다. `Q`는 run을 일시정지합니다 (`status='paused'`, `pauseReason='gate-stubborn-id'`).
+
+상태 영속화:
+- `gateRejectHistory: Record<'2'|'4'|'7', GateRejectEntry[]>` — reject당 한 항목 (`retryIndex`, `requirementIds`, `feedbackPath`, `at`). `phase-harness resume` 후에도 유지.
+- `deferredRequirements: Record<'2'|'4'|'7', DeferredRequirement[]>` — retrospective와 Current Phase pane의 한 줄 Ink 배너로 노출.
+- `autoDeferIssues: boolean` — `--auto-defer-issues` start 플래그로부터 run 생성 시 고정.
+
+이벤트: `gate_stubborn_id` (자율 분기 — `{ phase, retryIndex, threshold, requirementIds: string[], action: 'defer-and-continue' | 'defer-and-force-pass' | 'already-deferred' }`)과 확장된 `escalation { reason: 'gate-stubborn-id', userChoice: 'D'|'R'|'Q', requirementIds: string[] }` (수동 분기). 발화당 정확히 둘 중 하나만 emit됩니다.
+
+**Reopen 프롬프트 trajectory:** 모든 Phase 1/3/5 reopen은 이제 `{{feedback_paths}}` 블록에 *전체* 페이즈별 reject trajectory를 봅니다 — 이전 cycle의 reject 경로, ID별 카운터, 임계값 도달/초과 ID에 대한 `⚠` 마커. 이는 감지기 발화 여부와 무관하게 항상 적용되며, 구현 에이전트에게 "R1.b는 이미 두 번 다뤘는데 reviewer가 계속 표시한다"는 신호를 명확히 주려는 의도입니다.
+
+설계/플랜 참고: `docs/specs/2026-05-15-gate-retry-convergence-design.md`, `docs/plans/2026-05-15-gate-retry-convergence.md`.
+
 ### 드리프트 검출 (P5→P6)
 
 P5(구현) 페이즈가 성공한 직후, harness는 P6(검증) 진입 전에 구현이 spec/plan에서 얼마나 어긋났는지 선택적으로 측정할 수 있다. 드리프트 검출은 P5 시도당 정확히 **Codex 1회 호출**을 발생시키며, spec / plan / `git diff planCommit..implCommit` 을 입력으로 보내고 Codex가 `## Drift Scores` 코드 펜스 안에 세 축 점수(`goal`, `constraint`, `ontology`)를 JSON으로 emit한다. harness는 `score = 0.5·goal + 0.3·constraint + 0.2·ontology`를 계산해 `HARNESS_PHASE_DRIFT_THRESHOLD`와 비교한다.
@@ -122,7 +143,7 @@ P5(구현) 페이즈가 성공한 직후, harness는 P6(검증) 진입 전에 �
 
 **per-run 비활성화 (`--no-drift`):** `phase-harness start` 또는 `phase-harness run`에 `--no-drift`를 전달하면 해당 run에서 drift 검출이 완전히 비활성화됩니다. 이 플래그는 run 생성 시 `state.noDrift: true`로 저장되며, run 수명 전체에 걸쳐 `HARNESS_PHASE_DRIFT_THRESHOLD`보다 우선합니다. `phase-harness resume --no-drift`는 거부됩니다 — drift 정책은 run 생성 시 고정됩니다. drift 검출을 다시 활성화하려면 플래그 없이 새 run을 시작하세요.
 
-**확장된 스키마:** `escalation.reason`은 기존 네 가지 값에 더해 `'gate-stagnation'`을 포함합니다.
+**확장된 스키마:** `escalation.reason`은 기존 네 가지 값에 더해 `'gate-stagnation'`과 `'gate-stubborn-id'`를 포함합니다. stubborn 변형은 추가로 `requirementIds: string[]`과 `userChoice: 'D'|'R'|'Q'`를 포함합니다.
 
 - P7 `REJECT` 시:
   - `Scope: impl` → P5 재오픈
@@ -356,7 +377,7 @@ light flow에서는 skipped phase로 jump할 수 없습니다.
   summary.json
 ```
 
-주요 이벤트는 `phase_start`, `phase_end`, `gate_verdict`, `gate_error`, `gate_retry`, `gate_stagnation`, `verify_result`, `ui_render`, `terminal_action`, `session_end` 등입니다. `gate_stagnation` 이벤트는 `phase`, `retryIndex`, `similarities` (number[]), `threshold`, `run`, `action: 'escalate'` 필드를 포함합니다. Phase 2의 `gate_verdict` 이벤트에는 모호성 게이트 실행 시 다음 5개의 선택적 필드가 추가됩니다: `clarityScores`, `ambiguity`, `ambiguityThreshold`, `ambiguityVetoed`, `clarityParseError`. 이 필드들은 P4/P7 이벤트에는 포함되지 않습니다.
+주요 이벤트는 `phase_start`, `phase_end`, `gate_verdict`, `gate_error`, `gate_retry`, `gate_stagnation`, `gate_stubborn_id`, `verify_result`, `ui_render`, `terminal_action`, `session_end` 등입니다. `gate_stagnation` 이벤트는 `phase`, `retryIndex`, `similarities` (number[]), `threshold`, `run`, `action: 'escalate'` 필드를 포함합니다. `gate_stubborn_id` 이벤트는 `phase`, `retryIndex`, `threshold`, `requirementIds` (string[]), `action: 'defer-and-continue' | 'defer-and-force-pass' | 'already-deferred'` 필드를 포함하며, 수동 모드 `escalation { reason: 'gate-stubborn-id' }` 이벤트의 자율 모드 대응 이벤트입니다. Phase 2의 `gate_verdict` 이벤트에는 모호성 게이트 실행 시 다음 5개의 선택적 필드가 추가됩니다: `clarityScores`, `ambiguity`, `ambiguityThreshold`, `ambiguityVetoed`, `clarityParseError`. 이 필드들은 P4/P7 이벤트에는 포함되지 않습니다.
 control pane footer는 이 로그를 바탕으로 경과 시간과 Claude/gate 토큰 합계를 집계합니다.
 
 ---
