@@ -15,6 +15,7 @@ export interface ResumeOptions {
   root?: string;
   light?: boolean;
   noDrift?: boolean;
+  autoDeferIssues?: boolean;
 }
 
 export async function resumeCommand(runId?: string, options: ResumeOptions = {}): Promise<void> {
@@ -30,6 +31,14 @@ export async function resumeCommand(runId?: string, options: ResumeOptions = {})
     process.stderr.write(
       "Error: --no-drift is only valid on 'phase-harness start' / 'phase-harness run'. " +
       "Drift policy is frozen at run creation; start a new run with --no-drift if you want to skip drift.\n",
+    );
+    process.exit(1);
+  }
+
+  if (options.autoDeferIssues) {
+    process.stderr.write(
+      "Error: --auto-defer-issues is only valid on 'phase-harness start' / 'phase-harness run'. " +
+      "Setting is frozen at run creation; start a new run with --auto-defer-issues if you want it.\n",
     );
     process.exit(1);
   }
