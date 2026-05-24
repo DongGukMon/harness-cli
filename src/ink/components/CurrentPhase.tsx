@@ -1,6 +1,6 @@
 import React from 'react';
 import { Box, Text } from 'ink';
-import type { HarnessState } from '../../types.js';
+import type { DeferredRequirement, HarnessState } from '../../types.js';
 import { COLORS, truncateEnd } from '../theme.js';
 import { getPresetById } from '../../config.js';
 import { phaseLabel } from '../phase-labels.js';
@@ -31,6 +31,14 @@ export function CurrentPhase({ state, columns = 80 }: Props): React.ReactElement
   const summaryLabel = truncateEnd(label, Math.max(4, columns - summaryFixedWidth));
   const waitingText = truncateEnd('Waiting for phase completion.', Math.max(20, columns));
 
+  const deferredIds = Object.values(state.deferredRequirements ?? {})
+    .flat()
+    .filter((d): d is DeferredRequirement => Boolean(d?.requirementId))
+    .map((d) => d.requirementId);
+  const deferredLine = deferredIds.length > 0
+    ? truncateEnd(`⚠ Deferred: ${deferredIds.join(', ')}`, Math.max(20, columns))
+    : null;
+
   return (
     <Box flexDirection="column">
       <Box>
@@ -42,6 +50,9 @@ export function CurrentPhase({ state, columns = 80 }: Props): React.ReactElement
       </Box>
       {presetText && (
         <Text dimColor>Model {truncateEnd(presetText, modelBudget)}</Text>
+      )}
+      {deferredLine && (
+        <Text color={COLORS.inProgress}>{deferredLine}</Text>
       )}
       {status === 'in_progress' && (
         <Text dimColor>{waitingText}</Text>
