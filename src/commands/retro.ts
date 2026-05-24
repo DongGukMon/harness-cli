@@ -4,6 +4,8 @@ import os from 'os';
 import { findHarnessRoot } from '../root.js';
 import { computeRepoKey } from '../logger.js';
 import { generateRetrospective } from '../phases/retrospective.js';
+import { readState } from '../state.js';
+import type { HarnessState } from '../types.js';
 
 export interface RetroOptions {
   root?: string;
@@ -39,9 +41,19 @@ export async function retroCommand(runId: string, options: RetroOptions): Promis
     process.exit(1);
   }
 
+  // Best-effort load of state.json from the local run dir to surface
+  // Deferred Stubborn Requirements (gate-retry-convergence spec). If the
+  // state file is missing or unreadable, the section gracefully omits.
+  let state: HarnessState | undefined;
+  try {
+    state = readState(outDir) ?? undefined;
+  } catch {
+    state = undefined;
+  }
+
   let result: { markdown: string };
   try {
-    result = generateRetrospective(eventsPath);
+    result = generateRetrospective(eventsPath, state);
   } catch (err) {
     process.stderr.write(`[retro] ${(err as Error).message}\n`);
     process.exit(1);

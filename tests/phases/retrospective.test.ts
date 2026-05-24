@@ -3,6 +3,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { generateRetrospective } from '../../src/phases/retrospective.js';
+import type { HarnessState } from '../../src/types.js';
 
 const BASE = 1746612000000; // 2026-05-07T10:00:00Z
 
@@ -255,5 +256,119 @@ describe('determinism', () => {
     const { markdown: m1 } = generateRetrospective(p);
     const { markdown: m2 } = generateRetrospective(p);
     expect(m1).toBe(m2);
+  });
+});
+
+// ─── Deferred Stubborn Requirements section ───────────────────────────────────
+describe('Deferred Stubborn Requirements section', () => {
+  it('omits section when state has no deferred requirements', () => {
+    const p = writeFixture(tmpDir, COMPLETED_LINES);
+    const state = { deferredRequirements: {} } as unknown as HarnessState;
+    const { markdown } = generateRetrospective(p, state);
+    expect(markdown).not.toContain('## Deferred Stubborn Requirements');
+  });
+
+  it('omits section when state parameter is absent (backward compat)', () => {
+    const p = writeFixture(tmpDir, COMPLETED_LINES);
+    const { markdown } = generateRetrospective(p);
+    expect(markdown).not.toContain('## Deferred Stubborn Requirements');
+  });
+
+  it('renders deferred entries with stub path, feedback files, and gh issue url', () => {
+    const p = writeFixture(tmpDir, COMPLETED_LINES);
+    const state = {
+      deferredRequirements: {
+        '4': [{
+          requirementId: 'R1.b',
+          phase: 4 as const,
+          rejectCount: 4,
+          feedbackPaths: ['/runs/r1/gate-4-cycle-0-retry-0-feedback.md', '/runs/r1/gate-4-cycle-0-retry-1-feedback.md'],
+          stubPath: '/runs/r1/deferred/phase-4-R1.b.md',
+          deferredAt: BASE + 100000,
+          ghIssueUrl: 'https://github.com/o/r/issues/42',
+        }],
+      },
+    } as unknown as HarnessState;
+    const { markdown } = generateRetrospective(p, state);
+    expect(markdown).toContain('## Deferred Stubborn Requirements');
+    expect(markdown).toContain('**R1.b** (Phase 4) — rejected 4 times');
+    expect(markdown).toContain('Stub: /runs/r1/deferred/phase-4-R1.b.md');
+    expect(markdown).toContain('Reject feedback files: /runs/r1/gate-4-cycle-0-retry-0-feedback.md, /runs/r1/gate-4-cycle-0-retry-1-feedback.md');
+    expect(markdown).toContain('GH issue: https://github.com/o/r/issues/42');
+  });
+
+  it('omits GH issue line when ghIssueUrl is unset; omits feedback line when feedbackPaths is empty', () => {
+    const p = writeFixture(tmpDir, COMPLETED_LINES);
+    const state = {
+      deferredRequirements: {
+        '7': [{
+          requirementId: 'R2.a',
+          phase: 7 as const,
+          rejectCount: 4,
+          feedbackPaths: [],
+          stubPath: '/runs/r1/deferred/phase-7-R2.a.md',
+          deferredAt: BASE + 200000,
+        }],
+      },
+    } as unknown as HarnessState;
+    const { markdown } = generateRetrospective(p, state);
+    expect(markdown).toContain('**R2.a** (Phase 7) — rejected 4 times');
+    expect(markdown).toContain('Stub: /runs/r1/deferred/phase-7-R2.a.md');
+    expect(markdown).not.toContain('Reject feedback files:');
+    expect(markdown).not.toContain('GH issue:');
+  });
+
+  it('Gate Activity counter shows "| Deferred IDs: N" when state has deferred entries for that phase', () => {
+    // STAGNATION_LINES already has a Phase 4 gate; attach deferred entries for Phase 4.
+    const p = writeFixture(tmpDir, STAGNATION_LINES);
+    const state = {
+      deferredRequirements: {
+        '4': [
+          { requirementId: 'R1.a', phase: 4 as const, rejectCount: 4, feedbackPaths: [], stubPath: '/x', deferredAt: 0 },
+          { requirementId: 'R1.b', phase: 4 as const, rejectCount: 4, feedbackPaths: [], stubPath: '/y', deferredAt: 0 },
+        ],
+      },
+    } as unknown as HarnessState;
+    const { markdown } = generateRetrospective(p, state);
+    expect(markdown).toContain('### Phase 4 gate');
+    expect(markdown).toMatch(/Retries: 2 \| REJECTs: 3 \| Codex tokens: 3000 \| Deferred IDs: 2/);
+  });
+
+  it('Gate Activity counter omits "Deferred IDs" segment when count is 0', () => {
+    const p = writeFixture(tmpDir, STAGNATION_LINES);
+    const { markdown } = generateRetrospective(p);
+    expect(markdown).toMatch(/Retries: 2 \| REJECTs: 3 \| Codex tokens: 3000\n/);
+    expect(markdown).not.toContain('Deferred IDs:');
+  });
+
+  it('aggregates deferred entries across multiple gate phases', () => {
+    const p = writeFixture(tmpDir, COMPLETED_LINES);
+    const state = {
+      deferredRequirements: {
+        '2': [{ requirementId: 'S1', phase: 2 as const, rejectCount: 4, feedbackPaths: [], stubPath: '/s1', deferredAt: 0 }],
+        '4': [{ requirementId: 'P1', phase: 4 as const, rejectCount: 4, feedbackPaths: [], stubPath: '/p1', deferredAt: 0 }],
+        '7': [{ requirementId: 'E1', phase: 7 as const, rejectCount: 4, feedbackPaths: [], stubPath: '/e1', deferredAt: 0 }],
+      },
+    } as unknown as HarnessState;
+    const { markdown } = generateRetrospective(p, state);
+    expect(markdown).toContain('**S1** (Phase 2)');
+    expect(markdown).toContain('**P1** (Phase 4)');
+    expect(markdown).toContain('**E1** (Phase 7)');
+  });
+
+  it('section appears between Gate Activity and Escalations', () => {
+    const p = writeFixture(tmpDir, COMPLETED_LINES);
+    const state = {
+      deferredRequirements: {
+        '4': [{ requirementId: 'R1.b', phase: 4 as const, rejectCount: 4, feedbackPaths: [], stubPath: '/x', deferredAt: 0 }],
+      },
+    } as unknown as HarnessState;
+    const { markdown } = generateRetrospective(p, state);
+    const idxGate = markdown.indexOf('## Gate Activity');
+    const idxDeferred = markdown.indexOf('## Deferred Stubborn Requirements');
+    const idxEsc = markdown.indexOf('## Escalations');
+    expect(idxGate).toBeGreaterThan(-1);
+    expect(idxDeferred).toBeGreaterThan(idxGate);
+    expect(idxEsc).toBeGreaterThan(idxDeferred);
   });
 });

@@ -1,4 +1,5 @@
 import fs from 'fs';
+import type { HarnessState, DeferredRequirement } from '../types.js';
 
 export interface RetrospectiveStats {
   runId: string;
@@ -33,7 +34,10 @@ export interface RetrospectiveStats {
   totals: { claudeTokens: number; codexTokens: number };
 }
 
-export function generateRetrospective(eventsPath: string): { markdown: string; stats: RetrospectiveStats } {
+export function generateRetrospective(
+  eventsPath: string,
+  state?: HarnessState,
+): { markdown: string; stats: RetrospectiveStats } {
   // ── 1. Read + parse JSONL ──────────────────────────────────────────────────
   const raw = fs.readFileSync(eventsPath, 'utf-8'); // ENOENT throws naturally
   if (!raw.trim()) throw new Error(`events.jsonl is empty at ${eventsPath}`);
@@ -203,7 +207,7 @@ export function generateRetrospective(eventsPath: string): { markdown: string; s
     totals: { claudeTokens: totalClaudeTokens, codexTokens: totalCodexTokens },
   };
 
-  return { markdown: renderMarkdown(stats, eventsPath, events), stats };
+  return { markdown: renderMarkdown(stats, eventsPath, events, state), stats };
 }
 
 function humanizeMs(ms: number): string {
@@ -218,7 +222,7 @@ function isoFromTs(ts: number): string {
   return new Date(ts).toISOString();
 }
 
-function renderMarkdown(stats: RetrospectiveStats, eventsPath: string, events: any[]): string {
+function renderMarkdown(stats: RetrospectiveStats, eventsPath: string, events: any[], state?: HarnessState): string {
   const lines: string[] = [];
 
   // 1. Title
@@ -282,7 +286,9 @@ function renderMarkdown(stats: RetrospectiveStats, eventsPath: string, events: a
     if (!g) continue;
     anyGate = true;
     lines.push(`### Phase ${gp} gate`);
-    lines.push(`Retries: ${g.retryCount} | REJECTs: ${g.rejectCount} | Codex tokens: ${g.codexTokens}`);
+    const deferredCount = state?.deferredRequirements?.[String(gp) as '2' | '4' | '7']?.length ?? 0;
+    const deferredSeg = deferredCount > 0 ? ` | Deferred IDs: ${deferredCount}` : '';
+    lines.push(`Retries: ${g.retryCount} | REJECTs: ${g.rejectCount} | Codex tokens: ${g.codexTokens}${deferredSeg}`);
     if (gp === 2 && g.ambiguityTrend.length > 0) {
       lines.push(`Ambiguity trend: ${g.ambiguityTrend.join(' → ')}`);
     }
@@ -292,6 +298,24 @@ function renderMarkdown(stats: RetrospectiveStats, eventsPath: string, events: a
   }
   if (!anyGate) {
     lines.push('_No gate activity._');
+    lines.push('');
+  }
+
+  // 5b. Deferred Stubborn Requirements (gate-retry-convergence spec)
+  const allDeferred = Object.values(state?.deferredRequirements ?? {}).flat().filter(Boolean) as DeferredRequirement[];
+  if (allDeferred.length > 0) {
+    lines.push('## Deferred Stubborn Requirements');
+    lines.push('');
+    for (const d of allDeferred) {
+      lines.push(`- **${d.requirementId}** (Phase ${d.phase}) — rejected ${d.rejectCount} times`);
+      lines.push(`  - Stub: ${d.stubPath}`);
+      if (d.feedbackPaths.length > 0) {
+        lines.push(`  - Reject feedback files: ${d.feedbackPaths.join(', ')}`);
+      }
+      if (d.ghIssueUrl) {
+        lines.push(`  - GH issue: ${d.ghIssueUrl}`);
+      }
+    }
     lines.push('');
   }
 
