@@ -93,6 +93,18 @@ export function handleStubbornEscalationAuto(
   return { action, filteredFeedbackPath, stubPaths };
 }
 
+export function resetOldestEntryFor(
+  history: import('../../types.js').GateRejectEntry[],
+  stuckIds: string[],
+): import('../../types.js').GateRejectEntry[] {
+  const remaining = [...history];
+  for (const id of stuckIds) {
+    const idx = remaining.findIndex(e => e.requirementIds.includes(id));
+    if (idx >= 0) remaining.splice(idx, 1);
+  }
+  return remaining;
+}
+
 function tryCreateGhIssue(entry: DeferredRequirement, runId: string, runDir: string): void {
   try {
     const title = `[stubborn-requirement] Phase ${entry.phase} ${entry.requirementId} did not converge in run ${runId}`;

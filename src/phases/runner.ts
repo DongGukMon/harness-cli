@@ -23,7 +23,7 @@ import { scoreP5Drift, resolveDriftAction, writeDriftFeedback } from './drift.js
 import { readClaudeSessionUsage, claudeSessionJsonlExists } from '../runners/claude-usage.js';
 import { extractRequirementIds } from './gate/parseRejectFeedback.js';
 import { findStubbornIds, loadStubbornIdThreshold } from './stubbornIds.js';
-import { handleStubbornEscalationAuto } from './gate/stubbornEscalation.js';
+import { handleStubbornEscalationAuto, resetOldestEntryFor } from './gate/stubbornEscalation.js';
 import {
   promptChoice,
   printPhaseTransition,
@@ -876,6 +876,81 @@ export async function handleGateReject(
         state.phaseReopenFlags[String(targetInteractive)] = true;
         state.phaseReopenSource[String(targetInteractive)] = phase;
         state.currentPhase = targetInteractive;
+        writeState(runDir, state);
+        return;
+      }
+    }
+    if (stubborn.length > 0 && !state.autoMode) {
+      // Issue #98 pattern: render control panel before prompt so Ink doesn't
+      // cover the question mid-redraw.
+      renderControlPanel(state, logger, 'gate-stubborn-id-pending');
+      const choice = await promptChoice(
+        `Stubborn requirement(s) detected: ${stubborn.join(', ')} — rejected ≥${threshold} times each.`,
+        [
+          { key: 'D', label: 'Defer to follow-up and continue' },
+          { key: 'R', label: 'Retry once more (drops oldest history entry)' },
+          { key: 'Q', label: 'Quit (pause for manual fix)' },
+        ],
+        inputManager,
+      );
+      logger.logEvent({
+        event: 'escalation',
+        phase,
+        reason: 'gate-stubborn-id',
+        userChoice: choice as 'D' | 'R' | 'Q',
+        requirementIds: stubborn,
+      });
+
+      if (choice === 'D') {
+        const result = handleStubbornEscalationAuto({
+          phase, retryIndex, stubbornIds: stubborn, comments,
+          state, runDir, threshold, logger,
+        });
+        if (result.action === 'defer-and-force-pass') {
+          await forcePassGate(phase, state, runDir, cwd, 'auto-stubborn', logger);
+        } else {
+          const targetInteractive = getGateRejectReopenTarget(state, phase, scope);
+          const feedbackPaths = result.filteredFeedbackPath
+            ? [result.filteredFeedbackPath]
+            : [feedbackPathNow];
+          state.pendingAction = {
+            type: 'reopen_phase',
+            targetPhase: targetInteractive,
+            sourcePhase: phase as PhaseNumber,
+            feedbackPaths,
+          };
+          // Light Phase-7 special: same handling as the auto-mode branch.
+          if (state.flow === 'light' && phase === 7) {
+            state.carryoverFeedback = {
+              sourceGate: 7,
+              paths: feedbackPaths,
+              deliverToPhase: 5,
+            };
+            state.phases['5'] = 'pending';
+            state.phases['6'] = 'pending';
+            state.phaseReopenFlags['5'] = true;
+            state.phaseReopenSource['5'] = 7;
+            state.phaseCodexSessions['7'] = null;
+            deleteGateSidecars(runDir, 7);
+          }
+          state.phases[String(targetInteractive)] = 'pending';
+          state.phaseReopenFlags[String(targetInteractive)] = true;
+          state.phaseReopenSource[String(targetInteractive)] = phase;
+          state.currentPhase = targetInteractive;
+          writeState(runDir, state);
+        }
+        return;
+      }
+      if (choice === 'R') {
+        state.gateRejectHistory[histKey] = resetOldestEntryFor(
+          state.gateRejectHistory[histKey]!, stubborn,
+        );
+        writeState(runDir, state);
+        // Fall through to existing retry path (do NOT return) so reopen happens.
+      }
+      if (choice === 'Q') {
+        state.status = 'paused';
+        state.pauseReason = 'gate-stubborn-id';
         writeState(runDir, state);
         return;
       }

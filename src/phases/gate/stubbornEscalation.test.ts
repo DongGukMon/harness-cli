@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
-import { handleStubbornEscalationAuto } from './stubbornEscalation.js';
+import { handleStubbornEscalationAuto, resetOldestEntryFor } from './stubbornEscalation.js';
 import type { HarnessState, GateRejectEntry } from '../../types.js';
 
 const e = (ids: string[], c: number, r: number, fp: string): GateRejectEntry => ({
@@ -132,5 +132,35 @@ describe('handleStubbornEscalationAuto', () => {
     expect(result.filteredFeedbackPath).toBeUndefined(); // fell back, use original
     expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('feedback transform failed'));
     warnSpy.mockRestore();
+  });
+});
+
+describe('resetOldestEntryFor (R key behaviour)', () => {
+  const e = (ids: string[], c: number, r: number, fp: string) => ({
+    cycle: c, retryIndex: r, feedbackPath: fp, requirementIds: ids, ts: c * 10 + r,
+  });
+
+  it('drops the oldest entry containing the ID', () => {
+    const hist = [
+      e(['R1.b'], 0, 0, 'a.md'),
+      e(['R1.b', 'R8'], 0, 1, 'b.md'),
+      e(['R8'], 1, 0, 'c.md'),
+      e(['R1.b'], 1, 1, 'd.md'),
+    ];
+    const out = resetOldestEntryFor(hist as any, ['R1.b']);
+    // first entry (a.md) is the oldest containing R1.b → dropped
+    expect(out.map(x => x.feedbackPath)).toEqual(['b.md', 'c.md', 'd.md']);
+  });
+
+  it('handles multiple stuck IDs by dropping oldest per ID', () => {
+    const hist = [
+      e(['R1.b'], 0, 0, 'a.md'),
+      e(['R8'],   0, 1, 'b.md'),
+      e(['R1.b'], 1, 0, 'c.md'),
+      e(['R8'],   1, 1, 'd.md'),
+    ];
+    const out = resetOldestEntryFor(hist as any, ['R1.b', 'R8']);
+    // a.md (oldest R1.b) and b.md (oldest R8) both dropped
+    expect(out.map(x => x.feedbackPath)).toEqual(['c.md', 'd.md']);
   });
 });

@@ -21,7 +21,7 @@ export interface TrackedRepo {
 }
 
 export type RunStatus = 'in_progress' | 'completed' | 'paused';
-export type PauseReason = 'gate-escalation' | 'verify-escalation' | 'gate-error' | 'verify-error' | 'config-cancel';
+export type PauseReason = 'gate-escalation' | 'verify-escalation' | 'gate-error' | 'verify-error' | 'config-cancel' | 'gate-stubborn-id';
 export type PendingActionType = 'reopen_phase' | 'rerun_gate' | 'rerun_verify' | 'show_escalation' | 'show_verify_error' | 'skip_phase' | 'reopen_config';
 
 export interface PendingAction {
@@ -272,6 +272,7 @@ export type RenderCallsite =
   | 'terminal-complete'
   | 'gate-escalation-pending'
   | 'gate-error-pending'
+  | 'gate-stubborn-id-pending'
   | 'verify-escalation-pending'
   | 'verify-error-pending';
 
