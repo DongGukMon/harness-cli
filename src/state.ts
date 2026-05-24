@@ -331,5 +331,6 @@ export function createInitialState(
     codexNoIsolate,
     noDrift,
     dirtyBaseline: [],
+    autoDeferIssues: false,
   };
 }

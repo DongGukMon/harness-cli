@@ -78,7 +78,7 @@ export interface HarnessState {
   deferredRequirements?: Partial<Record<'2' | '4' | '7', DeferredRequirement[]>>;
   // Opt-in: shell out to `gh issue create` when a requirement is deferred.
   // File stub is written regardless. Persisted at start; resume honors it.
-  autoDeferIssues?: boolean;
+  autoDeferIssues: boolean;
   verifyRetries: number;
   pauseReason: PauseReason | null;
   specCommit: string | null;
@@ -136,8 +136,8 @@ export interface LockData {
 }
 
 export interface GateRejectEntry {
-  cycle: number;
-  retry: number;
+  cycle: number; // gateEscalationCycles[phase] value at time of reject, not a sequential counter
+  retryIndex: number; // 0-based, the just-failed attempt
   feedbackPath: string;
   requirementIds: string[];
   ts: number;
@@ -145,11 +145,11 @@ export interface GateRejectEntry {
 
 export interface DeferredRequirement {
   requirementId: string;
-  phase: 2 | 4 | 7;
+  phase: GatePhase;
   rejectCount: number;
   feedbackPaths: string[];
   stubPath: string;
-  deferredAt: number;
+  deferredAt: number; // epoch ms when defer happened (distinct from per-reject ts)
   ghIssueUrl?: string;
 }
 
