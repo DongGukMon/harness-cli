@@ -338,6 +338,7 @@ light flow에서는 skipped phase로 jump할 수 없습니다.
 
 `runPhaseLoop`가 종료해도 inner process는 즉시 종료하지 않고 control panel을 유지합니다:
 - 실패한 phase가 있으면 인라인 액션 루프(`[R]esume` / `[J]ump` / `[Q]uit`)에 진입합니다. R/J는 state를 정리한 뒤 그대로 `runPhaseLoop`에 재진입하고, Q는 정상 종료합니다.
+- `[J]`는 실패한 phase 이하의 모든 비-skipped phase를 점프 대상으로 나열합니다. gate phase(2/4/7)와 verify phase(6)도 포함됩니다 — 각 gate/verify 시도가 독립 세션으로 뜨고 jump 시 `invalidatePhaseSessionsOnJump`가 ≥target gate sidecar를 무효화하므로, 이전 phase로 재진입하면 항상 fresh runner 호출이 발생합니다. 실패한 phase를 건너뛰는 forward jump는 의도적으로 제외 — 같은 phase 재시도는 `[R]esume`, 강제 통과는 `phase-harness skip`을 사용합니다.
 - 전체 완료 시에는 idle 요약 패널(eval report 경로, commit range, wall time)이 뜨고 `SIGINT`를 기다립니다.
 
 이 동작은 `src/phases/terminal-ui.ts`에 있으며, 위에서 설명한 outer-process `commands/resume.ts` / `commands/jump.ts` (tmux/lock/SIGUSR1 plumbing)는 변경되지 않은 채 cross-process 복구 흐름을 그대로 담당합니다.

@@ -206,6 +206,49 @@ describe('performJump (inner-side)', () => {
       performJump(3, state, '/harness', makeTmpDir(), '/cwd', new MockInput() as unknown as InputManager, makeLogger())
     ).rejects.toThrow(/skipped/);
   });
+
+  it('accepts gate phase (4) as a jump target; invalidates ≥4 gate sessions', async () => {
+    const { runPhaseLoop } = await import('../../src/phases/runner.js');
+    vi.mocked(runPhaseLoop).mockClear();
+    const state = makeState({
+      currentPhase: 5,
+      phases: { '1': 'completed', '2': 'completed', '3': 'completed', '4': 'completed', '5': 'failed', '6': 'pending', '7': 'pending' },
+    });
+    state.phaseCodexSessions['2'] = { sessionId: 's2', runner: 'codex', model: 'gpt-5.5', effort: 'high', lastOutcome: 'approve' };
+    state.phaseCodexSessions['4'] = { sessionId: 's4', runner: 'codex', model: 'gpt-5.5', effort: 'high', lastOutcome: 'approve' };
+    state.phaseCodexSessions['7'] = { sessionId: 's7', runner: 'codex', model: 'gpt-5.5', effort: 'high', lastOutcome: 'reject' };
+
+    await performJump(4, state, '/harness', makeTmpDir(), '/cwd',
+      new MockInput() as unknown as InputManager, makeLogger());
+
+    expect(state.currentPhase).toBe(4);
+    expect(state.phases['4']).toBe('pending');
+    expect(state.phases['5']).toBe('pending');
+    // §4.9: invalidate ≥target gate sessions only — phase 2 lineage survives.
+    expect(state.phaseCodexSessions['2']).not.toBeNull();
+    expect(state.phaseCodexSessions['4']).toBeNull();
+    expect(state.phaseCodexSessions['7']).toBeNull();
+    expect(runPhaseLoop).toHaveBeenCalledOnce();
+  });
+
+  it('accepts verify phase (6) as a jump target', async () => {
+    const { runPhaseLoop } = await import('../../src/phases/runner.js');
+    vi.mocked(runPhaseLoop).mockClear();
+    const state = makeState({
+      currentPhase: 7,
+      phases: { '1': 'completed', '2': 'completed', '3': 'completed', '4': 'completed', '5': 'completed', '6': 'completed', '7': 'failed' },
+    });
+    state.phaseCodexSessions['7'] = { sessionId: 's7', runner: 'codex', model: 'gpt-5.5', effort: 'high', lastOutcome: 'reject' };
+
+    await performJump(6, state, '/harness', makeTmpDir(), '/cwd',
+      new MockInput() as unknown as InputManager, makeLogger());
+
+    expect(state.currentPhase).toBe(6);
+    expect(state.phases['6']).toBe('pending');
+    expect(state.phases['7']).toBe('pending');
+    expect(state.phaseCodexSessions['7']).toBeNull();
+    expect(runPhaseLoop).toHaveBeenCalledOnce();
+  });
 });
 
 describe('enterFailedTerminalState', () => {
@@ -284,6 +327,58 @@ describe('enterFailedTerminalState', () => {
       fromPhase: 5,
       targetPhase: 3,
     }));
+  });
+
+  it('J accepts a gate phase (4) as a target when ≤ failedPhase', async () => {
+    const { runPhaseLoop } = await import('../../src/phases/runner.js');
+    vi.mocked(runPhaseLoop).mockClear();
+    vi.mocked(runPhaseLoop).mockImplementationOnce(async (s: any) => {
+      s.status = 'completed';
+    });
+    const state = makeState({
+      currentPhase: 5,
+      phases: { '1': 'completed', '2': 'completed', '3': 'completed', '4': 'completed', '5': 'failed', '6': 'pending', '7': 'pending' },
+    });
+    const input = new MockInput();
+    input.enqueue('j', '4');
+    const logger = makeLogger();
+    await enterFailedTerminalState(state, '/harness', makeTmpDir(), '/cwd', input as unknown as InputManager, logger);
+    expect(state.currentPhase).toBe(4);
+    expect(runPhaseLoop).toHaveBeenCalledOnce();
+    expect(logger.logEvent).toHaveBeenCalledWith(expect.objectContaining({
+      event: 'terminal_action', action: 'jump', fromPhase: 5, targetPhase: 4,
+    }));
+  });
+
+  it('J rejects forward jump (> failedPhase) — waitForKey throws on invalid key', async () => {
+    // Forward jump (failed=5, attempt 6 or 7) must not be in the valid set.
+    // The MockInput's waitForKey throws when the key is not in the valid set,
+    // which simulates the user being unable to select it (real UI keeps prompting).
+    const state = makeState({
+      currentPhase: 5,
+      phases: { '1': 'completed', '2': 'completed', '3': 'completed', '4': 'completed', '5': 'failed', '6': 'pending', '7': 'pending' },
+    });
+    const input = new MockInput();
+    // J → 6 (forward, must NOT be in target set) → MockInput throws "key 6 not in valid set"
+    input.enqueue('j', '6');
+    await expect(
+      enterFailedTerminalState(state, '/harness', makeTmpDir(), '/cwd', input as unknown as InputManager, makeLogger())
+    ).rejects.toThrow(/key 6 not in valid set/);
+    expect(state.currentPhase).toBe(5);
+  });
+
+  it('J skips light-flow skipped phases from target list', async () => {
+    const state = makeState({
+      flow: 'light',
+      currentPhase: 5,
+      phases: { '1': 'completed', '2': 'completed', '3': 'skipped', '4': 'skipped', '5': 'failed', '6': 'pending', '7': 'pending' },
+    });
+    const input = new MockInput();
+    // J → 3 (skipped) must NOT be in target set → MockInput throws.
+    input.enqueue('j', '3');
+    await expect(
+      enterFailedTerminalState(state, '/harness', makeTmpDir(), '/cwd', input as unknown as InputManager, makeLogger())
+    ).rejects.toThrow(/key 3 not in valid set/);
   });
 
   it('shows a fast-Claude-failure hint when the most recent phase_end matches', async () => {

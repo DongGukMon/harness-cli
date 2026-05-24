@@ -357,6 +357,7 @@ In light flow, jumping into skipped phases is rejected.
 
 When `runPhaseLoop` returns, the inner process keeps the control panel alive instead of exiting:
 - A failed phase enters an inline action loop (`[R]esume` / `[J]ump` / `[Q]uit`); R and J reset state and re-enter `runPhaseLoop` in place. Q is a clean exit.
+- `[J]` lists every non-skipped phase ≤ the failed phase as a jump target, including gate phases (2/4/7) and the verify phase (6). Each gate/verify run spawns its own session and `invalidatePhaseSessionsOnJump` clears at-or-after gate sidecars on jump, so re-entering any prior phase produces a fresh runner invocation. Forward jumps over the failed phase are excluded — use `[R]esume` (retry the same phase) or `phase-harness skip` instead.
 - A completed run renders an idle summary panel (eval report path, commit range, wall time) and waits for `SIGINT`.
 
 This is implemented in `src/phases/terminal-ui.ts`; outer-process `commands/resume.ts` and `commands/jump.ts` (tmux/lock/SIGUSR1 plumbing) are unchanged and still drive the cross-process recovery flow above.

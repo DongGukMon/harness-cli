@@ -3,7 +3,7 @@ import { execSync } from 'child_process';
 import path from 'path';
 import type {
   HarnessState,
-  InteractivePhase,
+  PhaseNumber,
   PhaseStatus,
   SessionLogger,
 } from '../types.js';
@@ -26,12 +26,21 @@ export function findFailedPhase(state: HarnessState): number | null {
   return null;
 }
 
-function listJumpTargets(state: HarnessState): InteractivePhase[] {
-  const interactiveKeys = (state.flow === 'light'
-    ? ['1', '5'] : ['1', '3', '5']) as ('1' | '3' | '5')[];
-  return interactiveKeys
-    .filter(k => state.phases[k] !== 'skipped')
-    .map(k => Number(k) as InteractivePhase);
+// Targets = non-skipped phases ≤ failedPhase. Gate phases (2/4/7) and the
+// verify phase (6) are valid jump targets because each gate/verify attempt
+// spawns its own session (and `invalidatePhaseSessionsOnJump` clears the
+// at-or-after sidecars), so the user can re-run any prior phase that owns
+// an independent runner invocation. Forward jumps are deliberately excluded:
+// the failed phase still needs to complete — that is what `[R] Resume` /
+// `phase-harness skip` are for.
+function listJumpTargets(state: HarnessState, failedPhase: number): PhaseNumber[] {
+  const targets: PhaseNumber[] = [];
+  for (let n = 1 as PhaseNumber; n <= failedPhase; n = (n + 1) as PhaseNumber) {
+    const status = state.phases[String(n)];
+    if (status === undefined || status === 'skipped') continue;
+    targets.push(n);
+  }
+  return targets;
 }
 
 function summarizeRecentEvents(runDir: string, limit = 10): string {
@@ -137,7 +146,7 @@ export async function performResume(
  * invalidate gate sessions at/after target, set currentPhase, re-enter loop.
  */
 export async function performJump(
-  targetPhase: InteractivePhase,
+  targetPhase: PhaseNumber,
   state: HarnessState,
   harnessDir: string,
   runDir: string,
@@ -226,15 +235,15 @@ export async function enterFailedTerminalState(
     }
 
     // 'J' branch
-    const targets = listJumpTargets(state);
+    const targets = listJumpTargets(state, fromPhase);
     if (targets.length === 0) {
-      printError('No interactive phases available to jump to.');
+      printError('No phases available to jump to.');
       continue;
     }
     const targetKeys = new Set(targets.map(t => String(t)));
     process.stderr.write(`\nJump to which phase? (${targets.join(' / ')})\n`);
     const phaseKey = await inputManager.waitForKey(targetKeys);
-    const target = Number(phaseKey) as InteractivePhase;
+    const target = Number(phaseKey) as PhaseNumber;
     logger.logEvent({ event: 'terminal_action', action: 'jump', fromPhase, targetPhase: target });
 
     try {
