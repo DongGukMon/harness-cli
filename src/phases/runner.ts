@@ -21,6 +21,9 @@ import { runVerifyPhase } from './verify.js';
 import { StagnationDetector, loadStagnationConfig } from './stagnation.js';
 import { scoreP5Drift, resolveDriftAction, writeDriftFeedback } from './drift.js';
 import { readClaudeSessionUsage, claudeSessionJsonlExists } from '../runners/claude-usage.js';
+import { extractRequirementIds } from './gate/parseRejectFeedback.js';
+import { findStubbornIds, loadStubbornIdThreshold } from './stubbornIds.js';
+import { handleStubbornEscalationAuto } from './gate/stubbornEscalation.js';
 import {
   promptChoice,
   printPhaseTransition,
@@ -814,6 +817,58 @@ export async function handleGateReject(
     console.warn(`[stagnation] setup error: ${(err as Error).message} — detection skipped`);
   }
 
+  // === Stubborn-ID detection (gate-retry-convergence spec) ===
+  // Persist parsed IDs from this reject. Done BEFORE the retry counter so the
+  // detector can fire without consuming a retry slot.
+  {
+    const histKey = String(phase) as '2' | '4' | '7';
+    const cycleIdxNow = state.gateEscalationCycles?.[histKey] ?? 0;
+    const feedbackPathNow = saveGateFeedback(runDir, phase, comments, retryIndex, cycleIdxNow);
+    const ids = extractRequirementIds(comments);
+    state.gateRejectHistory = state.gateRejectHistory ?? {};
+    state.gateRejectHistory[histKey] = state.gateRejectHistory[histKey] ?? [];
+    state.gateRejectHistory[histKey]!.push({
+      cycle: cycleIdxNow, retryIndex, feedbackPath: feedbackPathNow,
+      requirementIds: ids, ts: Date.now(),
+    });
+
+    const threshold = loadStubbornIdThreshold();
+    const stubborn = findStubbornIds(state.gateRejectHistory[histKey]!, threshold);
+    if (stubborn.length > 0 && state.autoMode) {
+      const result = handleStubbornEscalationAuto({
+        phase, retryIndex, stubbornIds: stubborn, comments,
+        state, runDir, threshold, logger,
+      });
+      if (result.action === 'defer-and-force-pass') {
+        await forcePassGate(phase, state, runDir, cwd, 'auto-stubborn', logger);
+        return;
+      }
+      if (result.action === 'defer-and-continue' || result.action === 'already-deferred') {
+        // Reopen with filtered (or original) feedback; gateRetries NOT incremented.
+        const targetInteractive = getGateRejectReopenTarget(state, phase, scope);
+        const feedbackPaths = result.filteredFeedbackPath
+          ? [result.filteredFeedbackPath]
+          : [feedbackPathNow];
+        state.pendingAction = {
+          type: 'reopen_phase',
+          targetPhase: targetInteractive,
+          sourcePhase: phase as PhaseNumber,
+          feedbackPaths,
+        };
+        state.phases[String(targetInteractive)] = 'pending';
+        state.phaseReopenFlags[String(targetInteractive)] = true;
+        state.phaseReopenSource[String(targetInteractive)] = phase;
+        state.currentPhase = targetInteractive;
+        writeState(runDir, state);
+        return;
+      }
+    }
+    // Non-auto or detector empty → fall through to existing retry path.
+    // The existing branch will call saveGateFeedback again with the same args
+    // → idempotent overwrite (deterministic path from retryIndex+cycle).
+  }
+  // === end stubborn-ID block ===
+
   // Increment retry counter AFTER capturing retryIndex (pre-mutation)
   state.gateRetries[String(phase)] = retryIndex + 1;
 
@@ -1043,7 +1098,7 @@ export async function forcePassGate(
   state: HarnessState,
   runDir: string,
   cwd: string,
-  by: 'auto' | 'user',
+  by: 'auto' | 'user' | 'auto-stubborn',
   logger: SessionLogger,
 ): Promise<void> {
   state.pendingAction = { type: 'skip_phase', targetPhase: phase as PhaseNumber, sourcePhase: null, feedbackPaths: [] };
