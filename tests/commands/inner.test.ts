@@ -15,6 +15,8 @@ vi.mock('../../src/lock.js', () => ({
 vi.mock('../../src/phases/runner.js', () => ({
   runPhaseLoop: vi.fn().mockResolvedValue(undefined),
   handleVerifyError: vi.fn().mockResolvedValue(undefined),
+  handleGateEscalation: vi.fn().mockResolvedValue(undefined),
+  handleVerifyEscalation: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock('../../src/signal.js', () => ({
   registerSignalHandlers: vi.fn(),
@@ -58,7 +60,7 @@ vi.mock('../../src/phases/terminal-ui.js', () => ({
 }));
 
 import { updateLockPid, releaseLock } from '../../src/lock.js';
-import { runPhaseLoop } from '../../src/phases/runner.js';
+import { runPhaseLoop, handleGateEscalation, handleVerifyEscalation } from '../../src/phases/runner.js';
 import { registerSignalHandlers } from '../../src/signal.js';
 import { killSession, killWindow, selectWindow, splitPane, paneExists } from '../../src/tmux.js';
 import { findHarnessRoot } from '../../src/root.js';
@@ -926,5 +928,173 @@ describe('inner.ts: D4 live path — paused+null synthesizes failure → enterFa
 
     // After loop exit with phase 6 error, anyPhaseFailed → enterFailedTerminalState
     expect(vi.mocked(enterFailedTerminalState)).toHaveBeenCalled();
+  });
+});
+
+// Regression guard for issue #110: resuming a run paused at gate-escalation
+// must (a) skip the model-config prompt block — otherwise SIGHUP from the
+// launching pane fires onConfigCancel and process.exit(0) before any keystroke
+// is read — and (b) dispatch the show_escalation pendingAction inline so the
+// C/S/Q escalation menu actually surfaces (mirroring the pre-existing
+// show_verify_error precedent in inner.ts).
+describe('inner.ts: resume with show_escalation pendingAction (#110)', () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'inner-110-'));
+    vi.mocked(findHarnessRoot).mockReturnValue(tmpDir);
+    vi.mocked(paneExists).mockReturnValue(true);
+    vi.mocked(promptModelConfig).mockClear();
+    vi.mocked(runRunnerAwarePreflight).mockClear();
+    vi.mocked(runPhaseLoop).mockReset();
+    vi.mocked(runPhaseLoop).mockResolvedValue(undefined);
+    vi.mocked(handleGateEscalation).mockReset();
+    vi.mocked(handleGateEscalation).mockResolvedValue(undefined);
+    vi.mocked(handleVerifyEscalation).mockReset();
+    vi.mocked(handleVerifyEscalation).mockResolvedValue(undefined);
+  });
+
+  afterEach(() => {
+    vi.mocked(paneExists).mockReturnValue(false);
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  function writeEscalationState(runId: string, overrides: Record<string, unknown> = {}): string {
+    const runDir = path.join(tmpDir, runId);
+    fs.mkdirSync(runDir, { recursive: true });
+    fs.writeFileSync(path.join(runDir, 'task.md'), 'test task');
+
+    const feedbackPath = path.join(runDir, 'gate-4-feedback.md');
+    fs.writeFileSync(feedbackPath, '# Gate 4 Feedback\n\n## Reviewer Comments\n\nReject reason: needs more tests.\n');
+
+    const state = {
+      runId,
+      flow: 'full',
+      currentPhase: 4,
+      status: 'paused',
+      pauseReason: 'gate-escalation',
+      pendingAction: {
+        type: 'show_escalation',
+        targetPhase: 4,
+        sourcePhase: 3,
+        feedbackPaths: [feedbackPath],
+        scope: 'impl',
+      },
+      autoMode: false,
+      task: 'test task',
+      baseCommit: 'abc',
+      implRetryBase: 'abc',
+      codexPath: null,
+      codexNoIsolate: false,
+      externalCommitsDetected: false,
+      carryoverFeedback: null,
+      tmuxSession: 'test-sess',
+      tmuxMode: 'dedicated',
+      tmuxWindows: [],
+      tmuxControlWindow: null,
+      tmuxWorkspacePane: null,
+      tmuxOriginalWindow: null,
+      tmuxControlPane: null,
+      artifacts: {
+        spec: 'docs/specs/110-design.md',
+        plan: 'docs/plans/110.md',
+        decisionLog: `.harness/${runId}/decisions.md`,
+        checklist: `.harness/${runId}/checklist.json`,
+        evalReport: `docs/process/evals/${runId}-eval.md`,
+      },
+      phases: { '1': 'completed', '2': 'completed', '3': 'completed', '4': 'pending', '5': 'pending', '6': 'pending', '7': 'pending' },
+      phasePresets: { '1': 'opus-high', '2': 'codex-high', '3': 'sonnet-high', '4': 'codex-high', '5': 'sonnet-high', '7': 'codex-high' },
+      phaseReopenFlags: { '1': false, '3': false, '5': false },
+      phaseReopenSource: { '1': null, '3': null, '5': null },
+      gateRetries: { '2': 0, '4': 5, '7': 0 },
+      verifyRetries: 0,
+      specCommit: null,
+      planCommit: null,
+      implCommit: null,
+      evalCommit: null,
+      verifiedAtHead: null,
+      pausedAtHead: null,
+      phaseOpenedAt: { '1': null, '3': null, '5': null },
+      phaseAttemptId: { '1': null, '3': null, '5': null },
+      phaseCodexSessions: { '2': null, '4': null, '7': null },
+      phaseClaudeSessions: { '1': null, '3': null, '5': null },
+      loggingEnabled: false,
+      lastWorkspacePid: null,
+      lastWorkspacePidStartTime: null,
+      ...overrides,
+    };
+    fs.writeFileSync(path.join(runDir, 'state.json'), JSON.stringify(state));
+    return runDir;
+  }
+
+  it('skips promptModelConfig + preflight when pendingAction is show_escalation (gate-escalation)', async () => {
+    const runId = 'esc-skip-cfg-run';
+    writeEscalationState(runId);
+
+    await innerCommand(runId, { root: tmpDir, controlPane: '%0', resume: true });
+
+    // Model-config block must be bypassed — the prior session already chose presets.
+    // If left in place, the launching pane's SIGHUP fires onConfigCancel → process.exit(0)
+    // before any keystroke lands, wedging the run in paused state (issue #110).
+    expect(vi.mocked(promptModelConfig)).not.toHaveBeenCalled();
+    expect(vi.mocked(runRunnerAwarePreflight)).not.toHaveBeenCalled();
+  });
+
+  it('dispatches show_escalation to handleGateEscalation inline (gate-escalation pauseReason)', async () => {
+    const runId = 'esc-gate-dispatch-run';
+    writeEscalationState(runId);
+
+    await innerCommand(runId, { root: tmpDir, controlPane: '%0', resume: true });
+
+    // Without this dispatch, line 263's `state.status === 'paused'` short-circuit fires
+    // and the run silently exits in paused state — the C/S/Q menu never appears and
+    // the user is stuck (re-resuming hits the same wall).
+    expect(vi.mocked(handleGateEscalation)).toHaveBeenCalled();
+    const call = vi.mocked(handleGateEscalation).mock.calls[0];
+    expect(call[0]).toBe(4); // gate phase
+    expect(typeof call[1]).toBe('string'); // comments
+    expect(call[1]).toContain('Reject reason'); // feedback body stripped past marker
+    expect(call[2]).toBe('impl'); // scope
+  });
+
+  it('routes show_escalation to handleVerifyEscalation when pauseReason is verify-escalation', async () => {
+    const runId = 'esc-verify-dispatch-run';
+    const runDir = writeEscalationState(runId, {
+      currentPhase: 6,
+      pauseReason: 'verify-escalation',
+      pendingAction: {
+        type: 'show_escalation',
+        targetPhase: 6,
+        sourcePhase: 5,
+        feedbackPaths: [path.join(tmpDir, runId, 'verify-feedback.md')],
+        scope: 'impl',
+      },
+      phases: { '1': 'completed', '2': 'completed', '3': 'completed', '4': 'completed', '5': 'completed', '6': 'pending', '7': 'pending' },
+    });
+    // Write verify-feedback file referenced above
+    fs.writeFileSync(path.join(runDir, 'verify-feedback.md'), 'verify failed: foo');
+
+    await innerCommand(runId, { root: tmpDir, controlPane: '%0', resume: true });
+
+    expect(vi.mocked(handleVerifyEscalation)).toHaveBeenCalled();
+    expect(vi.mocked(handleGateEscalation)).not.toHaveBeenCalled();
+  });
+
+  it('source-level: inner.ts gates promptModelConfig on !show_escalation AND dispatches handleGateEscalation before runPhaseLoop', () => {
+    const srcPath = path.resolve(__dirname, '../../src/commands/inner.ts');
+    const src = fs.readFileSync(srcPath, 'utf-8');
+
+    // Must import handleGateEscalation from phases/runner.js
+    expect(src).toMatch(/handleGateEscalation[^;]*from ['"]\.\.\/phases\/runner\.js['"]/);
+
+    // Must reference show_escalation in source (model-config bypass + dispatch)
+    const showEscMatches = src.match(/show_escalation/g) ?? [];
+    expect(showEscMatches.length).toBeGreaterThanOrEqual(2);
+
+    // handleGateEscalation invocation must appear before runPhaseLoop call
+    const dispatchIdx = src.search(/await\s+handleGateEscalation\(/);
+    const loopIdx = src.search(/await\s+runPhaseLoop\(/);
+    expect(dispatchIdx).toBeGreaterThan(-1);
+    expect(loopIdx).toBeGreaterThan(dispatchIdx);
   });
 });
