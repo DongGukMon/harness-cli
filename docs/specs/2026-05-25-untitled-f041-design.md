@@ -77,8 +77,7 @@ Small — touches one logical area (Phase 6 verify / artifact commit). LoC count
 - **R3.a**: When `runPhase6Preconditions` throws in Step 1 (staged guard), the error message MUST be `"Working tree must be clean before verification: staged files outside eval report: <comma-separated list>"`.
 - **R3.b**: When `runPhase6Preconditions` throws in Step 2 (porcelain filter), the error message MUST be `"Working tree must be clean before verification: dirty paths: <comma-separated XY+path tokens, max 10>"`.
 - **R3.c**: When `runPhase6Preconditions` throws in Step 4 (post-cleanup final check), the error message MUST be `"Working tree is not clean after eval report cleanup: dirty paths: <comma-separated XY+path tokens, max 10>"`.
-- **R3.d**: In `src/phases/runner.ts`, the `try { commitEvalReport(...) } catch (err)` block that emits `phase_end status: 'failed'` with `details.reason: 'eval_commit_failed'` MUST also emit `details.offendingPaths` when the underlying throw came from `runPhase6Preconditions` (i.e. the error message starts with `"Working tree"`); the value is the substring after `"dirty paths: "` (or `"staged files outside eval report: "`), best-effort parsed back into a `string[]`. When the error came from another path, `offendingPaths` is omitted.
-  - Note: the runner-side throw for preconditions happens earlier than the `commitEvalReport` try/catch — `runPhase6Preconditions` is called inside `runVerifyPhase`. So R3.d's `phase_end.details.offendingPaths` enrichment lives in the `verify_throw` event chain, not the `eval_commit_failed` chain. Implementation: when `runVerifyPhase` (or its catch in the runner) catches the precondition throw, add `details.offendingPaths` to the corresponding `phase_end` event.
+- **R3.d**: `runPhase6Preconditions` is called inside `runVerifyPhase` (`src/phases/verify.ts:98`), BEFORE any `commitEvalReport` call. Therefore precondition throws surface through the `verify_throw` event chain, not `eval_commit_failed`. The runner-side catch around `runVerifyPhase` (currently in `handleVerifyPhase` at `src/phases/runner.ts:1307-1322`, emitting `details: { reason: 'verify_throw' }`) MUST also emit `details.offendingPaths` when the caught error's message starts with `"Working tree"` (the prefix shared by R3.a / R3.b / R3.c). The value is the substring after `"dirty paths: "` (R3.b / R3.c) or `"staged files outside eval report: "` (R3.a), best-effort parsed back into a `string[]` (split on `, `; cap at 10 entries to mirror R3.b/R3.c). When the error came from another path (e.g. unrelated throw with a different prefix) `offendingPaths` MUST be omitted entirely from `details`. The `eval_commit_failed` chain (`commitEvalReport` catch around runner.ts:1336) is NOT modified by this requirement — it does not see precondition throws.
 
 ### R4 — backward compatibility
 
@@ -96,6 +95,7 @@ Small — touches one logical area (Phase 6 verify / artifact commit). LoC count
 - **SC6**: `pnpm tsc --noEmit` passes (lint alias).
 - **SC7**: `pnpm vitest run` passes (full suite). Existing tests that mock `commitEvalReport` are updated to use the new return-type union.
 - **SC8**: `pnpm build` passes.
+- **SC9**: New test (extension of `tests/phases/runner.test.ts` or a new `tests/phases/verify-throw-offending-paths.test.ts`) triggers a legitimate Phase 6 precondition failure via `runPhase6Preconditions` throwing with a R3.b-shaped message (e.g. setup repo with a modified-tracked file outside baseline), runs `handleVerifyPhase`, and asserts the captured `phase_end` event has `details.reason === 'verify_throw'` AND `details.offendingPaths` is a non-empty `string[]` containing the offending path. A second case asserts that when the underlying throw uses a non-`"Working tree"` prefix, `details.offendingPaths` is absent (per R3.d's "omitted entirely" clause).
 
 ## Invariants
 
@@ -126,6 +126,7 @@ Small — touches one logical area (Phase 6 verify / artifact commit). LoC count
 12. `tests/integration/p6-mid-session-dirt.test.ts` — synthesize a P6 run, drop an untracked file before precondition, assert `dirty_baseline_extended` event with correct `addedPaths` lands in `events.jsonl` (SC5).
 13. Update `tests/phases/eval-report-commit-squash.test.ts` to cover the byte-identical regenerate path (already exercises `commitEvalReport`).
 14. Update all mock sites that return `commitEvalReport: vi.fn().mockReturnValue('committed')` to also exercise an `'unchanged'` return-value path in at least one test per file.
+14a. New test covering R3.d `phase_end.details.offendingPaths` enrichment via `handleVerifyPhase` catch (SC9): one positive case (R3.b-style throw → `offendingPaths` populated) and one negative case (non-`"Working tree"`-prefixed throw → `offendingPaths` absent from `details`).
 
 ### Manual smoke
 
