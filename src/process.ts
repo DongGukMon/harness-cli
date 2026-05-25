@@ -105,6 +105,22 @@ export function isPidAlive(pid: number): boolean {
 }
 
 /**
+ * Return true when the PID is alive AND its actual start time matches the
+ * persisted value (within a 2-second epoch-rounding tolerance). Guards
+ * against PID-recycling false-positives: a long-dead PID may have been
+ * reused by another process whose start time will differ wildly.
+ *
+ * Lifted out of `signal.ts` so the UI layer (#116 B1 worker-liveness
+ * indicator) can share the exact same guard as the SIGUSR1 kill path.
+ */
+export function isSameProcessInstance(pid: number, savedStartTime: number | null): boolean {
+  if (savedStartTime === null) return false;
+  const actualStart = getProcessStartTime(pid);
+  if (actualStart === null) return false;
+  return Math.abs(actualStart - savedStartTime) <= 2;
+}
+
+/**
  * Kill an entire process group: SIGTERM → wait → SIGKILL if still alive.
  * Returns when group is confirmed dead (ESRCH).
  */

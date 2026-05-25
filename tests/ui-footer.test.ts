@@ -84,6 +84,27 @@ describe('footer formatting helpers', () => {
     expect(formatFooter(makeSummary(), -1)).toBe('');
   });
 
+  it('renders the actual failed-attempt duration (not "0m 00s") when phaseRunningElapsedMs is provided after timeout (#116 B2)', () => {
+    // 30-minute hard-cap timeout: the aggregator now supplies the actual
+    // failed-attempt duration; the formatted footer must reflect it instead
+    // of the misleading "0m 00s" that the operator reads as "phase failed
+    // instantly".
+    const line = formatFooter(
+      makeSummary({
+        currentPhase: 3,
+        attempt: 1,
+        phaseRunningElapsedMs: 1_800_000,
+      }),
+      100,
+    );
+
+    expect(line).toContain('30m 00s phase');
+    // Must not show the misleading "· 0m 00s phase" segment (the leading
+    // separator distinguishes from "30m 00s phase" which contains "0m 00s"
+    // as a substring).
+    expect(line).not.toContain('· 0m 00s phase');
+  });
+
   it('writes the exact footer ANSI sequence to stderr for a non-empty line', () => {
     const stderrWrite = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
     const stdoutWrite = vi.spyOn(process.stdout, 'write').mockReturnValue(true);

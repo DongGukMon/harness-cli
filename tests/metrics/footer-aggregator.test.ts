@@ -190,6 +190,36 @@ describe('footer-aggregator', () => {
     });
   });
 
+  it('returns the failed-attempt duration (not null) when the interactive phase ended in failure (#116 B2)', () => {
+    const summary = aggregateFooter(
+      [
+        sessionStart(1_000),
+        phaseStart(5_000, 3, 'p3-a1'),
+        phaseEnd(1_805_000, 3, 'failed', { attemptId: 'p3-a1', durationMs: 1_800_000 }),
+      ],
+      { currentPhase: 3, gateRetries: {}, phaseStatus: 'failed' },
+      1_810_000,
+    );
+
+    // The display must reflect the actual time the failed attempt ran
+    // (e.g. ~30 min on a hard-cap timeout), NOT null which formats as "0m 00s".
+    expect(summary?.phaseRunningElapsedMs).toBe(1_800_000);
+  });
+
+  it('returns the failed-attempt duration (not null) when interactive phase status is error', () => {
+    const summary = aggregateFooter(
+      [
+        sessionStart(1_000),
+        phaseStart(2_000, 1, 'p1-a1'),
+        phaseEnd(60_000, 1, 'failed', { attemptId: 'p1-a1', durationMs: 58_000 }),
+      ],
+      { currentPhase: 1, gateRetries: {}, phaseStatus: 'error' },
+      70_000,
+    );
+
+    expect(summary?.phaseRunningElapsedMs).toBe(58_000);
+  });
+
   it('pairs phase 6 starts and ends positionally to decide whether verify is still running', () => {
     const running = aggregateFooter(
       [

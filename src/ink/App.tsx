@@ -23,7 +23,7 @@ export function App(): React.ReactElement {
     return <Text dimColor>Initializing…</Text>;
   }
 
-  const { state, callsite, footerSummary } = snap;
+  const { state, callsite, footerSummary, workerLiveness } = snap;
   return (
     <Box flexDirection="column">
       <Header state={state} elapsedMs={footerSummary?.phaseRunningElapsedMs ?? null} columns={columns} />
@@ -32,7 +32,7 @@ export function App(): React.ReactElement {
       </Box>
       <PhaseTimeline state={state} columns={columns} />
       <Box marginTop={1}>
-        <CurrentPhase state={state} columns={columns} />
+        <CurrentPhase state={state} columns={columns} workerLiveness={workerLiveness} />
       </Box>
       <GateVerdict state={state} />
       <ActionMenu state={state} callsite={callsite} />

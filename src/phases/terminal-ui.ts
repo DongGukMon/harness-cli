@@ -10,6 +10,28 @@ import type {
 import type { InputManager } from '../input.js';
 import { writeState, invalidatePhaseSessionsOnJump } from '../state.js';
 import { renderControlPanel, printError, printInfo } from '../ui.js';
+import { isPidAlive, isSameProcessInstance } from '../process.js';
+import type { WorkerLiveness } from '../ink/store.js';
+
+/**
+ * Issue #116 B1 — compute the workspace-pane worker liveness once at
+ * terminal-failed entry. Uses the same PID-recycling guard as the SIGUSR1
+ * kill path (`signal.ts`) so a long-dead PID whose slot was reused does
+ * not surface as "alive". Returns undefined when no last PID is tracked
+ * (e.g. interactive phase that never spawned a worker — nothing useful
+ * to signal).
+ */
+function computeWorkerLiveness(state: HarnessState): WorkerLiveness | undefined {
+  const pid = state.lastWorkspacePid;
+  if (pid === null) return undefined;
+  if (!isPidAlive(pid)) return 'dead';
+  if (!isSameProcessInstance(pid, state.lastWorkspacePidStartTime)) {
+    // Same PID number, different process instance — treat as dead so the
+    // operator doesn't think they'll lose work pressing [R].
+    return 'dead';
+  }
+  return 'alive';
+}
 
 export function anyPhaseFailed(state: HarnessState): boolean {
   return Object.values(state.phases).some(s => s === 'failed' || s === 'error');
@@ -191,7 +213,11 @@ export async function enterFailedTerminalState(
   const sidecarReplayAllowed = { value: false };
 
   while (true) {
-    renderControlPanel(state, logger, 'terminal-failed');
+    // Compute worker liveness once per loop iteration — the operator is
+    // about to pick an action so a single snapshot is the right granularity
+    // (per design constraint: pure rendering signal, no long-running polling).
+    const workerLiveness = computeWorkerLiveness(state);
+    renderControlPanel(state, logger, 'terminal-failed', workerLiveness);
 
     const failedPhase = findFailedPhase(state);
     if (failedPhase !== null) {

@@ -1,18 +1,11 @@
 import fs from 'fs';
 import path from 'path';
 import type { HarnessState } from './types.js';
-import { killProcessGroup, isPidAlive, getProcessStartTime } from './process.js';
+import { killProcessGroup, isPidAlive, isSameProcessInstance } from './process.js';
 import { sendKeysToPane } from './tmux.js';
 import { getHead } from './git.js';
 import { writeState, invalidatePhaseSessionsOnJump } from './state.js';
 import { SIGTERM_WAIT_MS, GATE_PHASES, getPresetById } from './config.js';
-
-function isSameProcessInstance(pid: number, savedStartTime: number | null): boolean {
-  if (savedStartTime === null) return false;
-  const actualStart = getProcessStartTime(pid);
-  if (actualStart === null) return false;
-  return Math.abs(actualStart - savedStartTime) <= 2;
-}
 
 export interface SignalContext {
   harnessDir: string;
