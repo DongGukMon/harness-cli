@@ -16,6 +16,7 @@ import { REQUIRED_PHASE_KEYS, getEffectiveReopenTarget, getRequiredPhaseKeys, ge
 import { createSessionLogger } from '../logger.js';
 import { HARNESS_VERSION } from '../version.js';
 import { codexHomeFor } from '../runners/codex-isolation.js';
+import { tryInlineCompleteFreshSentinel } from '../resume.js';
 import type { SessionLogger, HarnessState } from '../types.js';
 import { promptForTask } from '../task-prompt.js';
 
@@ -167,12 +168,30 @@ export async function innerCommand(runId: string, options: InnerOptions = {}): P
     cwd,
   });
 
-  // Step 5.5: Resume recovery (if --resume flag)
-  // Note: resumeRun from src/resume.ts currently does recovery + runs phase loop.
-  // For now, we skip calling resumeRun here (deferred refactor).
-  // consumePendingAction already handles file-based actions.
-  // typed state.pendingAction (reopen_phase, etc.) will be replayed inside the phase loop
-  // via existing logic in runner.ts.
+  // Step 5.5: Pre-loop inline-completion recovery for fresh-sentinel resumes
+  // (issue #117 Bug B follow-up).
+  //
+  // The full `resumeRun` codepath is still deliberately skipped here (the
+  // remaining validateCompletedArtifacts / validateAncestry / runPhaseLoop
+  // pieces live in resume.ts; pulling them in is a separate refactor). What we
+  // DO call is the sliver that re-uses PR #120's diagnostic + sentinel
+  // hygiene policy verbatim: when the current phase is 1/3/5 in 'in_progress'
+  // or 'failed' AND a sentinel file matches `state.phaseAttemptId[phase]`,
+  // attempt inline completion before computing `remainingPhases` and before
+  // promptModelConfig. Without this, the originally reported scenario
+  // (P5 failed + fresh sentinel + advanced HEAD) loops back to the
+  // [R][J][Q] failed UI on every `phase-harness resume` invocation through
+  // the tmux path with no log signal — `recoverGeneralState` never fires
+  // here, only inside `resumeRun`.
+  //
+  // The helper either advances `state.currentPhase` (silent or with the
+  // PR #120 success stderr line), or emits one of the PR #120 rejection
+  // lines, or is a silent no-op when there's no sentinel to recover.
+  //
+  // typed state.pendingAction (reopen_phase, show_verify_error, etc.) is still
+  // handled below by the existing inline dispatchers and runner.ts logic;
+  // consumePendingAction handles file-based actions earlier.
+  tryInlineCompleteFreshSentinel(state, cwd, runDir);
 
   // Step 5.6: Create logger (before InputManager so onConfigCancel can close over it)
   const isResume = options.resume === true;
