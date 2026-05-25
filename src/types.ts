@@ -363,7 +363,13 @@ export type LogEvent =
     })
   | (LogEventBase & { event: 'force_pass'; phase: number; by: 'auto' | 'user' | 'auto-stubborn' })
   | (LogEventBase & { event: 'verify_result'; passed: boolean; retryIndex: number; durationMs: number; failedChecks?: string[] })
-  | (LogEventBase & { event: 'phase_end'; phase: number; attemptId?: string | null; status: 'completed' | 'failed'; durationMs: number; details?: { reason: string; error?: string }; claudeTokens?: ClaudeTokens | null; codexTokens?: ClaudeTokens | null; uncommittedRepos?: Array<{ path: string; count: number }> })
+  | (LogEventBase & {
+      event: 'dirty_baseline_extended';
+      phase: 6;
+      addedPaths: string[];
+      totalCount: number;
+    })
+  | (LogEventBase & { event: 'phase_end'; phase: number; attemptId?: string | null; status: 'completed' | 'failed'; durationMs: number; details?: { reason: string; error?: string; offendingPaths?: string[] }; claudeTokens?: ClaudeTokens | null; codexTokens?: ClaudeTokens | null; uncommittedRepos?: Array<{ path: string; count: number }> })
   | (LogEventBase & {
       event: 'phase_drift';
       phase: 5;

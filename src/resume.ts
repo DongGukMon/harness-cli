@@ -193,7 +193,9 @@ async function recoverGeneralState(
     if (isEvalReportValid(evalReportPath)) {
       try {
         const result = commitEvalReport(state, docsRoot);
-        if (result === 'committed') {
+        // R1.d: 'committed' and 'unchanged' both anchor evalCommit + verifiedAtHead;
+        // only 'gitignored' clears them.
+        if (result === 'committed' || result === 'unchanged') {
           const head = getHead(docsRoot);
           state.evalCommit = head;
           state.verifiedAtHead = head;
@@ -241,7 +243,7 @@ async function applyStoredVerifyResult(
 
   if (result.exitCode === 0 && isEvalReportValid(evalReportPath)) {
     // PASS: commit the eval report (normalize_artifact_commit), set anchors, advance
-    let evalCommitResult: 'committed' | 'skipped';
+    let evalCommitResult: 'committed' | 'unchanged' | 'gitignored';
     try {
       evalCommitResult = commitEvalReport(state, docsRoot);
     } catch {
@@ -250,9 +252,11 @@ async function applyStoredVerifyResult(
       writeState(runDir, state);
       return;
     }
-    if (evalCommitResult === 'committed') {
+    // R1.d: 'committed' and 'unchanged' both anchor evalCommit + verifiedAtHead;
+    // only 'gitignored' clears them.
+    if (evalCommitResult === 'committed' || evalCommitResult === 'unchanged') {
       try {
-        const head = getHead(cwd);
+        const head = getHead(docsRoot);
         state.evalCommit = head;
         state.verifiedAtHead = head;
       } catch { /* leave as-is */ }

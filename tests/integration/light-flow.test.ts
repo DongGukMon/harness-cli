@@ -29,7 +29,7 @@ vi.mock('../../src/artifact.js', async (importOriginal) => {
     ...actual,
     commitEvalReport: vi.fn().mockReturnValue('committed'),
     normalizeArtifactCommit: vi.fn(),
-    runPhase6Preconditions: vi.fn(),
+    runPhase6Preconditions: vi.fn().mockReturnValue({ extendedBaseline: [] }),
   };
 });
 
@@ -54,6 +54,7 @@ vi.mock('../../src/ui.js', () => ({
 import { runPhaseLoop, handleGatePhase } from '../../src/phases/runner.js';
 import { runInteractivePhase } from '../../src/phases/interactive.js';
 import { runGatePhase } from '../../src/phases/gate.js';
+import { commitEvalReport } from '../../src/artifact.js';
 import { createInitialState, writeState, readState } from '../../src/state.js';
 import { NoopLogger } from '../../src/logger.js';
 import { InputManager } from '../../src/input.js';
@@ -239,5 +240,55 @@ describe('light-flow end-to-end (P1 → P5 → P6 → P7)', () => {
     expect(persisted.carryoverFeedback).not.toBeNull();
     expect(persisted.carryoverFeedback?.deliverToPhase).toBe(5);
     expect(persisted.carryoverFeedback?.paths[0]).toMatch(/gate-7-feedback\.md$/);
+  });
+
+  // I4 (caller side): commitEvalReport returning 'unchanged' MUST drive the
+  // caller to anchor state.evalCommit + state.verifiedAtHead to HEAD, NOT
+  // null. This covers the byte-identical-regenerate path (P7 → P5 reopen →
+  // P5 reproduces the same eval report → P6 commit is a no-op).
+  it('commitEvalReport "unchanged" path anchors state.evalCommit to HEAD (I4)', async () => {
+    const state = createInitialState('r1', 'dummy', 'base-sha', false, false, 'light');
+    writeState(runDir, state);
+
+    fs.writeFileSync(path.join(cwd, 'docs/specs/r1-design.md'), '# combined spec');
+
+    vi.mocked(runInteractivePhase).mockImplementationOnce(async (_p: any, st: any, _h: any, _r: any, _c: any, aid: any) => {
+      st.phases['1'] = 'completed';
+      return { status: 'completed', attemptId: aid } as any;
+    });
+    vi.mocked(runGatePhase).mockResolvedValueOnce({
+      type: 'verdict', verdict: 'APPROVE', comments: '',
+      rawOutput: '## Verdict\nAPPROVE\n', runner: 'codex',
+      durationMs: 1, tokensTotal: 0, promptBytes: 0,
+      codexSessionId: 's-gate2', recoveredFromSidecar: false,
+      resumedFrom: null, resumeFallback: false,
+      sourcePreset: { model: 'gpt-5.5', effort: 'high' },
+    } as any);
+    vi.mocked(runInteractivePhase).mockImplementationOnce(async (_p: any, st: any, _h: any, _r: any, _c: any, aid: any) => {
+      st.phases['5'] = 'completed';
+      st.implCommit = 'impl-sha';
+      return { status: 'completed', attemptId: aid } as any;
+    });
+    // Override the default commitEvalReport mock to exercise 'unchanged'
+    vi.mocked(commitEvalReport).mockReturnValueOnce('unchanged');
+    vi.mocked(runGatePhase).mockResolvedValueOnce({
+      type: 'verdict', verdict: 'APPROVE', comments: '',
+      rawOutput: '## Verdict\nAPPROVE\n', runner: 'codex',
+      durationMs: 1, tokensTotal: 0, promptBytes: 0,
+      codexSessionId: 's-gate7', recoveredFromSidecar: false,
+      resumedFrom: null, resumeFallback: false,
+      sourcePreset: { model: 'gpt-5.5', effort: 'high' },
+    } as any);
+
+    const logger = new NoopLogger();
+    await runPhaseLoop(state, harnessDir, runDir, cwd, createNoOpInputManager(), logger, { value: false });
+
+    const persisted = readState(runDir)!;
+    // Phase 6 still completes — 'unchanged' is treated as success.
+    expect(persisted.phases['6']).toBe('completed');
+    // evalCommit + verifiedAtHead anchor to HEAD (mocked as 'mock-head'),
+    // NOT null. This is the spec's I4 contract on the caller side.
+    expect(persisted.evalCommit).toBe('mock-head');
+    expect(persisted.verifiedAtHead).toBe('mock-head');
   });
 });

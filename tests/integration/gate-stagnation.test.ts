@@ -40,7 +40,7 @@ vi.mock('../../src/ui.js', () => ({
 
 vi.mock('../../src/artifact.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../src/artifact.js')>();
-  return { ...actual, commitEvalReport: vi.fn().mockReturnValue('committed'), normalizeArtifactCommit: vi.fn().mockReturnValue(true), runPhase6Preconditions: vi.fn() };
+  return { ...actual, commitEvalReport: vi.fn().mockReturnValue('committed'), normalizeArtifactCommit: vi.fn().mockReturnValue(true), runPhase6Preconditions: vi.fn().mockReturnValue({ extendedBaseline: [] }) };
 });
 
 vi.mock('../../src/git.js', () => ({

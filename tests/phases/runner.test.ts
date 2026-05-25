@@ -46,7 +46,7 @@ vi.mock('../../src/artifact.js', async (importOriginal) => {
     ...actual,
     commitEvalReport: vi.fn().mockReturnValue('committed'),
     normalizeArtifactCommit: vi.fn().mockReturnValue(true),
-    runPhase6Preconditions: vi.fn(),
+    runPhase6Preconditions: vi.fn().mockReturnValue({ extendedBaseline: [] }),
   };
 });
 
@@ -93,7 +93,7 @@ import { runInteractivePhase } from '../../src/phases/interactive.js';
 import { runGatePhase } from '../../src/phases/gate.js';
 import { runVerifyPhase } from '../../src/phases/verify.js';
 import { promptChoice, printPhaseTransition, renderControlPanel } from '../../src/ui.js';
-import { normalizeArtifactCommit } from '../../src/artifact.js';
+import { normalizeArtifactCommit, commitEvalReport } from '../../src/artifact.js';
 import { getHead } from '../../src/git.js';
 import { writeState } from '../../src/state.js';
 import { InputManager } from '../../src/input.js';
@@ -1668,6 +1668,34 @@ describe('handleVerifyPhase — event emission', () => {
       expect(phaseEnd).toBeDefined();
       expect(phaseEnd.status).toBe('completed');
       expect(typeof phaseEnd.durationMs).toBe('number');
+    } finally {
+      cleanup();
+    }
+  });
+
+  // I4 (caller side): when commitEvalReport returns 'unchanged', the caller
+  // MUST set state.evalCommit + state.verifiedAtHead to HEAD (NOT null) — the
+  // 'unchanged' branch is byte-identical-regenerate, so HEAD already carries
+  // the eval report and remains the authoritative anchor.
+  it('unchanged path: state.evalCommit + verifiedAtHead anchor to HEAD (I4)', async () => {
+    const runDir = makeTmpDir();
+    const state = makeState({ currentPhase: 6, verifyRetries: 0, evalCommit: null, verifiedAtHead: null });
+    const { logger, cleanup } = makeTestLogger(state.runId);
+
+    // Earlier tests in this file override the file-level getHead default
+    // via mockReturnValue (e.g. 'impl-commit-sha'). vi.clearAllMocks() does
+    // not restore mockReturnValue settings, so explicitly pin HEAD here.
+    vi.mocked(getHead).mockReturnValue('unchanged-head-sha');
+    vi.mocked(runVerifyPhase).mockResolvedValueOnce({ type: 'pass' });
+    vi.mocked(commitEvalReport).mockReturnValueOnce('unchanged');
+
+    try {
+      await handleVerifyPhase(state, HDIR, runDir, CWD, createNoOpInputManager(), logger);
+      expect(state.evalCommit).toBe('unchanged-head-sha');
+      expect(state.verifiedAtHead).toBe('unchanged-head-sha');
+      // Phase should still advance like the 'committed' case.
+      expect(state.phases['6']).toBe('completed');
+      expect(state.currentPhase).toBe(7);
     } finally {
       cleanup();
     }

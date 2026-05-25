@@ -2,7 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { spawn } from 'child_process';
 
-import type { HarnessState, VerifyOutcome, VerifyResult } from '../types.js';
+import type { HarnessState, SessionLogger, VerifyOutcome, VerifyResult } from '../types.js';
 import { VERIFY_TIMEOUT_MS, SIGTERM_WAIT_MS } from '../config.js';
 import { writeState } from '../state.js';
 import { updateLockChild, clearLockChild } from '../lock.js';
@@ -83,7 +83,8 @@ export async function runVerifyPhase(
   state: HarnessState,
   harnessDir: string,
   runDir: string,
-  cwd: string
+  cwd: string,
+  logger: SessionLogger,
 ): Promise<VerifyOutcome> {
   // Step 1: Delete stale verify-result.json
   const resultPath = path.join(runDir, VERIFY_RESULT_FILE);
@@ -93,9 +94,33 @@ export async function runVerifyPhase(
     // Ignore if not present
   }
 
-  // Step 2: Run preconditions while phase is still pending
+  // Step 2: Run preconditions while phase is still pending.
+  // R2.e: persist auto-extended baseline + emit dirty_baseline_extended event.
   const docsRoot = state.trackedRepos?.[0]?.path || cwd;
-  runPhase6Preconditions(state.artifacts.evalReport, state.runId, docsRoot, state.dirtyBaseline ?? []);
+  const { extendedBaseline } = runPhase6Preconditions(
+    state.artifacts.evalReport,
+    state.runId,
+    docsRoot,
+    state.dirtyBaseline ?? [],
+  );
+
+  if (extendedBaseline.length > 0) {
+    // I2: dirtyBaseline monotone-growing. Spread existing + extension into a
+    // fresh array so the input is never mutated through aliasing.
+    state.dirtyBaseline = [...(state.dirtyBaseline ?? []), ...extendedBaseline];
+    writeState(runDir, state);
+    // Strip fingerprint format ("XY\0path\0hash") down to readable path-only for logs.
+    const addedPaths = extendedBaseline.map((fp) => fp.split('\0')[1] ?? fp);
+    logger.logEvent({
+      event: 'dirty_baseline_extended',
+      phase: 6,
+      addedPaths,
+      totalCount: state.dirtyBaseline.length,
+    });
+    process.stderr.write(
+      `⚠️  Auto-extending dirty baseline with ${extendedBaseline.length} new untracked path(s): ${addedPaths.join(', ')}\n`
+    );
+  }
 
   // Step 3: Resolve verify script path BEFORE advancing phase state.
   // If the script is missing, fail fast while the phase is still pending —

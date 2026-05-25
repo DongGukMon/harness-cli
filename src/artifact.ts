@@ -108,7 +108,8 @@ function exec(cmd: string, cwd?: string): string {
  *
  * Checks staged changes before committing:
  * - Only target file staged → git add + commit current working-tree state
- * - Other files staged → throw error
+ * - Other files staged → throw error (R1.b)
+ * - Staged delta empty after add (byte-identical to HEAD) → return false (R1.a)
  */
 export function normalizeArtifactCommit(filePath: string, message: string, cwd?: string): boolean {
   // Not in a git repo → skip auto-commit entirely
@@ -118,28 +119,35 @@ export function normalizeArtifactCommit(filePath: string, message: string, cwd?:
     return false;
   }
 
-  // Step 1: Check if file is already clean/committed
-  const fileStatus = getFileStatus(filePath, cwd);
-  if (fileStatus === '') {
-    // File is either committed and clean, or doesn't exist — no-op
-    return false;
-  }
-
-  // Step 2: Check staged files
+  // R1.b precedence (gate-4 P1.1): unrelated staged files MUST throw before any
+  // early return. This runs before the fileStatus === '' check so that a clean
+  // target file paired with an unrelated staged file still throws.
   const stagedFiles = getStagedFiles(cwd);
-
-  if (stagedFiles.length === 0 || (stagedFiles.length === 1 && stagedFiles[0] === filePath)) {
-    const cwdAbs = cwd ?? process.cwd();
-    if (!existsSync(join(cwdAbs, filePath))) {
-      return false;
-    }
-    exec(`git add "${filePath}"`, cwd);
-    exec(`git commit -m "${message}"`, cwd);
-    return true;
+  const otherStaged = stagedFiles.filter((f) => f !== filePath);
+  if (otherStaged.length > 0) {
+    throw new Error('Cannot auto-commit artifact: other staged changes exist.');
   }
 
-  // Other files staged → throw
-  throw new Error('Cannot auto-commit artifact: other staged changes exist.');
+  // File clean/missing → no-op
+  const fileStatus = getFileStatus(filePath, cwd);
+  if (fileStatus === '') return false;
+
+  const cwdAbs = cwd ?? process.cwd();
+  if (!existsSync(join(cwdAbs, filePath))) return false;
+
+  exec(`git add "${filePath}"`, cwd);
+  // R1.a: empty staged delta vs HEAD → skip commit, return false.
+  // `git diff --cached --quiet HEAD -- <path>` exits 0 when no delta, 1 otherwise.
+  let hasDelta = true;
+  try {
+    execSync(`git diff --cached --quiet HEAD -- "${filePath}"`, { cwd, stdio: 'ignore' });
+    hasDelta = false;
+  } catch {
+    hasDelta = true;
+  }
+  if (!hasDelta) return false;
+  exec(`git commit -m "${message}"`, cwd);
+  return true;
 }
 
 /**
@@ -193,41 +201,50 @@ export function runPhase6Preconditions(
   runId: string,
   cwd?: string,
   dirtyBaseline: string[] = [],
-): void {
+): { extendedBaseline: string[] } {
   const resolvedCwd = cwd ?? process.cwd();
   const baselineSet = new Set(dirtyBaseline);
+  // R2.a: locally accumulated extension; never mutates the input array (I3).
+  const extendedBaseline: string[] = [];
 
   // Step 1: Staged guard — if any file OTHER than eval report is staged → throw
   const stagedFiles = getStagedFiles(cwd);
   const nonEvalStaged = stagedFiles.filter((f) => f !== evalReportPath);
   if (nonEvalStaged.length > 0) {
-    throw new Error('Working tree must be clean before verification');
+    throw new Error(
+      `Working tree must be clean before verification: staged files outside eval report: ${nonEvalStaged.join(', ')}`
+    );
   }
 
-  // Step 2: Unstaged/untracked guard — filter out eval report and baseline entries
+  // Step 2: Unstaged/untracked guard with R2.b ??-only tolerance.
+  // Modified-tracked statuses (` M`, `M `, `MM`, `A `, ` D`, `D `, etc.) still
+  // count as dirty per R2.d. Only XY === '??' (new untracked) outside baseline
+  // is auto-accepted and accumulated into extendedBaseline.
   const porcelainLines = readPorcelainLines(cwd);
   if (porcelainLines.length > 0) {
-    const dirtyLines = porcelainLines.filter((line) => {
-      // Path starts at index 3 in porcelain format (XY followed by space)
+    const dirtyLines: string[] = [];
+    for (const line of porcelainLines) {
+      const xy = line.slice(0, 2);
       const linePath = line.slice(3);
       // Filter out the eval report (exact match or parent-dir collapse)
-      if (linePath === evalReportPath || evalReportPath.startsWith(linePath)) {
-        return false;
+      if (linePath === evalReportPath || evalReportPath.startsWith(linePath)) continue;
+      const fp = computeFingerprint(line, resolvedCwd);
+      if (baselineSet.has(fp)) continue;
+      if (xy === '??') {
+        extendedBaseline.push(fp);
+        continue;
       }
-      // Filter out pre-existing baseline entries by fingerprint
-      if (baselineSet.size > 0) {
-        const fp = computeFingerprint(line, resolvedCwd);
-        if (baselineSet.has(fp)) return false;
-      }
-      return true;
-    });
+      dirtyLines.push(line);
+    }
 
     if (dirtyLines.length > 0) {
-      throw new Error('Working tree must be clean before verification');
+      throw new Error(
+        `Working tree must be clean before verification: dirty paths: ${dirtyLines.slice(0, 10).join(', ')}`
+      );
     }
   }
 
-  // Step 3: Eval report cleanup
+  // Step 3: Eval report cleanup (byte-identical to previous implementation)
   const fileStatus = getFileStatus(evalReportPath, cwd);
 
   if (isStagedDeletion(evalReportPath, cwd)) {
@@ -256,43 +273,86 @@ export function runPhase6Preconditions(
     exec(`git rm -f "${evalReportPath}"`, cwd);
   }
 
-  // Step 4: Final clean check — baseline entries may still appear (they were not cleaned up)
+  // Step 4: Final clean check with R2.c (??-only tolerance applied again, using
+  // baseline ∪ extendedBaseline). Baseline entries may still appear (they were
+  // not cleaned up); new ??-status files appearing after cleanup are also
+  // accepted into extendedBaseline.
   const finalPorcelainLines = readPorcelainLines(cwd);
   if (finalPorcelainLines.length > 0) {
     const evalReportDeleted = isStagedDeletion(evalReportPath, cwd);
-    const dirtyLines = finalPorcelainLines.filter((line) => {
+    const dirtyLines: string[] = [];
+    for (const line of finalPorcelainLines) {
+      const xy = line.slice(0, 2);
       const linePath = line.slice(3);
-      // Filter parent-dir collapse entries for eval report
-      if (linePath !== evalReportPath && evalReportPath.startsWith(linePath)) return false;
+      // Filter parent-dir collapse entries for eval report (matches current semantics)
+      if (linePath !== evalReportPath && evalReportPath.startsWith(linePath)) continue;
       // Eval report itself: keep as dirty only if cleanup did NOT succeed
-      if (linePath === evalReportPath) return !evalReportDeleted;
-      // Filter pre-existing baseline entries by fingerprint
-      if (baselineSet.size > 0) {
-        const fp = computeFingerprint(line, resolvedCwd);
-        if (baselineSet.has(fp)) return false;
+      if (linePath === evalReportPath) {
+        if (!evalReportDeleted) dirtyLines.push(line);
+        continue;
       }
-      return true;
-    });
+      const fp = computeFingerprint(line, resolvedCwd);
+      if (baselineSet.has(fp) || extendedBaseline.includes(fp)) continue;
+      if (xy === '??') {
+        extendedBaseline.push(fp);
+        continue;
+      }
+      dirtyLines.push(line);
+    }
 
     if (dirtyLines.length > 0) {
-      throw new Error('Working tree is not clean after eval report cleanup');
+      throw new Error(
+        `Working tree is not clean after eval report cleanup: dirty paths: ${dirtyLines.slice(0, 10).join(', ')}`
+      );
     }
   }
 
   void runId;
+  return { extendedBaseline };
 }
 
-export function commitEvalReport(state: HarnessState, cwd: string): 'committed' | 'skipped' {
+export function commitEvalReport(
+  state: HarnessState,
+  cwd: string,
+): 'committed' | 'unchanged' | 'gitignored' {
   const filePath = state.artifacts.evalReport;
   if (isPathGitignored(filePath, cwd)) {
     process.stderr.write(
       `⚠️  eval report path '${filePath}' is gitignored — skipping commit (evalCommit will remain null).\n`
     );
-    return 'skipped';
+    // R1.c: 'gitignored' is reserved EXCLUSIVELY for the isPathGitignored branch.
+    return 'gitignored';
   }
   const k = state.verifyRetries + 1;
   const message = `harness[${state.runId}]: Phase 6 — rev ${k} eval report`;
   const committed = normalizeArtifactCommit(filePath, message, cwd);
-  if (!committed) return 'skipped';
-  return 'committed';
+  if (committed) return 'committed';
+
+  // R1.c + I1: 'unchanged' iff (a) HEAD contains the report path AND
+  // (b) the file still exists on disk. Either-or-both missing → throw.
+  // Per gate-4 P1.2: any failure throws, never silently falls back to 'gitignored'.
+  // Per gate-4 (round 2) P1: the disk-existence check is mandatory — without it,
+  // a deleted-working-tree-but-still-in-HEAD scenario would silently report
+  // 'unchanged' and mis-anchor evalCommit to a stale HEAD that lacks the report
+  // on disk.
+  let headTreePaths: string;
+  try {
+    headTreePaths = execSync('git ls-tree -r --name-only HEAD', { cwd, encoding: 'utf-8' });
+  } catch (err) {
+    throw new Error(
+      `commitEvalReport: cannot verify HEAD tree for '${filePath}' (no commit was created): ${(err as Error).message}`
+    );
+  }
+  const headHasReport = headTreePaths.split('\n').some((p) => p.trim() === filePath);
+  if (!headHasReport) {
+    throw new Error(
+      `commitEvalReport: '${filePath}' not committed and not present in HEAD — refusing to report 'unchanged' (I1).`
+    );
+  }
+  if (!existsSync(join(cwd, filePath))) {
+    throw new Error(
+      `commitEvalReport: '${filePath}' is in HEAD but missing from the working tree — refusing to report 'unchanged' (I1).`
+    );
+  }
+  return 'unchanged';
 }

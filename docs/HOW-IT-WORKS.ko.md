@@ -283,8 +283,8 @@ Phase 6은 항상 번들된 `harness-verify.sh` 스크립트를 실행합니다.
 - sidecar: `verify-result.json`, `verify-feedback.md`, `verify-error.md`
 
 verify 실행 전에는 eval report 경로를 제외한 working tree가 깨끗해야 하며,
-기존 eval report가 있으면 상태에 맞게 정리/교체합니다.
-verify PASS면 eval report를 auto-commit합니다. 단, eval report 경로가 `.gitignore` 대상이면 commit을 skip하고 경고를 stderr에 한 줄 남깁니다(`evalCommit`은 `null`로 유지). FAIL이면 `verify-feedback.md`를 남기고 P5를 재오픈합니다.
+기존 eval report가 있으면 상태에 맞게 정리/교체합니다. 세션 중간에 등장한 untracked 파일(porcelain `??` 상태, 예: `.claude/scheduled_tasks.lock`)은 자동으로 허용됩니다. 해당 fingerprint가 `state.dirtyBaseline`에 자동 추가되고 `dirty_baseline_extended` 이벤트로 기록됩니다. 단 baseline 밖의 tracked-modified 파일은 여전히 throw — 이는 commit 누락된 implementation 변경을 가리키며 operator의 주의가 필요합니다. precondition throw가 발생하면 `phase_end.details.offendingPaths` 필드에 해당 항목(최대 10개)이 나열되어 로그 grep 없이 복구할 수 있습니다.
+verify PASS면 eval report를 auto-commit합니다. 단, eval report 경로가 `.gitignore` 대상이면 commit을 skip하고 경고를 stderr에 한 줄 남깁니다(`evalCommit`은 `null`로 유지). P7-reject → P5-reopen 사이클에서 eval report가 직전 commit과 byte 단위로 동일하게 재생성된 경우, auto-commit은 `eval_commit_failed`로 크래시하지 않고 `'unchanged'`를 반환합니다. `evalCommit`과 `verifiedAtHead`는 그대로 (보고서가 있는) HEAD를 가리킵니다 (issue #112, #113). FAIL이면 `verify-feedback.md`를 남기고 P5를 재오픈합니다.
 
 ---
 
@@ -378,7 +378,7 @@ light flow에서는 skipped phase로 jump할 수 없습니다.
   summary.json
 ```
 
-주요 이벤트는 `phase_start`, `phase_end`, `gate_verdict`, `gate_error`, `gate_retry`, `gate_stagnation`, `gate_stubborn_id`, `verify_result`, `ui_render`, `terminal_action`, `session_end` 등입니다. `gate_stagnation` 이벤트는 `phase`, `retryIndex`, `similarities` (number[]), `threshold`, `run`, `action: 'escalate'` 필드를 포함합니다. `gate_stubborn_id` 이벤트는 `phase`, `retryIndex`, `threshold`, `requirementIds` (string[]), `action: 'defer-and-continue' | 'defer-and-force-pass' | 'already-deferred'` 필드를 포함하며, 수동 모드 `escalation { reason: 'gate-stubborn-id' }` 이벤트의 자율 모드 대응 이벤트입니다. Phase 2의 `gate_verdict` 이벤트에는 모호성 게이트 실행 시 다음 5개의 선택적 필드가 추가됩니다: `clarityScores`, `ambiguity`, `ambiguityThreshold`, `ambiguityVetoed`, `clarityParseError`. 이 필드들은 P4/P7 이벤트에는 포함되지 않습니다.
+주요 이벤트는 `phase_start`, `phase_end`, `gate_verdict`, `gate_error`, `gate_retry`, `gate_stagnation`, `gate_stubborn_id`, `verify_result`, `dirty_baseline_extended`, `ui_render`, `terminal_action`, `session_end` 등입니다. `dirty_baseline_extended` 이벤트(`{ phase: 6, addedPaths: string[], totalCount: number }`)는 Phase 6 precondition이 세션 중간에 생긴 `??`-상태 untracked 파일을 `state.dirtyBaseline`에 자동 추가할 때마다 발생합니다. `addedPaths`는 가독성 있는 경로 리스트, `totalCount`는 확장 후의 baseline 길이입니다. `gate_stagnation` 이벤트는 `phase`, `retryIndex`, `similarities` (number[]), `threshold`, `run`, `action: 'escalate'` 필드를 포함합니다. `gate_stubborn_id` 이벤트는 `phase`, `retryIndex`, `threshold`, `requirementIds` (string[]), `action: 'defer-and-continue' | 'defer-and-force-pass' | 'already-deferred'` 필드를 포함하며, 수동 모드 `escalation { reason: 'gate-stubborn-id' }` 이벤트의 자율 모드 대응 이벤트입니다. Phase 2의 `gate_verdict` 이벤트에는 모호성 게이트 실행 시 다음 5개의 선택적 필드가 추가됩니다: `clarityScores`, `ambiguity`, `ambiguityThreshold`, `ambiguityVetoed`, `clarityParseError`. 이 필드들은 P4/P7 이벤트에는 포함되지 않습니다.
 control pane footer는 이 로그를 바탕으로 경과 시간과 Claude/gate 토큰 합계를 집계합니다.
 
 ---

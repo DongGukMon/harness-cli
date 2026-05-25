@@ -8,7 +8,7 @@ vi.mock('../../src/state.js', () => ({ writeState: vi.fn() }));
 vi.mock('../../src/lock.js', () => ({ updateLockChild: vi.fn(), clearLockChild: vi.fn() }));
 vi.mock('../../src/artifact.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../src/artifact.js')>();
-  return { ...actual, runPhase6Preconditions: vi.fn() };
+  return { ...actual, runPhase6Preconditions: vi.fn().mockReturnValue({ extendedBaseline: [] }) };
 });
 vi.mock('../../src/process.js', () => ({
   getProcessStartTime: vi.fn(() => 0),
@@ -22,6 +22,7 @@ vi.mock('child_process', async (importActual) => {
 
 import { readVerifyResult, isEvalReportValid, runVerifyPhase } from '../../src/phases/verify.js';
 import * as preflightModule from '../../src/preflight.js';
+import { NoopLogger } from '../../src/logger.js';
 import type { HarnessState, VerifyResult } from '../../src/types.js';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -217,7 +218,7 @@ describe('runVerifyPhase — script resolution', () => {
     } as unknown as HarnessState;
 
     try {
-      await runVerifyPhase(state, dir, dir, dir);
+      await runVerifyPhase(state, dir, dir, dir, new NoopLogger());
     } catch {
       // expected — resolveVerifyScriptPath returns null → throws
     }
@@ -247,7 +248,7 @@ describe('runVerifyPhase — docsRoot (FR-3/6)', () => {
     vi.spyOn(preflightModule, 'resolveVerifyScriptPath').mockReturnValue(null);
 
     try {
-      await runVerifyPhase(state, outerCwd, outerCwd, outerCwd);
+      await runVerifyPhase(state, outerCwd, outerCwd, outerCwd, new NoopLogger());
     } catch {
       // expected — resolveVerifyScriptPath returns null → throws after preconditions
     }
@@ -272,7 +273,7 @@ describe('runVerifyPhase — docsRoot (FR-3/6)', () => {
     vi.spyOn(preflightModule, 'resolveVerifyScriptPath').mockReturnValue(null);
 
     try {
-      await runVerifyPhase(state, outerCwd, outerCwd, outerCwd);
+      await runVerifyPhase(state, outerCwd, outerCwd, outerCwd, new NoopLogger());
     } catch {
       // expected
     }
@@ -309,7 +310,7 @@ describe('runVerifyPhase — eval report absolute path in spawn args (producer f
 
     setImmediate(() => fakeChild.emit('close', 1));
 
-    await runVerifyPhase(state, outerCwd, outerCwd, outerCwd);
+    await runVerifyPhase(state, outerCwd, outerCwd, outerCwd, new NoopLogger());
 
     expect(mockSpawn).toHaveBeenCalledOnce();
     const spawnArgs = mockSpawn.mock.calls[0][1] as string[];

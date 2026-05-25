@@ -1289,6 +1289,28 @@ export async function handleGateError(
 
 // ─── Verify phase handler ──────────────────────────────────────────────────────
 
+/**
+ * Parse a `runPhase6Preconditions` throw message into the list of offending
+ * paths for `phase_end.details.offendingPaths` (R3.d).
+ *
+ * Returns `undefined` when the underlying error is not a "Working tree …" message,
+ * so the caller can omit the `offendingPaths` key entirely (per spec R3.d).
+ * Cap at 10 entries — matches the cap applied at throw-time.
+ */
+function parseOffendingPaths(msg: string): string[] | undefined {
+  if (!msg.startsWith('Working tree')) return undefined;
+  const markers = ['dirty paths: ', 'staged files outside eval report: '];
+  for (const m of markers) {
+    const idx = msg.indexOf(m);
+    if (idx >= 0) {
+      const tail = msg.slice(idx + m.length);
+      const parts = tail.split(', ').map((s) => s.trim()).filter(Boolean);
+      return parts.slice(0, 10);
+    }
+  }
+  return undefined;
+}
+
 export async function handleVerifyPhase(
   state: HarnessState,
   harnessDir: string,
@@ -1305,15 +1327,21 @@ export async function handleVerifyPhase(
   // Note: runVerifyPhase internally sets phase to 'in_progress' and calls writeState
   let outcome: Awaited<ReturnType<typeof runVerifyPhase>>;
   try {
-    outcome = await runVerifyPhase(state, harnessDir, runDir, cwd);
+    outcome = await runVerifyPhase(state, harnessDir, runDir, cwd, logger);
   } catch (err) {
-    // throw path: emit phase_end + route to handleVerifyError (no rethrow)
+    // throw path: emit phase_end + route to handleVerifyError (no rethrow).
+    // R3.d: enrich details.offendingPaths when the throw is a "Working tree …"
+    // precondition message; omit the key entirely for any other error shape.
+    const msg = (err as Error).message ?? '';
+    const offendingPaths = parseOffendingPaths(msg);
     logger.logEvent({
       event: 'phase_end',
       phase: 6,
       status: 'failed',
       durationMs: Date.now() - phaseStartTs,
-      details: { reason: 'verify_throw' },
+      details: offendingPaths
+        ? { reason: 'verify_throw', offendingPaths }
+        : { reason: 'verify_throw' },
     });
     state.phases['6'] = 'error';
     writeState(runDir, state);
@@ -1330,7 +1358,7 @@ export async function handleVerifyPhase(
     const docsRoot = state.trackedRepos?.[0]?.path || cwd;
 
     // Commit the eval report artifact (spec requires committed eval report before Phase 7)
-    let evalCommitResult: 'committed' | 'skipped';
+    let evalCommitResult: 'committed' | 'unchanged' | 'gitignored';
     try {
       evalCommitResult = commitEvalReport(state, docsRoot);
     } catch (err) {
@@ -1350,9 +1378,9 @@ export async function handleVerifyPhase(
       return;
     }
 
-    // Update evalCommit + verifiedAtHead only when a real commit was created.
-    // Clear any stale anchors when the commit was skipped (gitignored path).
-    if (evalCommitResult === 'committed') {
+    // R1.d: 'committed' and 'unchanged' both anchor evalCommit + verifiedAtHead
+    // to current HEAD. Only 'gitignored' clears them.
+    if (evalCommitResult === 'committed' || evalCommitResult === 'unchanged') {
       try {
         const head = getHead(docsRoot);
         state.evalCommit = head;

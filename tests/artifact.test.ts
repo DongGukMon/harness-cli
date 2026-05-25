@@ -1,11 +1,16 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { writeFileSync, existsSync, mkdirSync, mkdtempSync, rmSync } from 'fs';
+import { writeFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, unlinkSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { execSync } from 'child_process';
 import { createTestRepo } from './helpers/test-repo.js';
 import { normalizeArtifactCommit, runPhase6Preconditions, commitEvalReport, captureDirtyBaseline } from '../src/artifact.js';
 import { createInitialState } from '../src/state.js';
+
+// Helper: count commits reachable from HEAD
+function commitCount(cwd: string): number {
+  return Number(execSync('git rev-list --count HEAD', { cwd, encoding: 'utf-8' }).trim());
+}
 
 // Helper: get current HEAD SHA
 function getHead(cwd: string): string {
@@ -110,6 +115,36 @@ describe('normalizeArtifactCommit', () => {
     }).trim();
     expect(status).toBe('');
   });
+
+  // SC1: byte-identical regenerate after P7-reject → P5-reopen cycle must not
+  // throw and must not produce a new commit.
+  it('returns false (no throw) when staged content matches HEAD byte-for-byte', () => {
+    const filePath = 'docs/eval-reports/run-x.md';
+    writeRepoFile(repo.path, filePath, '# Eval\n\n## Summary\nx\n');
+    execSync(`git add "${filePath}" && git commit -m "seed"`, { cwd: repo.path });
+    const commitsBefore = commitCount(repo.path);
+    // Write same bytes again → staged delta will be empty after git add
+    writeRepoFile(repo.path, filePath, '# Eval\n\n## Summary\nx\n');
+    const result = normalizeArtifactCommit(filePath, 'harness: rev 2', repo.path);
+    expect(result).toBe(false);
+    expect(commitCount(repo.path)).toBe(commitsBefore);
+  });
+
+  // Gate-4 P1.1 regression: R1.b precedence — guard fires even when eval-report
+  // fileStatus is empty.
+  it('throws "other staged changes exist" even when the target file is clean/committed and an unrelated file is staged', () => {
+    const filePath = 'artifact.md';
+    const otherFile = 'other.txt';
+    // Commit the artifact so its fileStatus is '' (clean)
+    writeRepoFile(repo.path, filePath, '# Artifact\n');
+    execSync(`git add "${filePath}" && git commit -m "seed artifact"`, { cwd: repo.path });
+    // Stage a different file
+    writeRepoFile(repo.path, otherFile, 'other');
+    execSync(`git add "${otherFile}"`, { cwd: repo.path });
+    expect(() =>
+      normalizeArtifactCommit(filePath, 'harness: noop', repo.path)
+    ).toThrow('Cannot auto-commit artifact: other staged changes exist.');
+  });
 });
 
 describe('runPhase6Preconditions', () => {
@@ -202,13 +237,13 @@ describe('runPhase6Preconditions', () => {
     ).toThrow('Working tree must be clean before verification');
   });
 
-  it('aborts when non-eval untracked files exist', () => {
-    // An untracked file that is not the eval report
+  // R2.b (new contract): a mid-session untracked file outside baseline is
+  // auto-tolerated and accepted into extendedBaseline; it MUST NOT throw.
+  it('accepts untracked file outside baseline into extendedBaseline (R2.b ??-only tolerance)', () => {
     writeFileSync(join(repo.path, 'untracked.txt'), 'noise');
-
-    expect(() =>
-      runPhase6Preconditions(evalReportPath, 'my-run', repo.path)
-    ).toThrow('Working tree must be clean before verification');
+    const result = runPhase6Preconditions(evalReportPath, 'my-run', repo.path);
+    expect(result.extendedBaseline.length).toBe(1);
+    expect(result.extendedBaseline[0]).toContain('untracked.txt');
   });
 
   it('final clean check passes after cleanup', () => {
@@ -277,6 +312,50 @@ describe('runPhase6Preconditions', () => {
       rmSync(outer, { recursive: true, force: true });
     }
   });
+
+  // SC3: a mid-session new untracked file outside baseline must be auto-accepted
+  // and returned in extendedBaseline (??-only tolerance, R2.b).
+  it('returns extendedBaseline populated when a new untracked file appears outside baseline', () => {
+    // Seed baseline with one entry
+    writeFileSync(join(repo.path, 'preexisting.lock'), 'x');
+    const baseline = captureDirtyBaseline(repo.path);
+    expect(baseline.length).toBe(1);
+    // Drop a NEW untracked file that is NOT in baseline
+    mkdirSync(join(repo.path, '.claude'), { recursive: true });
+    writeFileSync(join(repo.path, '.claude/scheduled_tasks.lock'), 'y');
+    const result = runPhase6Preconditions(evalReportPath, 'r', repo.path, baseline);
+    expect(result.extendedBaseline.length).toBe(1);
+    expect(result.extendedBaseline[0]).toContain('.claude/scheduled_tasks.lock');
+  });
+
+  // SC4: tracked-modified files outside baseline still throw (R2.d), and the
+  // throw message contains the offending path (R3.b).
+  it('throws with R3.b-shaped message listing offending path when a tracked file is modified outside baseline', () => {
+    writeRepoFile(repo.path, 'src/foo.ts', 'original');
+    execSync('git add . && git commit -m seed', { cwd: repo.path });
+    writeRepoFile(repo.path, 'src/foo.ts', 'modified');
+    expect(() => runPhase6Preconditions(evalReportPath, 'r', repo.path, []))
+      .toThrow(/Working tree must be clean before verification: dirty paths:.*src\/foo\.ts/);
+  });
+
+  // R3.a regression: staged non-eval-report files outside baseline throw with
+  // the staged-files prefix.
+  it('throws with R3.a-shaped message when a non-eval-report file is staged outside baseline', () => {
+    writeFileSync(join(repo.path, 'unrelated.txt'), 'noise');
+    execSync('git add unrelated.txt', { cwd: repo.path });
+    expect(() => runPhase6Preconditions(evalReportPath, 'r', repo.path, []))
+      .toThrow(/Working tree must be clean before verification: staged files outside eval report: unrelated\.txt/);
+  });
+
+  // I3: the input dirtyBaseline array must never be mutated.
+  it('does NOT mutate the input dirtyBaseline array (I3)', () => {
+    mkdirSync(join(repo.path, '.claude'), { recursive: true });
+    writeFileSync(join(repo.path, '.claude/scheduled_tasks.lock'), 'y');
+    const baseline: string[] = []; // empty
+    const before = baseline.slice();
+    runPhase6Preconditions(evalReportPath, 'r', repo.path, baseline);
+    expect(baseline).toEqual(before);
+  });
 });
 
 describe('runPhase6Preconditions — dirty baseline filtering (issues #67/#68)', () => {
@@ -321,7 +400,11 @@ describe('runPhase6Preconditions — dirty baseline filtering (issues #67/#68)',
     ).not.toThrow();
   });
 
-  it('R6: pre-existing dirty file + Phase-5-introduced dirty file → still throws', () => {
+  // R2.b/R2.d updated contract: a NEW untracked file from Phase 5 is now
+  // auto-tolerated (added to extendedBaseline) and no longer throws — this
+  // test was tightened in 2026-05-25-untitled-f041 (issue #112). The old
+  // assertion has been retired; the new behavior is validated below.
+  it('R2.b: pre-existing dirty file + Phase-5-introduced untracked file → does NOT throw, file added to extendedBaseline', () => {
     // Create a pre-existing untracked file
     writeFileSync(join(repo.path, 'preexisting.txt'), 'old content');
 
@@ -332,10 +415,9 @@ describe('runPhase6Preconditions — dirty baseline filtering (issues #67/#68)',
     // Phase 5 introduces a NEW untracked file — not in baseline
     writeFileSync(join(repo.path, 'phase5-new.txt'), 'uncommitted phase-5 work');
 
-    // Must throw — phase5-new.txt is not in baseline
-    expect(() =>
-      runPhase6Preconditions(evalReportPath, 'my-run', repo.path, baseline)
-    ).toThrow('Working tree must be clean before verification');
+    // R2.b: ??-only tolerance accepts this without throwing.
+    const result = runPhase6Preconditions(evalReportPath, 'my-run', repo.path, baseline);
+    expect(result.extendedBaseline.some((fp) => fp.includes('phase5-new.txt'))).toBe(true);
   });
 
   it('R6: pre-existing dirty file whose content changes after baseline → still throws', () => {
@@ -357,7 +439,10 @@ describe('runPhase6Preconditions — dirty baseline filtering (issues #67/#68)',
     ).toThrow('Working tree must be clean before verification');
   });
 
-  it('R6: pre-existing untracked directory + Phase-5 adds new file inside → still throws', () => {
+  // R2.b/R2.d updated contract: a NEW untracked file (in any directory) from
+  // Phase 5 is auto-tolerated. The directory case formerly threw; it is now
+  // accepted into extendedBaseline.
+  it('R2.b: pre-existing untracked directory + Phase-5 adds new file inside → does NOT throw, new file added to extendedBaseline', () => {
     // Create an existing untracked file inside a directory
     mkdirSync(join(repo.path, 'pre-dir'), { recursive: true });
     writeFileSync(join(repo.path, 'pre-dir/existing.txt'), 'pre-existing file');
@@ -369,10 +454,9 @@ describe('runPhase6Preconditions — dirty baseline filtering (issues #67/#68)',
     // Phase 5 adds a NEW file inside the same directory
     writeFileSync(join(repo.path, 'pre-dir/new-from-phase5.txt'), 'phase-5 addition');
 
-    // Must throw — pre-dir/new-from-phase5.txt is not in baseline
-    expect(() =>
-      runPhase6Preconditions(evalReportPath, 'my-run', repo.path, baseline)
-    ).toThrow('Working tree must be clean before verification');
+    // R2.b: ??-only tolerance accepts the new file without throwing.
+    const result = runPhase6Preconditions(evalReportPath, 'my-run', repo.path, baseline);
+    expect(result.extendedBaseline.some((fp) => fp.includes('pre-dir/new-from-phase5.txt'))).toBe(true);
   });
 
   it('R7: filename with spaces is fingerprinted correctly (porcelain -z fix)', () => {
@@ -428,7 +512,7 @@ describe('commitEvalReport', () => {
     repo.cleanup();
   });
 
-  it('skips commit and warns when eval report path is gitignored', () => {
+  it('returns gitignored and warns when eval report path is gitignored', () => {
     writeFileSync(join(repo.path, '.gitignore'), 'docs/\n');
     execSync('git add .gitignore && git commit -m "gitignore"', { cwd: repo.path });
 
@@ -444,7 +528,8 @@ describe('commitEvalReport', () => {
     const result = commitEvalReport(state, repo.path);
     const headAfter = getHead(repo.path);
 
-    expect(result).toBe('skipped');
+    // R1.c: 'gitignored' is reserved for isPathGitignored === true.
+    expect(result).toBe('gitignored');
     // evalCommit not updated (still null), no new commit created
     expect(headAfter).toBe(headBefore);
     expect(state.evalCommit).toBeNull();
@@ -452,17 +537,15 @@ describe('commitEvalReport', () => {
     expect(warnMessages).toContain('gitignored');
   });
 
-  it('returns skipped when eval report file is absent (normalizeArtifactCommit no-op)', () => {
+  // I1: pre-fix this returned 'skipped' (now removed from the union); per spec
+  // a missing file + HEAD-lacks-report MUST throw rather than silently downgrade.
+  it('throws when eval report file is absent and HEAD does not contain it (I1)', () => {
     const baseCommit = getHead(repo.path);
     const state = createInitialState('absent-run', 'task', baseCommit, false);
     state.artifacts.evalReport = 'docs/process/evals/absent-run-eval.md';
-    // File intentionally does not exist
+    // File intentionally does not exist and HEAD does not contain it
 
-    const headBefore = getHead(repo.path);
-    const result = commitEvalReport(state, repo.path);
-
-    expect(result).toBe('skipped');
-    expect(getHead(repo.path)).toBe(headBefore);
+    expect(() => commitEvalReport(state, repo.path)).toThrow(/not committed and not present in HEAD/);
   });
 
   it('commits normally when eval report path is not gitignored', () => {
@@ -479,5 +562,77 @@ describe('commitEvalReport', () => {
 
     expect(result).toBe('committed');
     expect(headAfter).not.toBe(headBefore);
+  });
+
+  // SC2: byte-identical regenerate after P7-reject → P5-reopen cycle must return
+  // 'unchanged' (not throw, not 'skipped'). Anchor still resolves to HEAD.
+  it("returns 'unchanged' when HEAD already contains the report byte-identically", () => {
+    const state = createInitialState('run-id', 'task', 'base-sha', false);
+    const filePath = state.artifacts.evalReport;
+    writeRepoFile(repo.path, filePath, '# Eval\n\n## Summary\nidentical\n');
+    execSync(`git add "${filePath}" && git commit -m "seed"`, { cwd: repo.path });
+    // Write identical content (simulates byte-identical regenerate)
+    writeRepoFile(repo.path, filePath, '# Eval\n\n## Summary\nidentical\n');
+    const result = commitEvalReport(state, repo.path);
+    expect(result).toBe('unchanged');
+  });
+
+  // Regression: content actually differs → 'committed'.
+  it("returns 'committed' when content differs from HEAD (regression)", () => {
+    const state = createInitialState('run-id', 'task', 'base-sha', false);
+    const filePath = state.artifacts.evalReport;
+    writeRepoFile(repo.path, filePath, '# Eval\n\n## Summary\nfirst\n');
+    execSync(`git add "${filePath}" && git commit -m "seed"`, { cwd: repo.path });
+    const commitsBefore = commitCount(repo.path);
+    // Write DIFFERENT content
+    writeRepoFile(repo.path, filePath, '# Eval\n\n## Summary\nsecond different content\n');
+    const result = commitEvalReport(state, repo.path);
+    expect(result).toBe('committed');
+    expect(commitCount(repo.path)).toBe(commitsBefore + 1);
+  });
+
+  // Regression: .gitignore branch returns 'gitignored' explicitly.
+  it("returns 'gitignored' when path is in .gitignore (regression)", () => {
+    writeFileSync(join(repo.path, '.gitignore'), 'reports/\n');
+    execSync('git add .gitignore && git commit -m gi', { cwd: repo.path });
+    const state = createInitialState('gi-run', 'task', 'base-sha', false);
+    state.artifacts.evalReport = 'reports/eval.md';
+    mkdirSync(join(repo.path, 'reports'), { recursive: true });
+    writeFileSync(join(repo.path, 'reports/eval.md'), '# eval\n');
+    const result = commitEvalReport(state, repo.path);
+    expect(result).toBe('gitignored');
+  });
+
+  // Gate-4 P1.2 / I1 invariant: must throw, never silently misclassify as
+  // 'gitignored' or 'unchanged'.
+  it('throws when no commit was created and HEAD does not contain the report (I1)', () => {
+    const state = createInitialState('run-id', 'task', 'base-sha', false);
+    // Seed repo with an unrelated commit so HEAD exists, but eval report path
+    // is NOT in HEAD's tree.
+    writeRepoFile(repo.path, 'README.md', '# repo');
+    execSync('git add README.md && git commit -m seed', { cwd: repo.path });
+    // Eval report does NOT exist on disk and is NOT in HEAD's tree (so
+    // fileStatus === '' → normalize returns false). commitEvalReport must
+    // throw, NOT silently return 'gitignored' or 'unchanged'.
+    expect(() => commitEvalReport(state, repo.path)).toThrow(/not committed and not present in HEAD/);
+  });
+
+  // Gate-4 round-2 P1 / I1: HEAD contains the report, but disk file deleted →
+  // must throw, not 'unchanged'.
+  it('throws when HEAD contains the report but the working-tree file has been deleted (I1)', () => {
+    const state = createInitialState('run-id', 'task', 'base-sha', false);
+    const filePath = state.artifacts.evalReport;
+    // Seed: commit the report so HEAD has it.
+    writeRepoFile(repo.path, filePath, '# Eval\n\n## Summary\nseeded\n');
+    execSync(`git add "${filePath}" && git commit -m "seed report"`, { cwd: repo.path });
+    // Delete the working-tree file (mid-session disappearance). Do NOT stage
+    // the deletion so that fileStatus is ' D' (worktree-only delete).
+    // normalizeArtifactCommit's staged guard passes; fileStatus !== '' → it
+    // tries to `git add` the missing path which produces no staged content →
+    // returns false. commitEvalReport must then THROW because the disk-
+    // existence check fails, NOT return 'unchanged'.
+    unlinkSync(join(repo.path, filePath));
+    expect(() => commitEvalReport(state, repo.path))
+      .toThrow(/in HEAD but missing from the working tree/);
   });
 });
