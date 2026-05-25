@@ -426,7 +426,7 @@ export async function handleInteractivePhase(
       ...(claudeResumeSessionId !== null ? { claudeResumeSessionId } : {}),
     });
 
-    const result = await runInteractivePhase(phase, state, harnessDir, runDir, cwd, attemptId, resume);
+    const result = await runInteractivePhase(phase, state, harnessDir, runDir, cwd, attemptId, resume, logger);
     clearWatchdog();
 
     // Check for control-signal redirect BEFORE branching on result.status.

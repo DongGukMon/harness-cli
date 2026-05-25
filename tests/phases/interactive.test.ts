@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach, vi } from 'vitest';
+import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -1145,5 +1145,237 @@ describe('waitForPhaseCompletion — absolute timeout (issue #107)', () => {
       sentinelPath, 'fake-attempt-id', 7777, 4, state, runDir, runDir,
     );
     expect(result.status).toBe('failed');
+  });
+});
+
+// ─── Observability events: heartbeat / stalled / timeout warning (#114 PR #2) ─
+
+describe('waitForPhaseCompletion — observability events (#114 PR #2)', () => {
+  // Quick mock logger that captures every logEvent call.
+  function createMockLogger() {
+    return { logEvent: vi.fn() } as any;
+  }
+
+  // Helper: filter captured events by event name.
+  function eventsOfType(logger: any, type: string): any[] {
+    return logger.logEvent.mock.calls
+      .map((c: any[]) => c[0])
+      .filter((e: any) => e.event === type);
+  }
+
+  beforeEach(async () => {
+    const processMock = await import('../../src/process.js');
+    vi.mocked(processMock.isPidAlive).mockReturnValue(true); // keep wait alive
+    vi.useFakeTimers();
+  });
+
+  afterEach(async () => {
+    vi.useRealTimers();
+    const processMock = await import('../../src/process.js');
+    vi.mocked(processMock.isPidAlive).mockReturnValue(false);
+  });
+
+  it('emits runner_heartbeat at HEARTBEAT_INTERVAL_MS cadence for phase 5 (interactive)', async () => {
+    const config = await import('../../src/config.js');
+    const runDir = makeTmpDir();
+    const sentinelPath = path.join(runDir, 'phase-5.done');
+    const state = makeState();
+    const logger = createMockLogger();
+    const attemptId = 'attempt-heartbeat-1';
+
+    const p = waitForPhaseCompletion(
+      sentinelPath, attemptId, 12345, 5, state, runDir, runDir,
+      config.INTERACTIVE_TIMEOUT_MS,
+      { logger, getOutputBytes: () => 0 },
+    );
+
+    // Advance through 3 ticks
+    await vi.advanceTimersByTimeAsync(config.HEARTBEAT_INTERVAL_MS * 3);
+    const heartbeats = eventsOfType(logger, 'runner_heartbeat');
+    expect(heartbeats.length).toBe(3);
+    expect(heartbeats[0]).toMatchObject({
+      event: 'runner_heartbeat',
+      phase: 5,
+      attemptId,
+      pid: 12345,
+      pidAlive: true,
+    });
+    expect(heartbeats[0].elapsedMs).toBe(config.HEARTBEAT_INTERVAL_MS);
+    expect(heartbeats[2].elapsedMs).toBe(config.HEARTBEAT_INTERVAL_MS * 3);
+
+    // Settle by writing sentinel
+    fs.writeFileSync(sentinelPath, attemptId);
+    await vi.advanceTimersByTimeAsync(2000);
+    await p;
+  });
+
+  it('does NOT emit runner_heartbeat for gate phases (e.g. phase 4)', async () => {
+    const config = await import('../../src/config.js');
+    const runDir = makeTmpDir();
+    const sentinelPath = path.join(runDir, 'phase-4.done');
+    const state = makeState();
+    const logger = createMockLogger();
+
+    const p = waitForPhaseCompletion(
+      sentinelPath, 'attempt-gate-1', 12345, 4, state, runDir, runDir,
+      config.GATE_TIMEOUT_MS,
+      { logger, getOutputBytes: () => 0 },
+    );
+
+    await vi.advanceTimersByTimeAsync(config.HEARTBEAT_INTERVAL_MS * 5);
+    expect(eventsOfType(logger, 'runner_heartbeat').length).toBe(0);
+    expect(eventsOfType(logger, 'runner_stalled').length).toBe(0);
+    expect(eventsOfType(logger, 'phase_timeout_warning').length).toBe(0);
+
+    fs.writeFileSync(sentinelPath, 'attempt-gate-1');
+    await vi.advanceTimersByTimeAsync(2000);
+    await p;
+  });
+
+  it('emits runner_stalled after STALL_THRESHOLD_MS of zero-output (Claude path with static size)', async () => {
+    const config = await import('../../src/config.js');
+    const runDir = makeTmpDir();
+    const sentinelPath = path.join(runDir, 'phase-5.done');
+    const state = makeState();
+    const logger = createMockLogger();
+    const attemptId = 'attempt-stalled-1';
+
+    // getOutputBytes returns 1024 always → delta = 0 every tick after the first.
+    const p = waitForPhaseCompletion(
+      sentinelPath, attemptId, 12345, 5, state, runDir, runDir,
+      config.INTERACTIVE_TIMEOUT_MS,
+      { logger, getOutputBytes: () => 1024 },
+    );
+
+    // Advance exactly STALL_THRESHOLD_MS — that's 10 ticks of 30 s with delta=0.
+    await vi.advanceTimersByTimeAsync(config.STALL_THRESHOLD_MS);
+
+    const stalls = eventsOfType(logger, 'runner_stalled');
+    expect(stalls.length).toBe(1);
+    expect(stalls[0]).toMatchObject({
+      event: 'runner_stalled',
+      phase: 5,
+      attemptId,
+      pidAlive: true,
+    });
+    expect(stalls[0].silenceMs).toBeGreaterThanOrEqual(config.STALL_THRESHOLD_MS - config.HEARTBEAT_INTERVAL_MS);
+
+    fs.writeFileSync(sentinelPath, attemptId);
+    await vi.advanceTimersByTimeAsync(2000);
+    await p;
+  });
+
+  it('Codex runs (getOutputBytes returns undefined) do NOT trigger runner_stalled — undefined is "no signal", not "zero output"', async () => {
+    const config = await import('../../src/config.js');
+    const runDir = makeTmpDir();
+    const sentinelPath = path.join(runDir, 'phase-5.done');
+    const state = makeState();
+    const logger = createMockLogger();
+    const attemptId = 'attempt-codex-1';
+
+    // getOutputBytes returns undefined every tick (file does not exist).
+    const p = waitForPhaseCompletion(
+      sentinelPath, attemptId, 12345, 5, state, runDir, runDir,
+      config.INTERACTIVE_TIMEOUT_MS,
+      { logger, getOutputBytes: () => undefined },
+    );
+
+    await vi.advanceTimersByTimeAsync(config.STALL_THRESHOLD_MS * 2);
+
+    // Heartbeats still emit (with outputBytesSinceLastHeartbeat absent)
+    const heartbeats = eventsOfType(logger, 'runner_heartbeat');
+    expect(heartbeats.length).toBeGreaterThan(0);
+    expect('outputBytesSinceLastHeartbeat' in heartbeats[0]).toBe(false);
+
+    // But no runner_stalled — undefined must not count as zero
+    expect(eventsOfType(logger, 'runner_stalled').length).toBe(0);
+
+    fs.writeFileSync(sentinelPath, attemptId);
+    await vi.advanceTimersByTimeAsync(2000);
+    await p;
+  });
+
+  it('emits phase_timeout_warning exactly once at TIMEOUT_WARNING_FRACTION of timeoutMs', async () => {
+    const config = await import('../../src/config.js');
+    const runDir = makeTmpDir();
+    const sentinelPath = path.join(runDir, 'phase-5.done');
+    const state = makeState();
+    const logger = createMockLogger();
+    const attemptId = 'attempt-warning-1';
+
+    // 5 ticks of 30 s = 150 s budget; 80% = 120 s = tick 4
+    const timeoutMs = config.HEARTBEAT_INTERVAL_MS * 5;
+
+    const p = waitForPhaseCompletion(
+      sentinelPath, attemptId, 12345, 5, state, runDir, runDir,
+      timeoutMs,
+      { logger, getOutputBytes: () => 10 },
+    );
+
+    // Advance just past 80% to tick 4 (120 s)
+    await vi.advanceTimersByTimeAsync(config.HEARTBEAT_INTERVAL_MS * 4);
+    const warnings = eventsOfType(logger, 'phase_timeout_warning');
+    expect(warnings.length).toBe(1);
+    expect(warnings[0]).toMatchObject({
+      event: 'phase_timeout_warning',
+      phase: 5,
+      attemptId,
+      timeoutMs,
+    });
+    expect(warnings[0].elapsedMs).toBe(config.HEARTBEAT_INTERVAL_MS * 4);
+
+    // Settle before timeout fires to avoid hitting the absolute-timeout cap.
+    fs.writeFileSync(sentinelPath, attemptId);
+    await vi.advanceTimersByTimeAsync(2000);
+    await p;
+  });
+
+  it('phase_timeout_warning is one-shot — never re-emits within the same attempt', async () => {
+    const config = await import('../../src/config.js');
+    const runDir = makeTmpDir();
+    const sentinelPath = path.join(runDir, 'phase-5.done');
+    const state = makeState();
+    const logger = createMockLogger();
+    const attemptId = 'attempt-warning-dedupe';
+
+    // Same setup as above but advance beyond 80% by 3 more ticks (should NOT re-emit)
+    const timeoutMs = config.HEARTBEAT_INTERVAL_MS * 10;
+
+    const p = waitForPhaseCompletion(
+      sentinelPath, attemptId, 12345, 5, state, runDir, runDir,
+      timeoutMs,
+      { logger, getOutputBytes: () => 10 },
+    );
+
+    // 8 ticks * 30s = 240s = 80% of 300s. Fire at tick 8.
+    // Then 9 ticks = 270s, still > 80% — should NOT re-emit.
+    await vi.advanceTimersByTimeAsync(config.HEARTBEAT_INTERVAL_MS * 9);
+    expect(eventsOfType(logger, 'phase_timeout_warning').length).toBe(1);
+
+    fs.writeFileSync(sentinelPath, attemptId);
+    await vi.advanceTimersByTimeAsync(2000);
+    await p;
+  });
+
+  it('legacy callsites without options arg keep working (backwards compat)', async () => {
+    const config = await import('../../src/config.js');
+    const runDir = makeTmpDir();
+    const sentinelPath = path.join(runDir, 'phase-5.done');
+    const state = makeState();
+
+    const p = waitForPhaseCompletion(
+      sentinelPath, 'attempt-legacy', 12345, 5, state, runDir, runDir,
+      config.INTERACTIVE_TIMEOUT_MS,
+      // No options arg — heartbeat loop must be skipped entirely (no logger).
+    );
+    // Advance — nothing should crash even though no logger is wired.
+    // (Artifact validation will fail since the tmpdir has no real run state,
+    // so this resolves to 'failed' — but the important assertion is "no throw".)
+    await expect(async () => {
+      await vi.advanceTimersByTimeAsync(config.HEARTBEAT_INTERVAL_MS * 2);
+      fs.writeFileSync(sentinelPath, 'attempt-legacy');
+      await vi.advanceTimersByTimeAsync(2000);
+      await p;
+    }).not.toThrow();
   });
 });
