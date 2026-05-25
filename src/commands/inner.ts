@@ -5,14 +5,14 @@ import { updateLockPid, readLock, releaseLock } from '../lock.js';
 import { findHarnessRoot, clearCurrentRun } from '../root.js';
 import { readState, writeState, invalidatePhaseSessionsOnPresetChange, invalidatePhaseSessionsOnJump } from '../state.js';
 import { startFooterTicker } from './footer-ticker.js';
-import { runPhaseLoop, handleVerifyError } from '../phases/runner.js';
+import { runPhaseLoop, handleVerifyError, handleGateEscalation, handleVerifyEscalation } from '../phases/runner.js';
 import { registerSignalHandlers } from '../signal.js';
 import { killSession, killSessionDetached, killWindow, killWindowDetached, selectWindow, splitPane, paneExists, selectPane } from '../tmux.js';
 import { renderWelcome, promptModelConfig } from '../ui.js';
 import { unmountInk } from '../ink/render.js';
 import { InputManager } from '../input.js';
 import { runRunnerAwarePreflight } from '../preflight.js';
-import { REQUIRED_PHASE_KEYS, getEffectiveReopenTarget, getRequiredPhaseKeys } from '../config.js';
+import { REQUIRED_PHASE_KEYS, getEffectiveReopenTarget, getRequiredPhaseKeys, getGateRetryLimit } from '../config.js';
 import { createSessionLogger } from '../logger.js';
 import { HARNESS_VERSION } from '../version.js';
 import { codexHomeFor } from '../runners/codex-isolation.js';
@@ -205,7 +205,14 @@ export async function innerCommand(runId: string, options: InnerOptions = {}): P
   const remainingPhases = [...remainingSet];
 
   // Step 5.8 + 5.9: Skip model config and preflight on synthesized failure (D4a).
-  if (!inconsistentPauseDetected) {
+  // Issue #110: also skip when resuming into a show_escalation pendingAction.
+  // The prior session already chose presets, so the prompt is unnecessary — and
+  // while it is waiting for a keystroke the launching pane's SIGHUP propagates
+  // to `__inner`, fires `onConfigCancel`, and exits the process before any key
+  // can be read. The inline dispatcher below routes show_escalation to the C/S/Q
+  // UI directly (mirroring the show_verify_error precedent at the next block).
+  const skipModelConfigForEscalation = state.pendingAction?.type === 'show_escalation';
+  if (!inconsistentPauseDetected && !skipModelConfigForEscalation) {
     // Step 5.8: Prompt for model selection. Snapshot prev presets to detect changes for §4.8 invalidation.
     const prevPresets = { ...state.phasePresets };
     state.phasePresets = await promptModelConfig(state.phasePresets, inputManager, remainingPhases, state.flow);
@@ -256,6 +263,56 @@ export async function innerCommand(runId: string, options: InnerOptions = {}): P
         writeState(runDir, state);
         const errorPath = action.feedbackPaths[0] ?? undefined;
         await handleVerifyError(errorPath, state, harnessDir, runDir, cwd, inputManager, logger);
+      }
+
+      // Issue #110: surface the gate/verify escalation C/S/Q UI on resume.
+      // Without this, after the model-config skip above, line 263's `state.status === 'paused'`
+      // short-circuit fires and the run silently exits — the user is stuck in paused state and
+      // the only recovery is manual state.json editing. Mirrors replayPendingAction's
+      // case 'show_escalation' in resume.ts (routes by pauseReason).
+      if (state.pendingAction?.type === 'show_escalation') {
+        const action = state.pendingAction;
+        const wasVerifyEscalation = state.pauseReason === 'verify-escalation';
+        state.status = 'in_progress';
+        state.pauseReason = null;
+        state.pendingAction = null;
+        writeState(runDir, state);
+
+        // Load feedback content for gate handler (strip the standard
+        // '## Reviewer Comments\n\n' marker if present so the C/S/Q prompt
+        // shows just the body, matching the original handler's input shape).
+        let comments = '';
+        if (action.feedbackPaths.length > 0) {
+          try {
+            const raw = fs.readFileSync(action.feedbackPaths[0], 'utf-8');
+            const marker = '## Reviewer Comments\n\n';
+            const idx = raw.indexOf(marker);
+            comments = idx >= 0 ? raw.slice(idx + marker.length).trimEnd() : raw;
+          } catch { /* best-effort */ }
+        }
+
+        if (wasVerifyEscalation) {
+          const feedbackPath = action.feedbackPaths[0] ?? path.join(runDir, 'verify-feedback.md');
+          await handleVerifyEscalation(feedbackPath, state, runDir, cwd, inputManager, logger);
+        } else {
+          // Gate escalation: targetPhase is the rejected gate (2/4/7)
+          const gatePhase = action.targetPhase as 2 | 4 | 7;
+          const retryIndex = Math.max(
+            0,
+            (state.gateRetries[String(gatePhase)] ?? getGateRetryLimit(state.flow, gatePhase)) - 1,
+          );
+          await handleGateEscalation(
+            gatePhase,
+            comments,
+            action.scope,
+            retryIndex,
+            state,
+            runDir,
+            cwd,
+            inputManager,
+            logger,
+          );
+        }
       }
 
       // If the pendingAction dispatcher re-paused (user picked Q), skip the loop
