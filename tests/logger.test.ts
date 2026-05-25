@@ -446,3 +446,145 @@ describe('createSessionLogger factory', () => {
     expect(logger.constructor.name).toBe('FileSessionLogger');
   });
 });
+
+// Issue #114 PR #1: LogEvent union expansion (additive, no behavior change).
+// These tests verify type-level acceptance — they fail at `tsc --noEmit` when
+// the new variants are absent, and at runtime they confirm the writer round-
+// trips fields without dropping them.
+describe('LogEvent union — issue #114 observability events', () => {
+  function readLastEvent(eventsPath: string): Record<string, unknown> {
+    const raw = fs.readFileSync(eventsPath, 'utf-8');
+    const lines = raw.split('\n').filter(l => l.trim());
+    return JSON.parse(lines[lines.length - 1]);
+  }
+
+  it('NoopLogger accepts runner_heartbeat without throwing', () => {
+    const logger = new NoopLogger();
+    expect(() => logger.logEvent({
+      event: 'runner_heartbeat',
+      phase: 5,
+      attemptId: 'attempt-x',
+      pid: 12345,
+      pidAlive: true,
+      outputBytesSinceLastHeartbeat: 4096,
+      elapsedMs: 30000,
+    })).not.toThrow();
+  });
+
+  it('NoopLogger accepts runner_stalled without throwing', () => {
+    const logger = new NoopLogger();
+    expect(() => logger.logEvent({
+      event: 'runner_stalled',
+      phase: 3,
+      attemptId: 'attempt-y',
+      pid: 67890,
+      pidAlive: true,
+      silenceMs: 300000,
+      elapsedMs: 600000,
+    })).not.toThrow();
+  });
+
+  it('NoopLogger accepts phase_timeout_warning without throwing', () => {
+    const logger = new NoopLogger();
+    expect(() => logger.logEvent({
+      event: 'phase_timeout_warning',
+      phase: 1,
+      attemptId: 'attempt-z',
+      elapsedMs: 1440000,
+      timeoutMs: 1800000,
+      remainingMs: 360000,
+    })).not.toThrow();
+  });
+
+  it('FileSessionLogger persists runner_heartbeat fields verbatim', () => {
+    const harnessDir = makeTempHarnessDir();
+    const sessionsRoot = path.join(harnessDir, 'sessions-root');
+    const logger = new FileSessionLogger('runH', harnessDir, { sessionsRoot });
+    logger.writeMeta({ task: 't' });
+    logger.logEvent({
+      event: 'runner_heartbeat',
+      phase: 5,
+      attemptId: 'a-heartbeat',
+      pid: 4242,
+      pidAlive: true,
+      outputBytesSinceLastHeartbeat: 2048,
+      elapsedMs: 60000,
+    });
+    const ev = readLastEvent(logger.getEventsPath()!);
+    expect(ev.event).toBe('runner_heartbeat');
+    expect(ev.phase).toBe(5);
+    expect(ev.attemptId).toBe('a-heartbeat');
+    expect(ev.pid).toBe(4242);
+    expect(ev.pidAlive).toBe(true);
+    expect(ev.outputBytesSinceLastHeartbeat).toBe(2048);
+    expect(ev.elapsedMs).toBe(60000);
+  });
+
+  it('FileSessionLogger omits outputBytesSinceLastHeartbeat when not provided', () => {
+    const harnessDir = makeTempHarnessDir();
+    const sessionsRoot = path.join(harnessDir, 'sessions-root');
+    const logger = new FileSessionLogger('runHopt', harnessDir, { sessionsRoot });
+    logger.writeMeta({ task: 't' });
+    logger.logEvent({
+      event: 'runner_heartbeat',
+      phase: 5,
+      attemptId: 'a-no-bytes',
+      pid: null,
+      pidAlive: false,
+      elapsedMs: 30000,
+    });
+    const ev = readLastEvent(logger.getEventsPath()!);
+    expect(ev.event).toBe('runner_heartbeat');
+    expect(ev.pid).toBeNull();
+    expect(ev.pidAlive).toBe(false);
+    expect('outputBytesSinceLastHeartbeat' in ev).toBe(false);
+  });
+
+  it('terminal_action accepts source field for origin labeling', () => {
+    const harnessDir = makeTempHarnessDir();
+    const sessionsRoot = path.join(harnessDir, 'sessions-root');
+    const logger = new FileSessionLogger('runT', harnessDir, { sessionsRoot });
+    logger.writeMeta({ task: 't' });
+    logger.logEvent({
+      event: 'terminal_action',
+      action: 'resume',
+      fromPhase: 5,
+      source: 'user-key',
+    });
+    logger.logEvent({
+      event: 'terminal_action',
+      action: 'resume',
+      fromPhase: 5,
+      source: 'auto',
+    });
+    logger.logEvent({
+      event: 'terminal_action',
+      action: 'jump',
+      fromPhase: 5,
+      targetPhase: 2,
+      source: 'signal',
+    });
+    const raw = fs.readFileSync(logger.getEventsPath()!, 'utf-8');
+    const lines = raw.split('\n').filter(l => l.trim()).map(l => JSON.parse(l));
+    const sources = lines.filter((e: any) => e.event === 'terminal_action').map((e: any) => e.source);
+    expect(sources).toEqual(['user-key', 'auto', 'signal']);
+  });
+
+  it('terminal_action.source remains optional (legacy lines omit it)', () => {
+    // Regression: existing emit sites that have not yet been migrated must
+    // still compile + persist correctly. Source absence is the legacy default.
+    const harnessDir = makeTempHarnessDir();
+    const sessionsRoot = path.join(harnessDir, 'sessions-root');
+    const logger = new FileSessionLogger('runTopt', harnessDir, { sessionsRoot });
+    logger.writeMeta({ task: 't' });
+    logger.logEvent({
+      event: 'terminal_action',
+      action: 'quit',
+      fromPhase: 4,
+    });
+    const ev = readLastEvent(logger.getEventsPath()!);
+    expect(ev.event).toBe('terminal_action');
+    expect(ev.action).toBe('quit');
+    expect('source' in ev).toBe(false);
+  });
+});

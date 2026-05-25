@@ -410,6 +410,60 @@ export type LogEvent =
        * pre-#122 events. Additive only; never set to `false`.
        */
       confirmedKill?: boolean;
+      /**
+       * #114 PR #1: origin label for the action. Present when an emit site
+       * has been migrated to set it; legacy emit sites omit the field and the
+       * retro analyzer treats absence as `'user-key'`. Additive only.
+       */
+      source?: 'user-key' | 'auto' | 'signal';
+    })
+  /**
+   * #114 PR #1: heartbeat emitted at a fixed cadence (design doc default: 30 s)
+   * during interactive phases so external observers (supervisor / retro) can
+   * distinguish a frozen worker from a normal long-running phase. `pid` is the
+   * tmux workspace pane PID being watched; `outputBytesSinceLastHeartbeat` is
+   * derived from the Claude session JSONL size delta and absent when not
+   * computable (e.g. Codex runner / no attemptId). Emitted only by phases
+   * 1/3/5; gates have their own 6 min cap and rarely freeze.
+   */
+  | (LogEventBase & {
+      event: 'runner_heartbeat';
+      phase: 1 | 3 | 5;
+      attemptId: string;
+      pid: number | null;
+      pidAlive: boolean;
+      outputBytesSinceLastHeartbeat?: number;
+      elapsedMs: number;
+    })
+  /**
+   * #114 PR #1: emitted after N (design doc default: 10) consecutive heartbeats
+   * with `outputBytesSinceLastHeartbeat === 0`. Re-armable — the same phase may
+   * emit multiple `runner_stalled` events if silence resumes after recovery.
+   * Signal-only: does not change harness behavior (supervisor escalates).
+   */
+  | (LogEventBase & {
+      event: 'runner_stalled';
+      phase: 1 | 3 | 5;
+      attemptId: string;
+      pid: number | null;
+      pidAlive: boolean;
+      silenceMs: number;
+      elapsedMs: number;
+    })
+  /**
+   * #114 PR #1: one-shot warning fired the first time `elapsedMs / timeoutMs`
+   * crosses 0.8 (default: 24 min of the 30 min interactive cap). Lets
+   * supervisor pre-position an escalation while the operator still has ~5 min
+   * of margin. Deduped within an attempt — never emitted twice for the same
+   * (phase, attemptId).
+   */
+  | (LogEventBase & {
+      event: 'phase_timeout_warning';
+      phase: 1 | 3 | 5;
+      attemptId: string;
+      elapsedMs: number;
+      timeoutMs: number;
+      remainingMs: number;
     })
   | (LogEventBase & { event: 'session_end'; status: 'completed' | 'paused' | 'interrupted'; totalWallMs: number })
   | (LogEventBase & { event: 'resume_error'; phase: number; message: string });
