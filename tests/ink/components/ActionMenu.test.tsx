@@ -46,4 +46,33 @@ describe('ActionMenu', () => {
   it('renders without crashing at narrow width', () => {
     expect(() => render(<ActionMenu state={makeState()} callsite="loop-top" />)).not.toThrow();
   });
+
+  // #116 B3: R-confirm-kill prompt — shown when [R] pressed and worker is alive,
+  // so the operator can't silently kill an in-progress workspace worker.
+  describe('#116 B3 — terminal-failed-confirm-kill callsite', () => {
+    it('renders a Y/N confirmation prompt with the workspace PID', () => {
+      const state = makeState({ currentPhase: 5, lastWorkspacePid: 12345 });
+      state.phases['5'] = 'failed';
+      const { lastFrame } = render(<ActionMenu state={state} callsite="terminal-failed-confirm-kill" />);
+      const frame = lastFrame() ?? '';
+      // PID surfaced so the operator sees exactly which worker is at risk.
+      expect(frame).toContain('12345');
+      // Y/N keys advertised — no other action keys visible.
+      expect(frame).toContain('[Y]');
+      expect(frame).toContain('[N]');
+      // R/J should NOT be visible here — the prompt replaces the action menu.
+      expect(frame).not.toContain('[R]');
+      expect(frame).not.toContain('[J]');
+    });
+
+    it('shows messaging that signals "this will kill the worker"', () => {
+      const state = makeState({ currentPhase: 5, lastWorkspacePid: 99 });
+      state.phases['5'] = 'failed';
+      const { lastFrame } = render(<ActionMenu state={state} callsite="terminal-failed-confirm-kill" />);
+      const frame = (lastFrame() ?? '').toLowerCase();
+      // Some verb conveying "kill / terminate" must be present so the operator
+      // is not surprised by what Y does.
+      expect(frame).toMatch(/kill|terminat/);
+    });
+  });
 });

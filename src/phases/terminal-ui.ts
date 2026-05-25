@@ -246,7 +246,30 @@ export async function enterFailedTerminalState(
     }
 
     if (choice === 'R') {
-      logger.logEvent({ event: 'terminal_action', action: 'resume', fromPhase });
+      // #116 B3: when a workspace worker is still alive, `respawnPane()`
+      // (called via performResume → runPhaseLoop) will SIGKILL it together
+      // with any in-progress child (e.g. a long-running codex subtask). Show
+      // an Ink Y/N confirmation BEFORE proceeding so the operator can't
+      // silently lose mid-flight work. Dead / undefined liveness skips this
+      // branch entirely — byte-identical to the pre-B3 R path.
+      let confirmedKill: boolean | undefined;
+      if (workerLiveness === 'alive') {
+        renderControlPanel(state, logger, 'terminal-failed-confirm-kill', workerLiveness);
+        const confirm = await inputManager.waitForKey(new Set(['y', 'n']));
+        if (confirm === 'N') {
+          // Bail out without emitting a terminal_action — N is neither
+          // "confirmed kill" nor a blind press; it's a no-op. Re-enter the
+          // loop and re-render the R/J/Q action menu.
+          continue;
+        }
+        confirmedKill = true;
+      }
+
+      logger.logEvent(
+        confirmedKill === true
+          ? { event: 'terminal_action', action: 'resume', fromPhase, confirmedKill: true }
+          : { event: 'terminal_action', action: 'resume', fromPhase },
+      );
       try {
         await performResume(state, harnessDir, runDir, cwd, inputManager, logger, sidecarReplayAllowed);
       } catch (err) {

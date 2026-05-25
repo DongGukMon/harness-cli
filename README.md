@@ -286,7 +286,7 @@ On resume, harness again prompts for presets for the remaining phases.
 ### Terminal-state UI
 
 When `runPhaseLoop` returns, the control panel stays on screen instead of dropping you to a shell:
-- **Failed phase** → an inline action prompt appears with `[R]esume` (re-runs the failed phase in place), `[J]ump` (single-key prompt for an interactive phase: `1/3/5` in full flow, `1/5` in light), and `[Q]uit` (clean exit). Errors during R/J keep the panel open so you can try a different action.
+- **Failed phase** → an inline action prompt appears with `[R]esume` (re-runs the failed phase in place), `[J]ump` (single-key prompt for an interactive phase: `1/3/5` in full flow, `1/5` in light), and `[Q]uit` (clean exit). Errors during R/J keep the panel open so you can try a different action. When the workspace worker is still alive, pressing `[R]` first shows a `[Y]/[N]` confirmation that lists the at-risk PID — `[N]` cancels without killing the worker, `[Y]` proceeds with the unchanged respawn flow.
 - **Run complete** → an idle summary panel shows the eval report path, commit range, and wall time. Press Ctrl+C to exit.
 
 ### `phase-harness status`
