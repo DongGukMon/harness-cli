@@ -2,8 +2,10 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import { execSync } from 'child_process';
 import { bootstrapSessionLogger, buildConfigCancelHandler, innerCommand } from '../../src/commands/inner.js';
 import { computeRepoKey, FileSessionLogger } from '../../src/logger.js';
+import { createTestRepo } from '../helpers/test-repo.js';
 import type { HarnessState } from '../../src/types.js';
 
 // Mock dependencies before imports
@@ -34,9 +36,16 @@ vi.mock('../../src/tmux.js', () => ({
 vi.mock('../../src/root.js', () => ({
   findHarnessRoot: vi.fn(),
 }));
-vi.mock('../../src/git.js', () => ({
-  getGitRoot: vi.fn(() => '/tmp'),
-}));
+vi.mock('../../src/git.js', async () => {
+  const actual = await vi.importActual<typeof import('../../src/git.js')>('../../src/git.js');
+  return {
+    ...actual,
+    // Only override getGitRoot — other helpers (getHead, isAncestor, etc.) keep
+    // their real implementations so the #117 Bug B follow-up tests can drive a
+    // real git tmpdir without further per-test mocking.
+    getGitRoot: vi.fn(() => '/tmp'),
+  };
+});
 vi.mock('../../src/ui.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../src/ui.js')>();
   return {
@@ -1096,5 +1105,216 @@ describe('inner.ts: resume with show_escalation pendingAction (#110)', () => {
     const loopIdx = src.search(/await\s+runPhaseLoop\(/);
     expect(dispatchIdx).toBeGreaterThan(-1);
     expect(loopIdx).toBeGreaterThan(dispatchIdx);
+  });
+});
+
+// Issue #117 Bug B follow-up: PR #120 added an inline-completion diagnostic +
+// sentinel-preservation policy in `recoverGeneralState` (src/resume.ts). But
+// `recoverGeneralState` is only reachable via the non-tmux `resumeRun` API.
+// Real-world `phase-harness resume <runId>` invocations go through inner.ts,
+// which deliberately skipped the recovery codepath (see the "deferred refactor"
+// comment at `inner.ts:170-175`). Result: a P5-failed run with a fresh sentinel
+// + advanced HEAD never auto-advanced on `phase-harness resume`.
+//
+// This describe block guards the inline-completion call wired into inner.ts
+// before the phase-loop / model-config / preflight steps, mirroring resume.ts.
+describe('inner.ts: pre-loop inline-completion recovery on resume (#117 Bug B follow-up)', () => {
+  let tmpDir: string;
+  let stderrSpy: any;
+  let repos: Array<{ path: string; cleanup: () => void }>;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'inner-117bf-'));
+    vi.mocked(findHarnessRoot).mockReturnValue(tmpDir);
+    vi.mocked(paneExists).mockReturnValue(true);
+    vi.mocked(promptModelConfig).mockClear();
+    vi.mocked(runRunnerAwarePreflight).mockClear();
+    vi.mocked(runPhaseLoop).mockReset();
+    vi.mocked(runPhaseLoop).mockResolvedValue(undefined);
+    vi.mocked(enterFailedTerminalState).mockReset();
+    vi.mocked(enterFailedTerminalState).mockResolvedValue(undefined);
+    stderrSpy = vi.spyOn(process.stderr, 'write').mockReturnValue(true as any);
+    repos = [];
+  });
+
+  afterEach(() => {
+    stderrSpy.mockRestore();
+    vi.mocked(paneExists).mockReturnValue(false);
+    for (const r of repos) r.cleanup();
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  // Build a real git repo (required because the helper calls getHead()).
+  function makeRepo(): { path: string; baseCommit: string } {
+    const repo = createTestRepo();
+    repos.push(repo);
+    // .gitignore .harness so any outer .harness writes don't dirty the worktree
+    fs.writeFileSync(path.join(repo.path, '.gitignore'), '.harness/\n');
+    execSync('git add .gitignore && git commit -m "gi"', {
+      cwd: repo.path,
+      stdio: 'pipe',
+    });
+    const baseCommit = execSync('git rev-parse HEAD', {
+      cwd: repo.path,
+      encoding: 'utf-8',
+    }).trim();
+    return { path: repo.path, baseCommit };
+  }
+
+  function writeP5FailedState(
+    runId: string,
+    overrides: Record<string, unknown> = {}
+  ): { runDir: string; repoPath: string } {
+    const repo = makeRepo();
+    const runDir = path.join(tmpDir, runId);
+    fs.mkdirSync(runDir, { recursive: true });
+    fs.writeFileSync(path.join(runDir, 'task.md'), 'test task');
+
+    const state: Record<string, unknown> = {
+      runId,
+      flow: 'full',
+      currentPhase: 5,
+      status: 'in_progress',
+      pauseReason: null,
+      pendingAction: null,
+      autoMode: false,
+      task: 'test task',
+      baseCommit: repo.baseCommit,
+      implRetryBase: repo.baseCommit,
+      codexPath: null,
+      codexNoIsolate: false,
+      externalCommitsDetected: false,
+      carryoverFeedback: null,
+      tmuxSession: 'test-sess',
+      tmuxMode: 'dedicated',
+      tmuxWindows: [],
+      tmuxControlWindow: null,
+      tmuxWorkspacePane: null,
+      tmuxOriginalWindow: null,
+      tmuxControlPane: null,
+      artifacts: {
+        spec: `docs/specs/${runId}-design.md`,
+        plan: `docs/plans/${runId}.md`,
+        decisionLog: `.harness/${runId}/decisions.md`,
+        checklist: `.harness/${runId}/checklist.json`,
+        evalReport: `docs/process/evals/${runId}-eval.md`,
+      },
+      phases: { '1': 'completed', '2': 'completed', '3': 'completed', '4': 'completed', '5': 'failed', '6': 'pending', '7': 'pending' },
+      phasePresets: { '1': 'opus-high', '2': 'codex-high', '3': 'sonnet-high', '4': 'codex-high', '5': 'sonnet-high', '7': 'codex-high' },
+      phaseReopenFlags: { '1': false, '3': false, '5': false },
+      phaseReopenSource: { '1': null, '3': null, '5': null },
+      gateRetries: { '2': 0, '4': 0, '7': 0 },
+      verifyRetries: 0,
+      specCommit: null,
+      planCommit: null,
+      implCommit: null,
+      evalCommit: null,
+      verifiedAtHead: null,
+      pausedAtHead: null,
+      phaseOpenedAt: { '1': null, '3': null, '5': null },
+      phaseAttemptId: { '1': null, '3': null, '5': 'attempt-117bf' },
+      phaseCodexSessions: { '2': null, '4': null, '7': null },
+      phaseClaudeSessions: { '1': null, '3': null, '5': null },
+      trackedRepos: [
+        { path: repo.path, baseCommit: repo.baseCommit, implRetryBase: repo.baseCommit, implHead: null },
+      ],
+      loggingEnabled: false,
+      lastWorkspacePid: null,
+      lastWorkspacePidStartTime: null,
+      ...overrides,
+    };
+    fs.writeFileSync(path.join(runDir, 'state.json'), JSON.stringify(state));
+    return { runDir, repoPath: repo.path };
+  }
+
+  it('Test 1: P5 failed + fresh sentinel + repo advanced past implRetryBase → advances to P6, sentinel unlinked, stderr inline-completed', async () => {
+    const runId = 'p5-advance-run';
+    const { runDir, repoPath } = writeP5FailedState(runId);
+
+    // Advance HEAD past implRetryBase
+    fs.writeFileSync(path.join(repoPath, 'impl.txt'), 'work\n');
+    execSync('git add . && git commit -m "impl"', {
+      cwd: repoPath,
+      stdio: 'pipe',
+    });
+
+    // Write a fresh sentinel matching state.phaseAttemptId['5']
+    const sentinelPath = path.join(runDir, 'phase-5.done');
+    fs.writeFileSync(sentinelPath, 'attempt-117bf');
+
+    await innerCommand(runId, { root: tmpDir, controlPane: '%0', resume: true });
+
+    const stateAfter = JSON.parse(fs.readFileSync(path.join(runDir, 'state.json'), 'utf-8'));
+    expect(stateAfter.phases['5']).toBe('completed');
+    expect(stateAfter.currentPhase).toBe(6);
+    expect(fs.existsSync(sentinelPath)).toBe(false);
+
+    const stderrText = stderrSpy.mock.calls.map((c: any) => c[0]).join('');
+    expect(stderrText).toContain('inline-completed');
+    expect(stderrText).toContain('phase 5');
+  });
+
+  it('Test 2: P5 failed + fresh sentinel + no repo advanced → state unchanged, sentinel preserved, stderr phase5_no_advancement', async () => {
+    const runId = 'p5-noadvance-run';
+    const { runDir } = writeP5FailedState(runId);
+
+    // Sentinel matches attemptId, but HEAD has NOT advanced past implRetryBase
+    const sentinelPath = path.join(runDir, 'phase-5.done');
+    fs.writeFileSync(sentinelPath, 'attempt-117bf');
+
+    await innerCommand(runId, { root: tmpDir, controlPane: '%0', resume: true });
+
+    const stateAfter = JSON.parse(fs.readFileSync(path.join(runDir, 'state.json'), 'utf-8'));
+    // Phase 5 stays failed, currentPhase stays 5 — operator must add a commit then re-resume.
+    expect(stateAfter.phases['5']).toBe('failed');
+    expect(stateAfter.currentPhase).toBe(5);
+    // Sentinel is the worker's signed proof — must be preserved.
+    expect(fs.existsSync(sentinelPath)).toBe(true);
+
+    const stderrText = stderrSpy.mock.calls.map((c: any) => c[0]).join('');
+    expect(stderrText).toContain('phase5_no_advancement');
+    expect(stderrText).toContain('phase 5');
+    expect(stderrText).toContain('sentinel preserved');
+  });
+
+  it('Test 3: P5 failed + NO sentinel file → no recovery attempted (zero diagnostic stderr from helper), normal terminal-failed path', async () => {
+    const runId = 'p5-no-sentinel-run';
+    const { runDir } = writeP5FailedState(runId);
+
+    // Crucially: no sentinel file is written
+    const sentinelPath = path.join(runDir, 'phase-5.done');
+    expect(fs.existsSync(sentinelPath)).toBe(false);
+
+    await innerCommand(runId, { root: tmpDir, controlPane: '%0', resume: true });
+
+    // Phase stays failed (no advancement)
+    const stateAfter = JSON.parse(fs.readFileSync(path.join(runDir, 'state.json'), 'utf-8'));
+    expect(stateAfter.phases['5']).toBe('failed');
+    expect(stateAfter.currentPhase).toBe(5);
+
+    // No PR #120 diagnostic should fire — the sentinel guard at the top of the
+    // helper makes the recovery silent when there's nothing to recover.
+    const stderrText = stderrSpy.mock.calls.map((c: any) => c[0]).join('');
+    expect(stderrText).not.toContain('inline-completed');
+    expect(stderrText).not.toContain('inline completion rejected');
+
+    // The normal terminal-failed path must still fire (anyPhaseFailed=true).
+    expect(vi.mocked(enterFailedTerminalState)).toHaveBeenCalled();
+  });
+
+  it('source-level: inner.ts calls tryInlineCompleteFreshSentinel before promptModelConfig + runPhaseLoop', () => {
+    const srcPath = path.resolve(__dirname, '../../src/commands/inner.ts');
+    const src = fs.readFileSync(srcPath, 'utf-8');
+
+    // Must import the helper from resume.js
+    expect(src).toMatch(/tryInlineCompleteFreshSentinel[^;]*from ['"]\.\.\/resume\.js['"]/);
+
+    // Helper invocation must precede the model-config block + runPhaseLoop call.
+    const helperIdx = src.search(/tryInlineCompleteFreshSentinel\(/);
+    const promptIdx = src.search(/await\s+promptModelConfig\(/);
+    const loopIdx = src.search(/await\s+runPhaseLoop\(/);
+    expect(helperIdx).toBeGreaterThan(-1);
+    expect(promptIdx).toBeGreaterThan(helperIdx);
+    expect(loopIdx).toBeGreaterThan(helperIdx);
   });
 });

@@ -129,69 +129,12 @@ async function recoverGeneralState(
     process.exit(1);
   }
 
-  // Interactive phase with fresh sentinel → complete inline
-  if (
-    (phase === 1 || phase === 3 || phase === 5) &&
-    (phaseStatus === 'in_progress' || phaseStatus === 'failed')
-  ) {
-    const sentinelPath = join(runDir, `phase-${phase}.done`);
-    const expectedAttemptId = state.phaseAttemptId[phaseKey];
-
-    if (existsSync(sentinelPath) && expectedAttemptId) {
-      const content = readFileSync(sentinelPath, 'utf-8').trim();
-      if (content === expectedAttemptId) {
-        // Fresh sentinel — attempt inline completion
-        try {
-          let skipReason: InlineCompletionSkipReason | null = null;
-          const completed = completeInteractivePhaseFromFreshSentinel(
-            phase as PhaseNumber,
-            state,
-            cwd,
-            runDir,
-            (r) => { skipReason = r; },
-          );
-          if (completed) {
-            state.phases[phaseKey] = 'completed';
-            state.currentPhase = phase + 1;
-            // Sentinel is now stale (phase advanced); unlink so a future jump-back
-            // doesn't see a leftover fresh sentinel from a prior attemptId.
-            try { unlinkSync(sentinelPath); } catch { /* best-effort */ }
-            writeState(runDir, state);
-            process.stderr.write(
-              `[harness] resume phase ${phase}: inline-completed → advanced to phase ${phase + 1}\n`
-            );
-          } else {
-            // Inline completion rejected. Tell the operator why; preserve the sentinel
-            // when the only reason was phase5_no_advancement (worker's signed proof —
-            // deleting forces a full redo despite valid artifacts/commits being intact).
-            // Other reasons (artifact_validation_failed / exception) indicate the
-            // sentinel is genuinely stale, so delete it to let the next attempt respawn.
-            process.stderr.write(
-              `[harness] resume phase ${phase}: inline completion rejected ` +
-              `(${skipReason ?? 'unknown'}) — ` +
-              (skipReason === 'phase5_no_advancement'
-                ? 'no impl repo advanced past implRetryBase; sentinel preserved, advance HEAD then resume\n'
-                : 'sentinel deleted, will respawn on next attempt\n')
-            );
-            if (skipReason !== 'phase5_no_advancement') {
-              try { unlinkSync(sentinelPath); } catch { /* best-effort */ }
-            }
-          }
-        } catch (err) {
-          // normalize_artifact_commit failure during resume: preserve artifacts + sentinel,
-          // mark phase as error so user can inspect + `harness resume` to retry commit.
-          // Critically: do NOT delete sentinel (reopening would erase Phase 1/3 artifacts).
-          process.stderr.write(
-            `Failed to commit Phase ${phase} artifact on resume: ${(err as Error).message}\n` +
-            `Phase left in 'error' state; fix git state and run 'phase-harness resume' to retry.\n`
-          );
-          state.phases[phaseKey] = 'error';
-          writeState(runDir, state);
-          process.exit(1);
-        }
-      }
-    }
-  }
+  // Interactive phase with fresh sentinel → complete inline.
+  // Delegated to `tryInlineCompleteFreshSentinel` (shared with src/commands/inner.ts).
+  // The helper guards on phase ∈ {1,3,5}, status ∈ {in_progress,failed}, and
+  // sentinel-freshness itself, so we call it unconditionally — matching the
+  // inner.ts call site and keeping a single source of truth for the policy.
+  tryInlineCompleteFreshSentinel(state, cwd, runDir);
 
   // Phase 6 in_progress + verify-result.json already written → apply stored result
   // This handles the crash window: verify ran, sidecar written, but state not yet advanced.
@@ -663,6 +606,110 @@ export function completeInteractivePhaseFromFreshSentinel(
   }
 
   return false;
+}
+
+/**
+ * Inline-completion recovery for phase 1/3/5 fresh-sentinel resumes.
+ *
+ * Extracted from `recoverGeneralState` so the tmux resume path
+ * (`src/commands/inner.ts`) can run the same recovery before the phase loop —
+ * `inner.ts` historically skipped `resumeRun` (the "deferred refactor" path),
+ * which left the originally reported scenario in issue #117 Bug B (P5 failed +
+ * fresh sentinel + advanced HEAD) silently stuck on `phase-harness resume`.
+ *
+ * Behaviour (verbatim from PR #120):
+ *
+ *  - Only acts when `state.currentPhase ∈ {1,3,5}` AND
+ *    `state.phases[phase] ∈ {'in_progress','failed'}` AND a sentinel file
+ *    matches `state.phaseAttemptId[phase]`. Otherwise: silent no-op.
+ *  - On success: advance state, unlink sentinel, emit stderr
+ *    `[harness] resume phase N: inline-completed → advanced to phase N+1`.
+ *  - On rejection: emit a single stderr line including the skip reason.
+ *    `phase5_no_advancement` preserves the sentinel (worker's signed proof —
+ *    deleting it forces a full redo despite valid artifacts/commits being
+ *    intact). Other reasons delete the sentinel so the next attempt can
+ *    respawn cleanly.
+ *  - On thrown error (normalize_artifact_commit failure during resume):
+ *    preserve artifacts + sentinel, mark phase as 'error', and `process.exit(1)`
+ *    with operator guidance. This matches the original semantics in
+ *    `recoverGeneralState`; deleting a Phase 1/3 sentinel under this path
+ *    would erase the artifacts on the next reopen.
+ *
+ * Returns `true` if the phase advanced; `false` otherwise (including the
+ * silent no-op case). Callers should treat the return value as a hint and
+ * always re-derive any phase-dependent state (e.g., remainingPhases) from
+ * `state.currentPhase` after invoking.
+ */
+export function tryInlineCompleteFreshSentinel(
+  state: HarnessState,
+  cwd: string,
+  runDir: string,
+): boolean {
+  const phase = state.currentPhase;
+  const phaseKey = String(phase);
+  const phaseStatus = state.phases[phaseKey];
+
+  if (phase !== 1 && phase !== 3 && phase !== 5) return false;
+  if (phaseStatus !== 'in_progress' && phaseStatus !== 'failed') return false;
+
+  const sentinelPath = join(runDir, `phase-${phase}.done`);
+  const expectedAttemptId = state.phaseAttemptId[phaseKey];
+
+  if (!existsSync(sentinelPath) || !expectedAttemptId) return false;
+
+  const content = readFileSync(sentinelPath, 'utf-8').trim();
+  if (content !== expectedAttemptId) return false;
+
+  // Fresh sentinel — attempt inline completion
+  try {
+    let skipReason: InlineCompletionSkipReason | null = null;
+    const completed = completeInteractivePhaseFromFreshSentinel(
+      phase as PhaseNumber,
+      state,
+      cwd,
+      runDir,
+      (r) => { skipReason = r; },
+    );
+    if (completed) {
+      state.phases[phaseKey] = 'completed';
+      state.currentPhase = phase + 1;
+      // Sentinel is now stale (phase advanced); unlink so a future jump-back
+      // doesn't see a leftover fresh sentinel from a prior attemptId.
+      try { unlinkSync(sentinelPath); } catch { /* best-effort */ }
+      writeState(runDir, state);
+      process.stderr.write(
+        `[harness] resume phase ${phase}: inline-completed → advanced to phase ${phase + 1}\n`
+      );
+      return true;
+    }
+    // Inline completion rejected. Tell the operator why; preserve the sentinel
+    // when the only reason was phase5_no_advancement (worker's signed proof —
+    // deleting forces a full redo despite valid artifacts/commits being intact).
+    // Other reasons (artifact_validation_failed / exception) indicate the
+    // sentinel is genuinely stale, so delete it to let the next attempt respawn.
+    process.stderr.write(
+      `[harness] resume phase ${phase}: inline completion rejected ` +
+      `(${skipReason ?? 'unknown'}) — ` +
+      (skipReason === 'phase5_no_advancement'
+        ? 'no impl repo advanced past implRetryBase; sentinel preserved, advance HEAD then resume\n'
+        : 'sentinel deleted, will respawn on next attempt\n')
+    );
+    if (skipReason !== 'phase5_no_advancement') {
+      try { unlinkSync(sentinelPath); } catch { /* best-effort */ }
+    }
+    return false;
+  } catch (err) {
+    // normalize_artifact_commit failure during resume: preserve artifacts + sentinel,
+    // mark phase as error so user can inspect + `harness resume` to retry commit.
+    // Critically: do NOT delete sentinel (reopening would erase Phase 1/3 artifacts).
+    process.stderr.write(
+      `Failed to commit Phase ${phase} artifact on resume: ${(err as Error).message}\n` +
+      `Phase left in 'error' state; fix git state and run 'phase-harness resume' to retry.\n`
+    );
+    state.phases[phaseKey] = 'error';
+    writeState(runDir, state);
+    process.exit(1);
+  }
 }
 
 /**
