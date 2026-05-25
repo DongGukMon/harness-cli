@@ -62,6 +62,7 @@ function makeState(overrides: Partial<HarnessState> = {}): HarnessState {
     codexNoIsolate: false,
     noDrift: false,
     dirtyBaseline: [],
+    autoDeferIssues: false,
     ...overrides,
   };
 }

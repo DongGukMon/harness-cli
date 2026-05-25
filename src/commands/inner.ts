@@ -23,12 +23,13 @@ export async function emitRetroHook(
   logger: Pick<SessionLogger, 'getEventsPath'>,
   harnessDir: string,
   runId: string,
+  state?: HarnessState,
 ): Promise<void> {
   const eventsPath = logger.getEventsPath();
   if (!eventsPath) return;
   try {
     const { generateRetrospective } = await import('../phases/retrospective.js');
-    const { markdown } = generateRetrospective(eventsPath);
+    const { markdown } = generateRetrospective(eventsPath, state);
     const outDir  = join(harnessDir, runId);
     fs.mkdirSync(outDir, { recursive: true });
     const outPath = join(outDir, 'retrospective.md');
@@ -307,7 +308,7 @@ export async function innerCommand(runId: string, options: InnerOptions = {}): P
     // reached disk (issue #98 follow-up observed during PR #102 dogfood).
     logger.logEvent({ event: 'session_end', status: sessionEndStatus, totalWallMs: Date.now() - logger.getStartedAt() });
     logger.finalizeSummary(state);
-    await emitRetroHook(logger, harnessDir, runId);
+    await emitRetroHook(logger, harnessDir, runId, state);
 
     if (sessionEndStatus === 'completed' && (state as HarnessState).status === 'completed') {
       await enterIdle();
@@ -388,7 +389,7 @@ export function buildConfigCancelHandler(args: ConfigCancelHandlerArgs): () => v
     }
     logger.logEvent({ event: 'session_end', status: 'paused', totalWallMs: Date.now() - logger.getStartedAt() });
     logger.finalizeSummary(state);
-    await emitRetroHook(logger, harnessDir, runId);
+    await emitRetroHook(logger, harnessDir, runId, state);
     logger.close();
     releaseLock(harnessDir, runId);
     unmountInk();

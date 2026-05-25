@@ -150,6 +150,7 @@ function makeHarnessState(runId: string): HarnessState {
     codexNoIsolate: false,
     noDrift: false,
     dirtyBaseline: [],
+    autoDeferIssues: false,
   };
 }
 

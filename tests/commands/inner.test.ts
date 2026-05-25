@@ -332,6 +332,7 @@ describe('inner.ts: tmux top-bottom workspace pane setup', () => {
       tmuxControlPane: '',
       loggingEnabled: false,
       dirtyBaseline: [],
+      autoDeferIssues: false,
       ...overrides,
     };
   }
@@ -417,6 +418,7 @@ describe('bootstrapSessionLogger', () => {
       codexNoIsolate: false,
       noDrift: false,
       dirtyBaseline: [],
+      autoDeferIssues: false,
     };
     return { ...base, ...overrides };
   }
@@ -503,6 +505,7 @@ describe('buildConfigCancelHandler — lazy bootstrap', () => {
       codexNoIsolate: false,
       noDrift: false,
       dirtyBaseline: [],
+      autoDeferIssues: false,
     };
     return { ...base, ...overrides };
   }
@@ -707,6 +710,7 @@ describe('bootstrapSessionLogger — codexHome integration (Issue #13)', () => {
       codexNoIsolate: false,
       noDrift: false,
       dirtyBaseline: [],
+      autoDeferIssues: false,
     };
     return { ...base, ...overrides };
   }

@@ -397,6 +397,7 @@ function makeMinimalState(): HarnessState {
     codexNoIsolate: false,
     noDrift: false,
     dirtyBaseline: [],
+    autoDeferIssues: false,
   } as HarnessState;
 }
 

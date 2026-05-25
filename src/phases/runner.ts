@@ -21,6 +21,9 @@ import { runVerifyPhase } from './verify.js';
 import { StagnationDetector, loadStagnationConfig } from './stagnation.js';
 import { scoreP5Drift, resolveDriftAction, writeDriftFeedback } from './drift.js';
 import { readClaudeSessionUsage, claudeSessionJsonlExists } from '../runners/claude-usage.js';
+import { extractRequirementIds } from './gate/parseRejectFeedback.js';
+import { findStubbornIds, loadStubbornIdThreshold } from './stubbornIds.js';
+import { handleStubbornEscalationAuto, resetOldestEntryFor } from './gate/stubbornEscalation.js';
 import {
   promptChoice,
   printPhaseTransition,
@@ -814,6 +817,164 @@ export async function handleGateReject(
     console.warn(`[stagnation] setup error: ${(err as Error).message} — detection skipped`);
   }
 
+  // === Stubborn-ID detection (gate-retry-convergence spec) ===
+  // Persist parsed IDs from this reject. Done BEFORE the retry counter so the
+  // detector can fire without consuming a retry slot.
+  {
+    const histKey = String(phase) as '2' | '4' | '7';
+    const cycleIdxNow = state.gateEscalationCycles?.[histKey] ?? 0;
+    const feedbackPathNow = saveGateFeedback(runDir, phase, comments, retryIndex, cycleIdxNow);
+    const ids = extractRequirementIds(comments);
+    state.gateRejectHistory = state.gateRejectHistory ?? {};
+    state.gateRejectHistory[histKey] = state.gateRejectHistory[histKey] ?? [];
+    state.gateRejectHistory[histKey]!.push({
+      cycle: cycleIdxNow, retryIndex, feedbackPath: feedbackPathNow,
+      requirementIds: ids, ts: Date.now(),
+    });
+
+    const threshold = loadStubbornIdThreshold();
+    // push before read so this reject counts toward the threshold
+    const stubborn = findStubbornIds(state.gateRejectHistory[histKey]!, threshold);
+    if (stubborn.length > 0 && state.autoMode) {
+      const result = handleStubbornEscalationAuto({
+        phase, retryIndex, stubbornIds: stubborn, comments,
+        state, runDir, threshold, logger,
+      });
+      if (result.action === 'defer-and-force-pass') {
+        await forcePassGate(phase, state, runDir, cwd, 'auto-stubborn', logger);
+        return;
+      }
+      if (result.action === 'defer-and-continue' || result.action === 'already-deferred') {
+        // Reopen with filtered (or original) feedback; gateRetries NOT incremented.
+        const targetInteractive = getGateRejectReopenTarget(state, phase, scope);
+        const feedbackPaths = result.filteredFeedbackPath
+          ? [result.filteredFeedbackPath]
+          : [feedbackPathNow];
+        state.pendingAction = {
+          type: 'reopen_phase',
+          targetPhase: targetInteractive,
+          sourcePhase: phase as PhaseNumber,
+          feedbackPaths,
+        };
+        // Light Phase-7 special: reopen target chains through P1, so put feedback
+        // on carryoverFeedback (pendingAction clears mid-chain), reset downstream
+        // phases, and invalidate gate-7 codex session + sidecars.
+        if (state.flow === 'light' && phase === 7) {
+          state.carryoverFeedback = {
+            sourceGate: 7,
+            paths: feedbackPaths,
+            deliverToPhase: 5,
+          };
+          state.phases['5'] = 'pending';
+          state.phases['6'] = 'pending';
+          state.phaseReopenFlags['5'] = true;
+          state.phaseReopenSource['5'] = 7;
+          state.phaseCodexSessions['7'] = null;
+          deleteGateSidecars(runDir, 7);
+        }
+        state.phases[String(targetInteractive)] = 'pending';
+        state.phaseReopenFlags[String(targetInteractive)] = true;
+        state.phaseReopenSource[String(targetInteractive)] = phase;
+        state.currentPhase = targetInteractive;
+        writeState(runDir, state);
+        return;
+      }
+    }
+    if (stubborn.length > 0 && !state.autoMode) {
+      // Issue #98 pattern: render control panel before prompt so Ink doesn't
+      // cover the question mid-redraw.
+      renderControlPanel(state, logger, 'gate-stubborn-id-pending');
+      const choice = await promptChoice(
+        `Stubborn requirement(s) detected: ${stubborn.join(', ')} — rejected ≥${threshold} times each.`,
+        [
+          { key: 'D', label: 'Defer to follow-up and continue' },
+          { key: 'R', label: 'Retry once more (drops oldest history entry)' },
+          { key: 'Q', label: 'Quit (pause for manual fix)' },
+        ],
+        inputManager,
+      );
+      logger.logEvent({
+        event: 'escalation',
+        phase,
+        reason: 'gate-stubborn-id',
+        userChoice: choice as 'D' | 'R' | 'Q',
+        requirementIds: stubborn,
+      });
+
+      if (choice === 'D') {
+        const result = handleStubbornEscalationAuto({
+          phase, retryIndex, stubbornIds: stubborn, comments,
+          state, runDir, threshold, logger,
+          emitEvent: false, // manual-D already logs `escalation`; avoid double-fire of gate_stubborn_id
+        });
+        if (result.action === 'defer-and-force-pass') {
+          await forcePassGate(phase, state, runDir, cwd, 'auto-stubborn', logger);
+        } else {
+          const targetInteractive = getGateRejectReopenTarget(state, phase, scope);
+          const feedbackPaths = result.filteredFeedbackPath
+            ? [result.filteredFeedbackPath]
+            : [feedbackPathNow];
+          state.pendingAction = {
+            type: 'reopen_phase',
+            targetPhase: targetInteractive,
+            sourcePhase: phase as PhaseNumber,
+            feedbackPaths,
+          };
+          // Light Phase-7 special: same handling as the auto-mode branch.
+          if (state.flow === 'light' && phase === 7) {
+            state.carryoverFeedback = {
+              sourceGate: 7,
+              paths: feedbackPaths,
+              deliverToPhase: 5,
+            };
+            state.phases['5'] = 'pending';
+            state.phases['6'] = 'pending';
+            state.phaseReopenFlags['5'] = true;
+            state.phaseReopenSource['5'] = 7;
+            state.phaseCodexSessions['7'] = null;
+            deleteGateSidecars(runDir, 7);
+          }
+          state.phases[String(targetInteractive)] = 'pending';
+          state.phaseReopenFlags[String(targetInteractive)] = true;
+          state.phaseReopenSource[String(targetInteractive)] = phase;
+          state.currentPhase = targetInteractive;
+          writeState(runDir, state);
+        }
+        return;
+      }
+      if (choice === 'R') {
+        state.gateRejectHistory[histKey] = resetOldestEntryFor(
+          state.gateRejectHistory[histKey]!, stubborn,
+        );
+        writeState(runDir, state);
+        // Fall through to existing retry path (do NOT return) so reopen happens.
+      }
+      if (choice === 'Q') {
+        // Mirror the C/S/Q escalation Q-pause pattern (~line 1170): set
+        // pendingAction to show_escalation so resume routes through the
+        // standard pause-then-prompt path instead of the
+        // synthesizeFailedFromInconsistentPause failure path (inner.ts:65).
+        const targetInteractive = getGateRejectReopenTarget(state, phase, scope);
+        state.pendingAction = {
+          type: 'show_escalation',
+          targetPhase: phase as PhaseNumber,
+          sourcePhase: targetInteractive as PhaseNumber,
+          feedbackPaths: [feedbackPathNow],
+          scope,
+        };
+        state.status = 'paused';
+        state.pauseReason = 'gate-stubborn-id';
+        savePausedAtHead(state, cwd);
+        writeState(runDir, state);
+        return;
+      }
+    }
+    // Non-auto or detector empty → fall through to existing retry path.
+    // The existing branch will call saveGateFeedback again with the same args
+    // → idempotent overwrite (deterministic path from retryIndex+cycle).
+  }
+  // === end stubborn-ID block ===
+
   // Increment retry counter AFTER capturing retryIndex (pre-mutation)
   state.gateRetries[String(phase)] = retryIndex + 1;
 
@@ -1043,7 +1204,7 @@ export async function forcePassGate(
   state: HarnessState,
   runDir: string,
   cwd: string,
-  by: 'auto' | 'user',
+  by: 'auto' | 'user' | 'auto-stubborn',
   logger: SessionLogger,
 ): Promise<void> {
   state.pendingAction = { type: 'skip_phase', targetPhase: phase as PhaseNumber, sourcePhase: null, feedbackPaths: [] };

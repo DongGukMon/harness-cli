@@ -59,6 +59,7 @@ function makeState(): HarnessState {
     codexNoIsolate: false,
     noDrift: false,
     dirtyBaseline: [],
+    autoDeferIssues: false,
   };
 }
 

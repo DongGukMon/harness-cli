@@ -98,4 +98,43 @@ describe('CurrentPhase', () => {
     expect(frame).not.toContain('Current Phase');
     expectLinesWithin(frame, 30);
   });
+
+  it('omits the deferred banner when no requirements have been deferred', () => {
+    const state = makeState({ currentPhase: 2 });
+    state.phases['2'] = 'in_progress';
+    const { lastFrame } = render(<CurrentPhase state={state} />);
+    expect(lastFrame()).not.toContain('Deferred');
+  });
+
+  it('renders a deferred banner listing requirement IDs when present', () => {
+    const state = makeState({ currentPhase: 4 });
+    state.phases['4'] = 'in_progress';
+    state.deferredRequirements = {
+      '2': [
+        {
+          requirementId: 'R1.b',
+          phase: 2,
+          rejectCount: 4,
+          feedbackPaths: [],
+          stubPath: '/tmp/r1b',
+          deferredAt: 1,
+        },
+      ],
+      '4': [
+        {
+          requirementId: 'R8',
+          phase: 4,
+          rejectCount: 3,
+          feedbackPaths: [],
+          stubPath: '/tmp/r8',
+          deferredAt: 2,
+        },
+      ],
+    };
+    const { lastFrame } = render(<CurrentPhase state={state} />);
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('Deferred:');
+    expect(frame).toContain('R1.b');
+    expect(frame).toContain('R8');
+  });
 });

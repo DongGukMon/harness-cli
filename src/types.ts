@@ -21,7 +21,7 @@ export interface TrackedRepo {
 }
 
 export type RunStatus = 'in_progress' | 'completed' | 'paused';
-export type PauseReason = 'gate-escalation' | 'verify-escalation' | 'gate-error' | 'verify-error' | 'config-cancel';
+export type PauseReason = 'gate-escalation' | 'verify-escalation' | 'gate-error' | 'verify-error' | 'config-cancel' | 'gate-stubborn-id';
 export type PendingActionType = 'reopen_phase' | 'rerun_gate' | 'rerun_verify' | 'show_escalation' | 'show_verify_error' | 'skip_phase' | 'reopen_config';
 
 export interface PendingAction {
@@ -71,6 +71,14 @@ export interface HarnessState {
   phases: Record<string, PhaseStatus>; // keys "1"-"7"
   gateRetries: Record<string, number>; // keys "2","4","7"
   gateEscalationCycles?: Partial<Record<'2' | '4' | '7', number>>;
+  // Per-phase reject history with parsed requirement IDs (gate-retry-convergence spec).
+  // Persisted so resume restores detector state. Empty/missing = feature inert.
+  gateRejectHistory?: Partial<Record<'2' | '4' | '7', GateRejectEntry[]>>;
+  // Requirements that crossed the stubborn-ID threshold and were deferred.
+  deferredRequirements?: Partial<Record<'2' | '4' | '7', DeferredRequirement[]>>;
+  // Opt-in: shell out to `gh issue create` when a requirement is deferred.
+  // File stub is written regardless. Persisted at start; resume honors it.
+  autoDeferIssues: boolean;
   verifyRetries: number;
   pauseReason: PauseReason | null;
   specCommit: string | null;
@@ -125,6 +133,24 @@ export interface LockData {
   handoff?: boolean;
   outerPid?: number;
   tmuxSession?: string;
+}
+
+export interface GateRejectEntry {
+  cycle: number; // gateEscalationCycles[phase] value at time of reject, not a sequential counter
+  retryIndex: number; // 0-based, the just-failed attempt
+  feedbackPath: string;
+  requirementIds: string[];
+  ts: number;
+}
+
+export interface DeferredRequirement {
+  requirementId: string;
+  phase: GatePhase;
+  rejectCount: number;
+  feedbackPaths: string[];
+  stubPath: string;
+  deferredAt: number; // epoch ms when defer happened (distinct from per-reject ts)
+  ghIssueUrl?: string;
 }
 
 export interface GateResult {
@@ -246,6 +272,7 @@ export type RenderCallsite =
   | 'terminal-complete'
   | 'gate-escalation-pending'
   | 'gate-error-pending'
+  | 'gate-stubborn-id-pending'
   | 'verify-escalation-pending'
   | 'verify-error-pending';
 
@@ -319,8 +346,22 @@ export type LogEvent =
       run: number;
       action: 'escalate';
     })
-  | (LogEventBase & { event: 'escalation'; phase: number; reason: 'gate-retry-limit' | 'gate-error' | 'verify-limit' | 'verify-error' | 'gate-stagnation'; userChoice?: 'C' | 'S' | 'Q' | 'R' })
-  | (LogEventBase & { event: 'force_pass'; phase: number; by: 'auto' | 'user' })
+  | (LogEventBase & {
+      event: 'escalation';
+      phase: number;
+      reason: 'gate-retry-limit' | 'gate-error' | 'verify-limit' | 'verify-error' | 'gate-stagnation' | 'gate-stubborn-id';
+      userChoice?: 'C' | 'S' | 'Q' | 'R' | 'D';
+      requirementIds?: string[];
+    })
+  | (LogEventBase & {
+      event: 'gate_stubborn_id';
+      phase: number;
+      retryIndex: number;
+      requirementIds: string[];
+      threshold: number;
+      action: 'defer-and-continue' | 'defer-and-force-pass' | 'already-deferred';
+    })
+  | (LogEventBase & { event: 'force_pass'; phase: number; by: 'auto' | 'user' | 'auto-stubborn' })
   | (LogEventBase & { event: 'verify_result'; passed: boolean; retryIndex: number; durationMs: number; failedChecks?: string[] })
   | (LogEventBase & { event: 'phase_end'; phase: number; attemptId?: string | null; status: 'completed' | 'failed'; durationMs: number; details?: { reason: string; error?: string }; claudeTokens?: ClaudeTokens | null; codexTokens?: ClaudeTokens | null; uncommittedRepos?: Array<{ path: string; count: number }> })
   | (LogEventBase & {
