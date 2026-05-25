@@ -256,7 +256,7 @@ async function applyStoredVerifyResult(
     // only 'gitignored' clears them.
     if (evalCommitResult === 'committed' || evalCommitResult === 'unchanged') {
       try {
-        const head = getHead(cwd);
+        const head = getHead(docsRoot);
         state.evalCommit = head;
         state.verifiedAtHead = head;
       } catch { /* leave as-is */ }

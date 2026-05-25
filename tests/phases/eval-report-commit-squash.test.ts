@@ -243,6 +243,79 @@ describe('eval report commit squash', () => {
     expect(lastCommitMessage(repo.path)).toBe(`harness[${storedRunId}]: Phase 6 — rev 1 eval report`);
   });
 
+  it('stored-verify-result resume anchors evalCommit/verifiedAtHead via getHead(docsRoot) when docsRoot !== cwd and commitEvalReport returns "unchanged" (R1.d/I4)', async () => {
+    vi.resetModules();
+    vi.doUnmock('../../src/phases/verify.js');
+    vi.doUnmock('../../src/ui.js');
+    vi.doMock('../../src/phases/runner.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('../../src/phases/runner.js')>();
+      return {
+        ...actual,
+        runPhaseLoop: vi.fn().mockResolvedValue(undefined),
+      };
+    });
+
+    const { resumeRun } = await import('../../src/resume.js');
+
+    const docsRepo = makeRepo();
+    const cwdRepo = makeRepo();
+
+    // Diverge cwdRepo HEAD from docsRepo HEAD so getHead(cwd) ≠ getHead(docsRoot).
+    execSync('git commit --allow-empty -m "cwd-only divergent commit"', { cwd: cwdRepo.path });
+    const cwdHead = execSync('git rev-parse HEAD', { cwd: cwdRepo.path, encoding: 'utf-8' }).trim();
+
+    const runId = 'stored-multi-repo-run';
+    const harnessDir = path.join(cwdRepo.path, '.harness');
+    const runDir = path.join(harnessDir, runId);
+    fs.mkdirSync(runDir, { recursive: true });
+
+    const docsBase = execSync('git rev-parse HEAD', { cwd: docsRepo.path, encoding: 'utf-8' }).trim();
+    const state = createInitialState(runId, 'task', docsBase, false);
+    state.trackedRepos[0].path = docsRepo.path;
+    state.trackedRepos[0].baseCommit = docsBase;
+    state.trackedRepos[0].implRetryBase = docsBase;
+    state.currentPhase = 6;
+    state.phases['1'] = 'pending';
+    state.phases['2'] = 'pending';
+    state.phases['3'] = 'pending';
+    state.phases['4'] = 'pending';
+    state.phases['5'] = 'pending';
+    state.phases['6'] = 'in_progress';
+    state.verifyRetries = 0;
+    writeState(runDir, state);
+
+    // Pre-commit the eval report in docsRoot so commitEvalReport returns 'unchanged' on resume.
+    const reportContent = '# Eval Report\n\n## Summary\n\nbyte-identical regenerate\n';
+    writeRepoFile(docsRepo.path, state.artifacts.evalReport, reportContent);
+    execSync(`git add "${state.artifacts.evalReport}"`, { cwd: docsRepo.path });
+    execSync(
+      `git commit -m "harness[${runId}]: Phase 6 — rev 1 eval report"`,
+      { cwd: docsRepo.path },
+    );
+    const docsHeadAfterCommit = execSync(
+      'git rev-parse HEAD',
+      { cwd: docsRepo.path, encoding: 'utf-8' },
+    ).trim();
+    expect(docsHeadAfterCommit).not.toBe(cwdHead);
+
+    // Resume regenerates the same bytes on disk — commit step finds HEAD already matches → 'unchanged'.
+    writeRepoFile(docsRepo.path, state.artifacts.evalReport, reportContent);
+
+    fs.writeFileSync(
+      path.join(runDir, 'verify-result.json'),
+      JSON.stringify({ exitCode: 0, hasSummary: true, timestamp: Date.now() }),
+    );
+
+    await resumeRun(state, harnessDir, runDir, cwdRepo.path);
+
+    // R1.d/I4: evalCommit + verifiedAtHead MUST anchor to docsRoot HEAD, not cwd HEAD.
+    expect(state.evalCommit).toBe(docsHeadAfterCommit);
+    expect(state.verifiedAtHead).toBe(docsHeadAfterCommit);
+    expect(state.evalCommit).not.toBe(cwdHead);
+    expect(state.phases['6']).toBe('completed');
+    expect(state.currentPhase).toBe(7);
+  });
+
   it('force-pass writes exactly one synthetic eval report commit with the unchanged message', async () => {
     const repo = makeRepo();
     const runId = 'fp-run';
