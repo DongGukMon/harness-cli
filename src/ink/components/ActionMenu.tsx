@@ -90,6 +90,33 @@ export function ActionMenu({ state, callsite }: Props): React.ReactElement {
     );
   }
 
+  // #116 B3: R-confirm-kill prompt. Rendered when the controller has already
+  // determined `workerLiveness==='alive'` and the operator just pressed [R];
+  // we replace the action menu with a Y/N confirmation so the operator can
+  // see the at-risk PID before `respawnPane()` SIGKILLs it.
+  if (callsite === 'terminal-failed-confirm-kill') {
+    const pid = state.lastWorkspacePid;
+    return (
+      <Box flexDirection="column">
+        <Box>
+          <Text bold color={COLORS.fail}>Confirm: kill workspace worker? </Text>
+        </Box>
+        <Box>
+          <Text>Resuming will kill the workspace worker</Text>
+          {pid !== null && <Text> (PID <Text bold>{pid}</Text>)</Text>}
+          <Text> currently mid-run.</Text>
+        </Box>
+        <Box marginTop={1}>
+          <Text dimColor>Actions </Text>
+          <Text bold color={COLORS.ok}>[Y]</Text>
+          <Text> Yes, kill and respawn  </Text>
+          <Text bold color={COLORS.accent}>[N]</Text>
+          <Text> Cancel</Text>
+        </Box>
+      </Box>
+    );
+  }
+
   const prominent = callsite === 'terminal-failed';
   if (!prominent) {
     if (callsite === 'terminal-complete' || state.status === 'completed') {

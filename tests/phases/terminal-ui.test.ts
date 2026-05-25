@@ -17,6 +17,18 @@ vi.mock('../../src/phases/runner.js', () => ({
   runPhaseLoop: vi.fn(async () => { /* no-op default */ }),
 }));
 
+// #116 B3: the R-confirm-kill prompt depends on `computeWorkerLiveness` reading
+// real PID state from `src/process.js`. We mock those primitives so controller
+// tests can drive the alive/dead branches without spawning real processes.
+vi.mock('../../src/process.js', async (importActual) => {
+  const actual = await importActual<typeof import('../../src/process.js')>();
+  return {
+    ...actual,
+    isPidAlive: vi.fn(() => false),
+    isSameProcessInstance: vi.fn(() => false),
+  };
+});
+
 function makeTmpDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'terminal-ui-'));
 }
@@ -408,6 +420,119 @@ describe('enterFailedTerminalState', () => {
     const hintShown = stderrSpy.mock.calls.some(c => /Hint: Claude exited within/.test(String(c[0])));
     expect(hintShown).toBe(false);
     stderrSpy.mockRestore();
+  });
+
+  // #116 B3: confirm-kill prompt when [R] is pressed while a workspace worker
+  // is alive. Existing R/J/Q tests above run with `lastWorkspacePid: null`, which
+  // makes `computeWorkerLiveness` return `undefined` — they skip the prompt branch
+  // entirely (zero behavior change for the dead/undefined R path).
+  describe('#116 B3 — R confirm-kill prompt', () => {
+    it('cancels resume on N: respawn NOT invoked, no terminal_action emitted, R/J/Q prompt re-shown', async () => {
+      const { runPhaseLoop } = await import('../../src/phases/runner.js');
+      vi.mocked(runPhaseLoop).mockClear();
+      const { isPidAlive, isSameProcessInstance } = await import('../../src/process.js');
+      vi.mocked(isPidAlive).mockReturnValue(true);
+      vi.mocked(isSameProcessInstance).mockReturnValue(true);
+
+      const state = makeState({
+        lastWorkspacePid: 4242,
+        lastWorkspacePidStartTime: 1_700_000_000,
+      });
+      const input = new MockInput();
+      // R → N (cancel) → Q (exit without resume)
+      input.enqueue('r', 'n', 'q');
+      const logger = makeLogger();
+      await enterFailedTerminalState(state, '/harness', makeTmpDir(), '/cwd', input as unknown as InputManager, logger);
+
+      // respawn-path (runPhaseLoop) never called.
+      expect(runPhaseLoop).not.toHaveBeenCalled();
+      // No `terminal_action action=resume` event for the cancelled press; only the final quit.
+      const events = (logger.logEvent as any).mock.calls.map((c: any[]) => c[0]);
+      const resumeEvents = events.filter((e: any) => e.event === 'terminal_action' && e.action === 'resume');
+      expect(resumeEvents).toHaveLength(0);
+      const quitEvents = events.filter((e: any) => e.event === 'terminal_action' && e.action === 'quit');
+      expect(quitEvents).toHaveLength(1);
+    });
+
+    it('proceeds on Y: respawn IS invoked, terminal_action emitted with confirmedKill=true', async () => {
+      const { runPhaseLoop } = await import('../../src/phases/runner.js');
+      vi.mocked(runPhaseLoop).mockClear();
+      vi.mocked(runPhaseLoop).mockImplementationOnce(async (s: any) => {
+        s.status = 'completed';
+      });
+      const { isPidAlive, isSameProcessInstance } = await import('../../src/process.js');
+      vi.mocked(isPidAlive).mockReturnValue(true);
+      vi.mocked(isSameProcessInstance).mockReturnValue(true);
+
+      const state = makeState({
+        lastWorkspacePid: 4242,
+        lastWorkspacePidStartTime: 1_700_000_000,
+      });
+      const input = new MockInput();
+      input.enqueue('r', 'y');
+      const logger = makeLogger();
+      await enterFailedTerminalState(state, '/harness', makeTmpDir(), '/cwd', input as unknown as InputManager, logger);
+
+      expect(runPhaseLoop).toHaveBeenCalledOnce();
+      expect(logger.logEvent).toHaveBeenCalledWith(expect.objectContaining({
+        event: 'terminal_action',
+        action: 'resume',
+        fromPhase: 5,
+        confirmedKill: true,
+      }));
+    });
+
+    it('dead-worker path is unchanged: no prompt, single R → resume, no confirmedKill on event', async () => {
+      const { runPhaseLoop } = await import('../../src/phases/runner.js');
+      vi.mocked(runPhaseLoop).mockClear();
+      vi.mocked(runPhaseLoop).mockImplementationOnce(async (s: any) => {
+        s.status = 'completed';
+      });
+      const { isPidAlive } = await import('../../src/process.js');
+      // PID present but DEAD — must skip the prompt entirely.
+      vi.mocked(isPidAlive).mockReturnValue(false);
+
+      const state = makeState({
+        lastWorkspacePid: 4242,
+        lastWorkspacePidStartTime: 1_700_000_000,
+      });
+      const input = new MockInput();
+      // Single R — no confirmation key needed.
+      input.enqueue('r');
+      const logger = makeLogger();
+      await enterFailedTerminalState(state, '/harness', makeTmpDir(), '/cwd', input as unknown as InputManager, logger);
+
+      expect(runPhaseLoop).toHaveBeenCalledOnce();
+      const resumeEvent = (logger.logEvent as any).mock.calls
+        .map((c: any[]) => c[0])
+        .find((e: any) => e.event === 'terminal_action' && e.action === 'resume');
+      expect(resumeEvent).toBeDefined();
+      // `confirmedKill` field must be ABSENT when no confirmation occurred
+      // (additive field; absence preserves the legacy event shape).
+      expect(resumeEvent).not.toHaveProperty('confirmedKill');
+    });
+
+    it('undefined-liveness path (no PID tracked) is unchanged: no prompt, no confirmedKill', async () => {
+      const { runPhaseLoop } = await import('../../src/phases/runner.js');
+      vi.mocked(runPhaseLoop).mockClear();
+      vi.mocked(runPhaseLoop).mockImplementationOnce(async (s: any) => {
+        s.status = 'completed';
+      });
+
+      // Default state has lastWorkspacePid: null → computeWorkerLiveness returns undefined.
+      const state = makeState();
+      const input = new MockInput();
+      input.enqueue('r');
+      const logger = makeLogger();
+      await enterFailedTerminalState(state, '/harness', makeTmpDir(), '/cwd', input as unknown as InputManager, logger);
+
+      expect(runPhaseLoop).toHaveBeenCalledOnce();
+      const resumeEvent = (logger.logEvent as any).mock.calls
+        .map((c: any[]) => c[0])
+        .find((e: any) => e.event === 'terminal_action' && e.action === 'resume');
+      expect(resumeEvent).toBeDefined();
+      expect(resumeEvent).not.toHaveProperty('confirmedKill');
+    });
   });
 });
 

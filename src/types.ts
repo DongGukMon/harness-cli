@@ -274,7 +274,13 @@ export type RenderCallsite =
   | 'gate-error-pending'
   | 'gate-stubborn-id-pending'
   | 'verify-escalation-pending'
-  | 'verify-error-pending';
+  | 'verify-error-pending'
+  // #116 B3: shown after the operator presses [R] in terminal-failed state
+  // while a workspace worker is still alive (workerLiveness === 'alive'),
+  // so an Ink-rendered Y/N confirmation can replace the action menu before
+  // we proceed to `respawnPane()` (which would otherwise SIGKILL the worker
+  // and any in-progress child tool calls).
+  | 'terminal-failed-confirm-kill';
 
 // Distributive Omit: applies Omit to each member of a union separately,
 // preserving discriminated-union specificity (needed for LogEvent variants).
@@ -396,6 +402,14 @@ export type LogEvent =
       action: 'resume' | 'jump' | 'quit';
       fromPhase: number;
       targetPhase?: number;
+      /**
+       * #116 B3: present (and `true`) only when `action === 'resume'` AND the
+       * operator confirmed the R-confirm-kill prompt that fires while the
+       * workspace worker is alive. Absent otherwise — including the legacy
+       * dead/undefined-liveness R path, which must remain byte-identical to
+       * pre-#122 events. Additive only; never set to `false`.
+       */
+      confirmedKill?: boolean;
     })
   | (LogEventBase & { event: 'session_end'; status: 'completed' | 'paused' | 'interrupted'; totalWallMs: number })
   | (LogEventBase & { event: 'resume_error'; phase: number; message: string });
