@@ -152,7 +152,7 @@ function getPhaseRunningElapsedMs(
   }
 
   if (INTERACTIVE_PHASES.has(currentPhase)) {
-    return getInteractiveElapsed(allEvents, sessionEvents, currentPhase, now);
+    return getInteractiveElapsed(allEvents, sessionEvents, currentPhase, stateSlice.phaseStatus, now);
   }
 
   return null;
@@ -162,6 +162,7 @@ function getInteractiveElapsed(
   allEvents: LogEvent[],
   sessionEvents: LogEvent[],
   currentPhase: number,
+  phaseStatus: PhaseStatus,
   now: number,
 ): number | null {
   const starts = sessionEvents.filter(
@@ -185,7 +186,22 @@ function getInteractiveElapsed(
     }
   }
 
-  return matchingEnd ? null : Math.max(now - lastStart.ts, 0);
+  if (!matchingEnd) return Math.max(now - lastStart.ts, 0);
+
+  // Issue #116 B2: when the phase ended in failure/error, surface the
+  // actual failed-attempt duration so the ctrl-pane footer doesn't read
+  // "0m 00s phase" (which the operator mistakes for "the phase failed
+  // instantly"). For 'completed', preserve the historical null so the
+  // live phase timer goes idle between phases.
+  if (phaseStatus === 'failed' || phaseStatus === 'error') {
+    if (typeof matchingEnd.durationMs === 'number') {
+      return Math.max(matchingEnd.durationMs, 0);
+    }
+    // Fall back to wall-clock delta when durationMs is missing for any reason.
+    return Math.max(matchingEnd.ts - lastStart.ts, 0);
+  }
+
+  return null;
 }
 
 function getPhase6Elapsed(sessionEvents: LogEvent[], now: number): number | null {

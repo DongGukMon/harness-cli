@@ -11,6 +11,11 @@ vi.mock('../src/process.js', () => ({
   killProcessGroup: vi.fn().mockResolvedValue(undefined),
   isPidAlive: vi.fn().mockReturnValue(false),
   getProcessStartTime: vi.fn().mockReturnValue(null),
+  // PR #116: isSameProcessInstance moved from signal.ts to process.ts so the
+  // UI layer can share the same PID-recycling guard. Default the mock to
+  // true here so the existing kill-path tests (which mock isPidAlive=true
+  // and want the guard to pass) keep passing without per-test setup churn.
+  isSameProcessInstance: vi.fn().mockReturnValue(true),
 }));
 
 import { registerSignalHandlers, handleShutdown } from '../src/signal.js';
@@ -493,11 +498,14 @@ describe('SIGUSR1 handler', () => {
 
   it('gate codex phase: skip sends C-c to workspace pane and kills lastWorkspacePid', async () => {
     const { sendKeysToPane } = await import('../src/tmux.js');
-    const { killProcessGroup, isPidAlive, getProcessStartTime } = await import('../src/process.js');
+    const { killProcessGroup, isPidAlive, getProcessStartTime, isSameProcessInstance } = await import('../src/process.js');
 
-    // Make the PID appear alive and the same instance for the guard to pass
+    // Make the PID appear alive and the same instance for the guard to pass.
+    // PR #116: isSameProcessInstance moved out of signal.ts; mock it here
+    // since beforeEach restoreAllMocks resets the module-top default.
     vi.mocked(isPidAlive).mockReturnValue(true);
     vi.mocked(getProcessStartTime).mockReturnValue(1000);
+    vi.mocked(isSameProcessInstance).mockReturnValue(true);
 
     const dir = makeTmpDir();
     tmpDirs.push(dir);

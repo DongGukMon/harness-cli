@@ -2,6 +2,7 @@ import React from 'react';
 import { render } from 'ink';
 import type { HarnessState, SessionLogger, RenderCallsite } from '../types.js';
 import { dispatch } from './store.js';
+import type { WorkerLiveness } from './store.js';
 import { App } from './App.js';
 
 export let mounted = false;
@@ -25,6 +26,7 @@ export function renderInkControlPanel(
   state: HarnessState,
   logger?: SessionLogger,
   callsite?: RenderCallsite,
+  workerLiveness?: WorkerLiveness,
 ): void {
   // Always emit telemetry regardless of TTY
   if (logger !== undefined && callsite !== undefined) {
@@ -40,7 +42,7 @@ export function renderInkControlPanel(
   }
 
   // Update store (triggers React re-render if already mounted)
-  dispatch({ state, callsite });
+  dispatch({ state, callsite, workerLiveness });
 
   if (!mounted) {
     process.stdout.write('\x1b[2J\x1b[H');

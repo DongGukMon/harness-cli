@@ -3,6 +3,7 @@ export { formatFooter } from './metrics/footer-aggregator.js';
 import type { HarnessState, FlowMode, SessionLogger, RenderCallsite } from './types.js';
 import type { InputManager } from './input.js';
 import { renderInkControlPanel, mounted } from './ink/render.js';
+import type { WorkerLiveness } from './ink/store.js';
 
 // ANSI color codes
 const GREEN = '\x1b[32m';
@@ -44,8 +45,9 @@ export function renderControlPanel(
   state: HarnessState,
   logger?: SessionLogger,
   callsite?: RenderCallsite,
+  workerLiveness?: WorkerLiveness,
 ): void {
-  renderInkControlPanel(state, logger, callsite);
+  renderInkControlPanel(state, logger, callsite, workerLiveness);
 }
 
 export function writeFooterToPane(line: string, rows: number, columns: number): void {

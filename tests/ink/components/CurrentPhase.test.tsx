@@ -106,6 +106,43 @@ describe('CurrentPhase', () => {
     expect(lastFrame()).not.toContain('Deferred');
   });
 
+  it('shows worker-alive indicator when phase failed and workerLiveness="alive" (#116 B1)', () => {
+    const state = makeState({ currentPhase: 3, lastWorkspacePid: 1234 });
+    state.phases['3'] = 'failed';
+    const { lastFrame } = render(<CurrentPhase state={state} workerLiveness="alive" />);
+    const frame = lastFrame() ?? '';
+    expect(frame.toLowerCase()).toContain('worker');
+    expect(frame.toLowerCase()).toContain('alive');
+  });
+
+  it('shows worker-dead indicator when phase failed and workerLiveness="dead" (#116 B1)', () => {
+    const state = makeState({ currentPhase: 3, lastWorkspacePid: 1234 });
+    state.phases['3'] = 'failed';
+    const { lastFrame } = render(<CurrentPhase state={state} workerLiveness="dead" />);
+    const frame = lastFrame() ?? '';
+    expect(frame.toLowerCase()).toContain('worker');
+    // Must distinguish from the alive case
+    expect(frame.toLowerCase()).not.toContain('worker alive');
+  });
+
+  it('does NOT show a worker liveness indicator when phase is in_progress (#116 B1 — terminal-only)', () => {
+    const state = makeState({ currentPhase: 3, lastWorkspacePid: 1234 });
+    state.phases['3'] = 'in_progress';
+    const { lastFrame } = render(<CurrentPhase state={state} workerLiveness="alive" />);
+    const frame = (lastFrame() ?? '').toLowerCase();
+    expect(frame).not.toContain('worker alive');
+    expect(frame).not.toContain('worker dead');
+  });
+
+  it('does NOT show a worker liveness indicator when workerLiveness is undefined', () => {
+    const state = makeState({ currentPhase: 3 });
+    state.phases['3'] = 'failed';
+    const { lastFrame } = render(<CurrentPhase state={state} />);
+    const frame = (lastFrame() ?? '').toLowerCase();
+    expect(frame).not.toContain('worker alive');
+    expect(frame).not.toContain('worker dead');
+  });
+
   it('renders a deferred banner listing requirement IDs when present', () => {
     const state = makeState({ currentPhase: 4 });
     state.phases['4'] = 'in_progress';
