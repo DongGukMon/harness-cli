@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { execSync } from 'child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync, readFileSync } from 'fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { createTestRepo } from './helpers/test-repo.js';
@@ -392,5 +392,126 @@ describe('completeInteractivePhaseFromFreshSentinel — Phase 5 multi-repo (FR-8
       stderrSpy2.mockRestore();
     }
     // No __exit__ thrown = test passes
+  });
+});
+
+describe('inline completion diagnostics — issue #117 Bug B', () => {
+  let exitSpy: any;
+  let stderrSpy: any;
+
+  beforeEach(() => {
+    exitSpy = vi.spyOn(process, 'exit').mockImplementation(((code?: number) => {
+      throw new Error(`__exit__:${code}`);
+    }) as never);
+    stderrSpy = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
+  });
+
+  afterEach(() => {
+    exitSpy.mockRestore();
+    stderrSpy.mockRestore();
+  });
+
+  it('completeInteractivePhaseFromFreshSentinel calls onSkip with "phase5_no_advancement" when no repo advanced', () => {
+    const outer = makeMultiTmpDir();
+    const repoA = join(outer, 'a');
+    const head = initRepo(repoA);
+
+    const state = createInitialState('test-run', 'task', head, false);
+    state.trackedRepos = [
+      { path: repoA, baseCommit: head, implRetryBase: head, implHead: null },
+    ];
+    state.implRetryBase = head;
+
+    const runDir = makeMultiTmpDir('rundir-');
+    const reasons: string[] = [];
+    const result = completeInteractivePhaseFromFreshSentinel(
+      5,
+      state,
+      outer,
+      runDir,
+      (r) => reasons.push(r),
+    );
+
+    expect(result).toBe(false);
+    expect(reasons).toEqual(['phase5_no_advancement']);
+  });
+
+  it('resumeRun preserves sentinel and stderr-logs reason when phase 5 inline completion rejected for no_advancement', async () => {
+    const outer = makeMultiTmpDir();
+    const repoA = join(outer, 'a');
+    const head = initRepo(repoA);
+
+    writeFileSync(join(repoA, '.gitignore'), '.harness/\n');
+    execSync('git add .gitignore && git commit -m "gi"', { cwd: repoA, stdio: 'pipe' });
+    const baseAfterGi = execSync('git rev-parse HEAD', { cwd: repoA, encoding: 'utf-8' }).trim();
+    void head;
+
+    const harnessDir = join(repoA, '.harness');
+    const runDir = join(harnessDir, 'test-run');
+    mkdirSync(runDir, { recursive: true });
+
+    const sentinelPath = join(runDir, 'phase-5.done');
+    const attemptId = 'attempt-no-advance-123';
+    writeFileSync(sentinelPath, attemptId);
+
+    const state = createInitialState('test-run', 'task', baseAfterGi, false);
+    state.currentPhase = 5;
+    state.phases['5'] = 'failed';
+    state.phaseAttemptId['5'] = attemptId;
+    state.trackedRepos = [
+      { path: repoA, baseCommit: baseAfterGi, implRetryBase: baseAfterGi, implHead: null },
+    ];
+    state.implRetryBase = baseAfterGi;
+    writeState(runDir, state);
+
+    await resumeRun(state, harnessDir, runDir, repoA);
+
+    // Sentinel must NOT be unlinked — phase5_no_advancement is the worker's signed proof,
+    // deleting it would force a redo from scratch despite valid artifacts/commits being intact.
+    expect(existsSync(sentinelPath)).toBe(true);
+    // Operator must see the rejection reason in stderr
+    const stderrText = stderrSpy.mock.calls.map((c: any) => c[0]).join('');
+    expect(stderrText).toMatch(/phase5_no_advancement/);
+    // State must not have advanced
+    expect(state.phases['5']).toBe('failed');
+    expect(state.currentPhase).toBe(5);
+  });
+
+  it('resumeRun unlinks sentinel and advances state on successful phase 5 inline completion', async () => {
+    const outer = makeMultiTmpDir();
+    const repoA = join(outer, 'a');
+    const base = initRepo(repoA);
+
+    writeFileSync(join(repoA, '.gitignore'), '.harness/\n');
+    execSync('git add .gitignore && git commit -m "gi"', { cwd: repoA, stdio: 'pipe' });
+    const baseAfterGi = execSync('git rev-parse HEAD', { cwd: repoA, encoding: 'utf-8' }).trim();
+
+    // Advance HEAD past baseAfterGi
+    writeFileSync(join(repoA, 'impl.txt'), 'y');
+    execSync('git add . && git commit -m "impl"', { cwd: repoA, stdio: 'pipe' });
+
+    const harnessDir = join(repoA, '.harness');
+    const runDir = join(harnessDir, 'test-run');
+    mkdirSync(runDir, { recursive: true });
+
+    const sentinelPath = join(runDir, 'phase-5.done');
+    const attemptId = 'attempt-success-456';
+    writeFileSync(sentinelPath, attemptId);
+
+    const state = createInitialState('test-run', 'task', base, false);
+    state.currentPhase = 5;
+    state.phases['5'] = 'failed';
+    state.phaseAttemptId['5'] = attemptId;
+    state.trackedRepos = [
+      { path: repoA, baseCommit: base, implRetryBase: baseAfterGi, implHead: null },
+    ];
+    state.implRetryBase = baseAfterGi;
+    writeState(runDir, state);
+
+    await resumeRun(state, harnessDir, runDir, repoA);
+
+    expect(existsSync(sentinelPath)).toBe(false);
+    expect(state.phases['5']).toBe('completed');
+    expect(state.currentPhase).toBe(6);
   });
 });

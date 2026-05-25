@@ -142,23 +142,40 @@ async function recoverGeneralState(
       if (content === expectedAttemptId) {
         // Fresh sentinel — attempt inline completion
         try {
+          let skipReason: InlineCompletionSkipReason | null = null;
           const completed = completeInteractivePhaseFromFreshSentinel(
             phase as PhaseNumber,
             state,
             cwd,
             runDir,
+            (r) => { skipReason = r; },
           );
           if (completed) {
             state.phases[phaseKey] = 'completed';
             state.currentPhase = phase + 1;
+            // Sentinel is now stale (phase advanced); unlink so a future jump-back
+            // doesn't see a leftover fresh sentinel from a prior attemptId.
+            try { unlinkSync(sentinelPath); } catch { /* best-effort */ }
             writeState(runDir, state);
+            process.stderr.write(
+              `[harness] resume phase ${phase}: inline-completed → advanced to phase ${phase + 1}\n`
+            );
           } else {
-            // Artifact validation failed despite fresh sentinel.
-            // This means artifacts are missing/invalid while sentinel is fresh.
-            // Treat as stale sentinel — delete it, leave phase to be respawned.
-            try {
-              unlinkSync(sentinelPath);
-            } catch { /* best-effort */ }
+            // Inline completion rejected. Tell the operator why; preserve the sentinel
+            // when the only reason was phase5_no_advancement (worker's signed proof —
+            // deleting forces a full redo despite valid artifacts/commits being intact).
+            // Other reasons (artifact_validation_failed / exception) indicate the
+            // sentinel is genuinely stale, so delete it to let the next attempt respawn.
+            process.stderr.write(
+              `[harness] resume phase ${phase}: inline completion rejected ` +
+              `(${skipReason ?? 'unknown'}) — ` +
+              (skipReason === 'phase5_no_advancement'
+                ? 'no impl repo advanced past implRetryBase; sentinel preserved, advance HEAD then resume\n'
+                : 'sentinel deleted, will respawn on next attempt\n')
+            );
+            if (skipReason !== 'phase5_no_advancement') {
+              try { unlinkSync(sentinelPath); } catch { /* best-effort */ }
+            }
           }
         } catch (err) {
           // normalize_artifact_commit failure during resume: preserve artifacts + sentinel,
@@ -537,27 +554,48 @@ function updateExternalCommitsDetected(state: HarnessState, cwd: string, runDir:
  *
  * Returns true if the phase can be treated as completed.
  */
+/**
+ * Reasons inline completion can be rejected. Surfaces through the `onSkip` callback
+ * so `recoverGeneralState` (and other callers) can log a diagnostic line and decide
+ * whether to delete or preserve the worker's sentinel. See issue #117 Bug B.
+ *
+ * `phase5_no_advancement` is special: the worker did sentinel the phase, but no
+ * tracked repo's HEAD has advanced past implRetryBase yet — the operator must add a
+ * commit before resume can advance. The sentinel is the worker's signed proof and
+ * must NOT be auto-deleted; deleting it forces a full redo despite valid artifacts.
+ */
+export type InlineCompletionSkipReason =
+  | 'phase5_no_advancement'
+  | 'artifact_validation_failed'
+  | 'exception';
+
 export function completeInteractivePhaseFromFreshSentinel(
   phase: PhaseNumber,
   state: HarnessState,
   cwd: string,
   runDir: string,
+  onSkip?: (reason: InlineCompletionSkipReason) => void,
 ): boolean {
+  const skip = (reason: InlineCompletionSkipReason): false => {
+    onSkip?.(reason);
+    return false;
+  };
+
   try {
     if (phase === 1 || phase === 3) {
       // Check artifact existence + non-empty (reopen-aware: no mtime staleness check — see ADR-13)
       const artifactKeys = getPhaseArtifactFiles(state.flow, phase);
-      if (artifactKeys.length === 0) return false;
+      if (artifactKeys.length === 0) return skip('artifact_validation_failed');
 
       const docsRoot = state.trackedRepos?.[0]?.path || cwd;
 
       for (const key of artifactKeys) {
         const relPath = state.artifacts[key];
-        if (!relPath) return false;
+        if (!relPath) return skip('artifact_validation_failed');
         const absPath = isAbsolute(relPath) ? relPath : resolveArtifact(state, relPath, cwd);
-        if (!existsSync(absPath)) return false;
+        if (!existsSync(absPath)) return skip('artifact_validation_failed');
         const stat = statSync(absPath);
-        if (stat.size === 0) return false;
+        if (stat.size === 0) return skip('artifact_validation_failed');
       }
 
       // Phase 1 (both full + light flows): spec must contain a valid
@@ -566,9 +604,9 @@ export function completeInteractivePhaseFromFreshSentinel(
         const specAbs = resolveArtifact(state, state.artifacts.spec, cwd);
         try {
           const body = readFileSync(specAbs, 'utf-8');
-          if (!specHasValidComplexity(body)) return false;
+          if (!specHasValidComplexity(body)) return skip('artifact_validation_failed');
         } catch {
-          return false;
+          return skip('artifact_validation_failed');
         }
       }
 
@@ -577,14 +615,14 @@ export function completeInteractivePhaseFromFreshSentinel(
         const checklistAbs = isAbsolute(state.artifacts.checklist)
           ? state.artifacts.checklist
           : join(cwd, state.artifacts.checklist);
-        if (!isValidChecklistSchema(checklistAbs)) return false;
+        if (!isValidChecklistSchema(checklistAbs)) return skip('artifact_validation_failed');
 
         const specAbs = resolveArtifact(state, state.artifacts.spec, cwd);
         try {
           const body = readFileSync(specAbs, 'utf-8');
-          if (!/^##\s+Implementation\s+Plan\s*$/m.test(body)) return false;
+          if (!/^##\s+Implementation\s+Plan\s*$/m.test(body)) return skip('artifact_validation_failed');
         } catch {
-          return false;
+          return skip('artifact_validation_failed');
         }
       }
 
@@ -616,12 +654,12 @@ export function completeInteractivePhaseFromFreshSentinel(
           r.implHead = null;
         }
       }
-      if (!anyAdvanced) return false;
+      if (!anyAdvanced) return skip('phase5_no_advancement');
       syncLegacyMirror(state);
       return true;
     }
   } catch {
-    return false;
+    return skip('exception');
   }
 
   return false;
