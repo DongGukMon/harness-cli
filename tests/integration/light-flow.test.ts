@@ -29,7 +29,7 @@ vi.mock('../../src/artifact.js', async (importOriginal) => {
     ...actual,
     commitEvalReport: vi.fn().mockReturnValue('committed'),
     normalizeArtifactCommit: vi.fn(),
-    runPhase6Preconditions: vi.fn(),
+    runPhase6Preconditions: vi.fn().mockReturnValue({ extendedBaseline: [] }),
   };
 });
 
