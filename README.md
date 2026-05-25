@@ -397,6 +397,7 @@ When logging is enabled, the control pane footer shows:
 - Interactive phases are validated with sentinel files such as `.harness/<runId>/phase-1.done`.
 - Phase 5 requires a clean tree and at least one commit after `implRetryBase` unless it is a reopen path that only fixes non-commit artifacts.
 - A Codex preset on Phase 5 can hit a commit-discipline trap (sentinel fresh + uncommitted edits → silent failed loop). The harness now surfaces this with a stderr warn block + `phase_end.uncommittedRepos`. See `docs/HOW-IT-WORKS.md` (#84).
+- Phase 6 tolerates new `??`-status untracked files that appear mid-session (e.g. `.claude/scheduled_tasks.lock`) — they are added to `state.dirtyBaseline` and recorded as a `dirty_baseline_extended` event. A P7-reject → P5-reopen cycle that regenerates the eval report byte-identically no longer crashes on `eval_commit_failed`; precondition throws populate `phase_end.details.offendingPaths` (issues #112, #113).
 - `skip` and `jump` are control-plane operations; they do not take the main run lock.
 - Re-selecting presets can invalidate saved gate replay sidecars when the effective runner/model lineage changes.
 
