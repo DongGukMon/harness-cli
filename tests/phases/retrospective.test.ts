@@ -372,3 +372,42 @@ describe('Deferred Stubborn Requirements section', () => {
     expect(idxEsc).toBeGreaterThan(idxDeferred);
   });
 });
+
+// Issue #114 PR #1: forward-compat for unknown event types added in later PRs.
+// The analyzer reads events as `any`, so unknown variants must pass through
+// without crashing. This guards against accidental regressions when later
+// PRs (PR #2–#5) start emitting `runner_heartbeat`, `runner_stalled`, or
+// `phase_timeout_warning` into live runs whose events.jsonl is later
+// re-analyzed offline.
+describe('forward-compat with new observability events (#114 PR #1)', () => {
+  const HEARTBEAT_LINES = [
+    ...COMPLETED_LINES.slice(0, 4),  // session_start + phase 1 + phase 2 start
+    JSON.stringify({ v:1, ts:BASE+65100, runId:'r1', event:'runner_heartbeat', phase:5, attemptId:'e1', pid:1234, pidAlive:true, outputBytesSinceLastHeartbeat:1024, elapsedMs:5000 }),
+    JSON.stringify({ v:1, ts:BASE+95100, runId:'r1', event:'runner_stalled', phase:5, attemptId:'e1', pid:1234, pidAlive:true, silenceMs:300000, elapsedMs:600000 }),
+    JSON.stringify({ v:1, ts:BASE+95200, runId:'r1', event:'phase_timeout_warning', phase:5, attemptId:'e1', elapsedMs:1440000, timeoutMs:1800000, remainingMs:360000 }),
+    ...COMPLETED_LINES.slice(4),  // rest of the completed run
+  ];
+
+  it('does not crash when events.jsonl contains the new observability variants', () => {
+    const p = writeFixture(tmpDir, HEARTBEAT_LINES);
+    expect(() => generateRetrospective(p)).not.toThrow();
+  });
+
+  it('produces identical phase stats to the baseline (new events are ignored)', () => {
+    const baseline = generateRetrospective(writeFixture(tmpDir, COMPLETED_LINES));
+    // Re-init tmpDir so the second fixture path is distinct
+    const tmpDir2 = fs.mkdtempSync(path.join(os.tmpdir(), 'retro-test-fwd-'));
+    try {
+      const withHeartbeat = generateRetrospective(writeFixture(tmpDir2, HEARTBEAT_LINES));
+      expect(withHeartbeat.stats.status).toBe(baseline.stats.status);
+      expect(withHeartbeat.stats.phases.length).toBe(baseline.stats.phases.length);
+      for (let i = 0; i < baseline.stats.phases.length; i++) {
+        expect(withHeartbeat.stats.phases[i].claudeTokens).toBe(baseline.stats.phases[i].claudeTokens);
+        expect(withHeartbeat.stats.phases[i].codexTokens).toBe(baseline.stats.phases[i].codexTokens);
+        expect(withHeartbeat.stats.phases[i].finalStatus).toBe(baseline.stats.phases[i].finalStatus);
+      }
+    } finally {
+      fs.rmSync(tmpDir2, { recursive: true, force: true });
+    }
+  });
+});
