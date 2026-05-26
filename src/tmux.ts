@@ -164,6 +164,33 @@ export function sendKeysToPane(_session: string, paneTarget: string, keys: strin
 }
 
 /**
+ * #114 PR #3: dump a snapshot of `paneTarget`'s visible buffer + scrollback.
+ *
+ * Used at `phase_end` to persist the just-completed attempt's runner output
+ * before `respawnPane` clears the pane for the next attempt. Best-effort:
+ * returns `null` (with a stderr warn) if tmux fails so the harness never
+ * aborts a phase over a debug-aid capture failure.
+ *
+ * `-S -<lines>`: capture this many history lines (default 3000 covers a
+ * 30 min P5 run's typical output volume).
+ * `-p`: print to stdout (default tmux behavior is to write to a paste buffer).
+ */
+export function captureWorkspacePaneSnapshot(paneTarget: string, lines: number = 3000): string | null {
+  try {
+    const out = execSync(
+      `tmux capture-pane -t ${escSmart(paneTarget)} -p -S -${lines}`,
+      { stdio: ['ignore', 'pipe', 'pipe'] },
+    );
+    return out.toString('utf-8');
+  } catch (err) {
+    process.stderr.write(
+      `[harness] tmux capture-pane failed for ${paneTarget}: ${(err as Error).message}\n`,
+    );
+    return null;
+  }
+}
+
+/**
  * Atomically reset a pane: kill any process currently running in it (-k) and
  * start a fresh default shell with the given cwd. Restores a clean TTY (raw
  * mode cleared, foreground process is a shell prompt) so the next
