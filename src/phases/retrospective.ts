@@ -32,6 +32,16 @@ export interface RetrospectiveStats {
   verify: { passCount: number; failCount: number; lastFailedChecks: string[] };
   spike: { topPhases: Array<{ phase: number; tokens: number }>; flagged: boolean; ratio: number };
   totals: { claudeTokens: number; codexTokens: number };
+  /**
+   * #114 PR #6: anomaly events surfaced from the observability pipeline.
+   * `runner_heartbeat` is NOT enumerated — it's a liveness signal, not a
+   * per-occurrence anomaly. Always present (empty arrays when no anomaly
+   * fixtures landed) so downstream consumers don't need to null-guard.
+   */
+  runnerAnomalies?: {
+    stalls: Array<{ phase: number; attemptId: string; ts: number; silenceMs: number; elapsedMs: number; pidAlive: boolean }>;
+    timeoutWarnings: Array<{ phase: number; attemptId: string; ts: number; elapsedMs: number; timeoutMs: number; remainingMs: number }>;
+  };
 }
 
 export function generateRetrospective(
@@ -107,6 +117,10 @@ export function generateRetrospective(
   const escalations: RetrospectiveStats['escalations'] = [];
   let verifyPassCount = 0, verifyFailCount = 0, lastFailedChecks: string[] = [];
 
+  // #114 PR #6: anomaly event accumulators (preserves event order via push).
+  const stalls: NonNullable<RetrospectiveStats['runnerAnomalies']>['stalls'] = [];
+  const timeoutWarnings: NonNullable<RetrospectiveStats['runnerAnomalies']>['timeoutWarnings'] = [];
+
   for (const e of events) {
     const pn: number = (e.phase as number) ?? 0;
 
@@ -155,6 +169,28 @@ export function generateRetrospective(
     if (e.event === 'verify_result') {
       if (e.passed) verifyPassCount++;
       else { verifyFailCount++; lastFailedChecks = (e.failedChecks ?? []) as string[]; }
+    }
+
+    // #114 PR #6: runner anomaly events
+    if (e.event === 'runner_stalled') {
+      stalls.push({
+        phase: e.phase as number,
+        attemptId: (e.attemptId ?? '') as string,
+        ts: e.ts as number,
+        silenceMs: (e.silenceMs ?? 0) as number,
+        elapsedMs: (e.elapsedMs ?? 0) as number,
+        pidAlive: Boolean(e.pidAlive),
+      });
+    }
+    if (e.event === 'phase_timeout_warning') {
+      timeoutWarnings.push({
+        phase: e.phase as number,
+        attemptId: (e.attemptId ?? '') as string,
+        ts: e.ts as number,
+        elapsedMs: (e.elapsedMs ?? 0) as number,
+        timeoutMs: (e.timeoutMs ?? 0) as number,
+        remainingMs: (e.remainingMs ?? 0) as number,
+      });
     }
   }
 
@@ -205,6 +241,7 @@ export function generateRetrospective(
     verify: { passCount: verifyPassCount, failCount: verifyFailCount, lastFailedChecks },
     spike,
     totals: { claudeTokens: totalClaudeTokens, codexTokens: totalCodexTokens },
+    runnerAnomalies: { stalls, timeoutWarnings },
   };
 
   return { markdown: renderMarkdown(stats, eventsPath, events, state), stats };
@@ -331,6 +368,32 @@ function renderMarkdown(stats: RetrospectiveStats, eventsPath: string, events: a
     }
   }
   lines.push('');
+
+  // 6b. Runner Anomalies (#114 PR #6) — only when at least one anomaly fired.
+  const anomalies = stats.runnerAnomalies;
+  if (anomalies && (anomalies.stalls.length > 0 || anomalies.timeoutWarnings.length > 0)) {
+    lines.push('## Runner Anomalies');
+    lines.push('');
+    for (const s of anomalies.stalls) {
+      const silenceS = Math.round(s.silenceMs / 1000);
+      const elapsedHum = humanizeMs(s.elapsedMs);
+      lines.push(
+        `- \`runner_stalled\` phase ${s.phase} attempt \`${s.attemptId}\` @ ${isoFromTs(s.ts)} ` +
+        `— silence ${silenceS}s, elapsed ${elapsedHum}` +
+        (s.pidAlive ? ' (pid alive)' : ' (pid dead)'),
+      );
+    }
+    for (const w of anomalies.timeoutWarnings) {
+      const elapsedHum = humanizeMs(w.elapsedMs);
+      const remainingHum = humanizeMs(w.remainingMs);
+      const timeoutHum = humanizeMs(w.timeoutMs);
+      lines.push(
+        `- \`phase_timeout_warning\` phase ${w.phase} attempt \`${w.attemptId}\` @ ${isoFromTs(w.ts)} ` +
+        `— elapsed ${elapsedHum} of ${timeoutHum} (remaining ${remainingHum})`,
+      );
+    }
+    lines.push('');
+  }
 
   // 7. Verify
   lines.push('## Verify');

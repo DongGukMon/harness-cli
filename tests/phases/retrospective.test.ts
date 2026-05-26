@@ -411,3 +411,62 @@ describe('forward-compat with new observability events (#114 PR #1)', () => {
     }
   });
 });
+
+// Issue #114 PR #6: retro analyzer surfaces `runner_stalled` and
+// `phase_timeout_warning` events in a new "Runner Anomalies" markdown section.
+// `runner_heartbeat` is intentionally NOT enumerated — it's a liveness signal,
+// not a per-occurrence anomaly. Heartbeats stay silently ignored.
+describe('runner anomalies surfacing (#114 PR #6)', () => {
+  // Reuses HEARTBEAT_LINES which already includes runner_stalled + phase_timeout_warning.
+  const ANOMALY_LINES = [
+    ...COMPLETED_LINES.slice(0, 4),
+    JSON.stringify({ v:1, ts:BASE+65100, runId:'r1', event:'runner_heartbeat', phase:5, attemptId:'e1', pid:1234, pidAlive:true, outputBytesSinceLastHeartbeat:1024, elapsedMs:5000 }),
+    JSON.stringify({ v:1, ts:BASE+95100, runId:'r1', event:'runner_stalled', phase:5, attemptId:'e1', pid:1234, pidAlive:true, silenceMs:300000, elapsedMs:600000 }),
+    JSON.stringify({ v:1, ts:BASE+95200, runId:'r1', event:'phase_timeout_warning', phase:5, attemptId:'e1', elapsedMs:1440000, timeoutMs:1800000, remainingMs:360000 }),
+    JSON.stringify({ v:1, ts:BASE+95300, runId:'r1', event:'runner_stalled', phase:5, attemptId:'e1', pid:1234, pidAlive:true, silenceMs:300000, elapsedMs:900000 }),
+    ...COMPLETED_LINES.slice(4),
+  ];
+
+  it('collects runner_stalled and phase_timeout_warning events into stats.runnerAnomalies', () => {
+    const p = writeFixture(tmpDir, ANOMALY_LINES);
+    const { stats } = generateRetrospective(p);
+    expect(stats.runnerAnomalies).toBeDefined();
+    expect(stats.runnerAnomalies!.stalls).toHaveLength(2);
+    expect(stats.runnerAnomalies!.timeoutWarnings).toHaveLength(1);
+    expect(stats.runnerAnomalies!.stalls[0]).toMatchObject({
+      phase: 5,
+      attemptId: 'e1',
+      silenceMs: 300000,
+      elapsedMs: 600000,
+    });
+    expect(stats.runnerAnomalies!.timeoutWarnings[0]).toMatchObject({
+      phase: 5,
+      attemptId: 'e1',
+      elapsedMs: 1440000,
+      timeoutMs: 1800000,
+      remainingMs: 360000,
+    });
+  });
+
+  it('renders a "Runner Anomalies" markdown section listing both stalls and warnings', () => {
+    const p = writeFixture(tmpDir, ANOMALY_LINES);
+    const { markdown } = generateRetrospective(p);
+    expect(markdown).toContain('## Runner Anomalies');
+    // Stalls + warnings each get a bullet — match key fields.
+    expect(markdown).toMatch(/runner_stalled.*phase 5/);
+    expect(markdown).toMatch(/phase_timeout_warning.*phase 5/);
+    // 2 stalls + 1 warning — the section must enumerate all three.
+    const stallMatches = markdown.match(/runner_stalled/g) ?? [];
+    expect(stallMatches.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('omits the "Runner Anomalies" section entirely when no anomaly events present', () => {
+    const p = writeFixture(tmpDir, COMPLETED_LINES);
+    const { markdown, stats } = generateRetrospective(p);
+    expect(markdown).not.toContain('## Runner Anomalies');
+    // stats still carries the field (empty) so downstream consumers don't NPE
+    expect(stats.runnerAnomalies).toBeDefined();
+    expect(stats.runnerAnomalies!.stalls).toHaveLength(0);
+    expect(stats.runnerAnomalies!.timeoutWarnings).toHaveLength(0);
+  });
+});
