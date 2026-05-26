@@ -545,3 +545,85 @@ describe('enterCompleteTerminalState', () => {
     await p;
   });
 });
+
+// Issue #114 PR #5: every terminal_action emit site labels its origin via the
+// additive `source` field added in PR #1 (#126). All four sites in
+// terminal-ui.ts dispatch off `inputManager.waitForKey()` — physical keypress
+// from a TTY (or `tmux send-keys` injected by an operator/supervisor, which the
+// harness treats identically) — so they all carry `source: 'user-key'`.
+describe('terminal_action source labeling — issue #114 PR #5', () => {
+  it('Q emits terminal_action with source=user-key', async () => {
+    const state = makeState();
+    const input = new MockInput();
+    input.enqueue('q');
+    const logger = makeLogger();
+    await enterFailedTerminalState(state, '/harness', makeTmpDir(), '/cwd', input as unknown as InputManager, logger);
+    expect(logger.logEvent).toHaveBeenCalledWith(expect.objectContaining({
+      event: 'terminal_action',
+      action: 'quit',
+      source: 'user-key',
+    }));
+  });
+
+  it('R (no confirm) emits terminal_action with source=user-key', async () => {
+    const { runPhaseLoop } = await import('../../src/phases/runner.js');
+    vi.mocked(runPhaseLoop).mockClear();
+    vi.mocked(runPhaseLoop).mockImplementationOnce(async (s: any) => {
+      s.status = 'completed';
+    });
+    const state = makeState();
+    const input = new MockInput();
+    input.enqueue('r');
+    const logger = makeLogger();
+    await enterFailedTerminalState(state, '/harness', makeTmpDir(), '/cwd', input as unknown as InputManager, logger);
+    const resumeEvent = (logger.logEvent as any).mock.calls
+      .map((c: any[]) => c[0])
+      .find((e: any) => e.event === 'terminal_action' && e.action === 'resume');
+    expect(resumeEvent).toBeDefined();
+    expect(resumeEvent.source).toBe('user-key');
+  });
+
+  it('R (with confirmedKill) emits terminal_action with source=user-key and confirmedKill=true', async () => {
+    const { runPhaseLoop } = await import('../../src/phases/runner.js');
+    vi.mocked(runPhaseLoop).mockClear();
+    vi.mocked(runPhaseLoop).mockImplementationOnce(async (s: any) => {
+      s.status = 'completed';
+    });
+    const { isPidAlive, isSameProcessInstance } = await import('../../src/process.js');
+    vi.mocked(isPidAlive).mockReturnValue(true);
+    vi.mocked(isSameProcessInstance).mockReturnValue(true);
+
+    const state = makeState({
+      lastWorkspacePid: 4242,
+      lastWorkspacePidStartTime: 1_700_000_000,
+    });
+    const input = new MockInput();
+    input.enqueue('r', 'y');
+    const logger = makeLogger();
+    await enterFailedTerminalState(state, '/harness', makeTmpDir(), '/cwd', input as unknown as InputManager, logger);
+    const resumeEvent = (logger.logEvent as any).mock.calls
+      .map((c: any[]) => c[0])
+      .find((e: any) => e.event === 'terminal_action' && e.action === 'resume');
+    expect(resumeEvent).toBeDefined();
+    expect(resumeEvent.source).toBe('user-key');
+    expect(resumeEvent.confirmedKill).toBe(true);
+  });
+
+  it('J emits terminal_action with source=user-key', async () => {
+    const { runPhaseLoop } = await import('../../src/phases/runner.js');
+    vi.mocked(runPhaseLoop).mockClear();
+    vi.mocked(runPhaseLoop).mockImplementationOnce(async (s: any) => {
+      s.status = 'completed';
+    });
+    const state = makeState();
+    const input = new MockInput();
+    input.enqueue('j', '3');
+    const logger = makeLogger();
+    await enterFailedTerminalState(state, '/harness', makeTmpDir(), '/cwd', input as unknown as InputManager, logger);
+    expect(logger.logEvent).toHaveBeenCalledWith(expect.objectContaining({
+      event: 'terminal_action',
+      action: 'jump',
+      source: 'user-key',
+    }));
+  });
+});

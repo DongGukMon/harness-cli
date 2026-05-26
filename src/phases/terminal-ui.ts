@@ -241,7 +241,7 @@ export async function enterFailedTerminalState(
     const fromPhase = findFailedPhase(state) ?? state.currentPhase;
 
     if (choice === 'Q') {
-      logger.logEvent({ event: 'terminal_action', action: 'quit', fromPhase });
+      logger.logEvent({ event: 'terminal_action', action: 'quit', fromPhase, source: 'user-key' });
       return;
     }
 
@@ -267,8 +267,8 @@ export async function enterFailedTerminalState(
 
       logger.logEvent(
         confirmedKill === true
-          ? { event: 'terminal_action', action: 'resume', fromPhase, confirmedKill: true }
-          : { event: 'terminal_action', action: 'resume', fromPhase },
+          ? { event: 'terminal_action', action: 'resume', fromPhase, confirmedKill: true, source: 'user-key' }
+          : { event: 'terminal_action', action: 'resume', fromPhase, source: 'user-key' },
       );
       try {
         await performResume(state, harnessDir, runDir, cwd, inputManager, logger, sidecarReplayAllowed);
@@ -293,7 +293,7 @@ export async function enterFailedTerminalState(
     process.stderr.write(`\nJump to which phase? (${targets.join(' / ')})\n`);
     const phaseKey = await inputManager.waitForKey(targetKeys);
     const target = Number(phaseKey) as PhaseNumber;
-    logger.logEvent({ event: 'terminal_action', action: 'jump', fromPhase, targetPhase: target });
+    logger.logEvent({ event: 'terminal_action', action: 'jump', fromPhase, targetPhase: target, source: 'user-key' });
 
     try {
       await performJump(target, state, harnessDir, runDir, cwd, inputManager, logger);
