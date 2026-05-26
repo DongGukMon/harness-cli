@@ -41,6 +41,7 @@ vi.mock('../../src/tmux.js', () => ({
   sendKeysToPane: vi.fn(),
   pollForPidFile: vi.fn().mockResolvedValue(12345),
   respawnPane: vi.fn(),
+  captureWorkspacePaneSnapshot: vi.fn(() => 'fake pane capture\n'),
 }));
 
 vi.mock('../../src/process.js', () => ({
@@ -774,6 +775,84 @@ describe('runInteractivePhase — Claude dispatch command shape', () => {
     // Phase 1 default preset is opus-1m-xhigh (effort=xhigh). Pin the exact effort
     // here so a future preset change trips this test on purpose.
     expect(command).toContain('--effort xhigh');
+  });
+});
+
+// ─── runInteractivePhase: tmux capture-pane post-mortem (#114 PR #3) ─────────
+
+describe('runInteractivePhase — workspace pane snapshot persistence (#114 PR #3)', () => {
+  it('writes runner-phase<N>-<attemptId>.tmux-capture.log after Claude wait completes', async () => {
+    const { captureWorkspacePaneSnapshot } = await import('../../src/tmux.js');
+    const { runInteractivePhase } = await import('../../src/phases/interactive.js');
+
+    vi.mocked(captureWorkspacePaneSnapshot).mockReset();
+    vi.mocked(captureWorkspacePaneSnapshot).mockReturnValue('fake claude pane snapshot\nrunner output line\n');
+
+    const runDir = makeTmpDir();
+    const harnessDir = makeTmpDir();
+    const repoDir = createTestRepo();
+    const state = makeState({ tmuxSession: 'test-session', tmuxWorkspacePane: '%1', tmuxControlPane: '%0' });
+
+    await runInteractivePhase(1, state, harnessDir, runDir, repoDir, 'attempt-claude-capture');
+
+    expect(vi.mocked(captureWorkspacePaneSnapshot)).toHaveBeenCalledWith('%1');
+    const expectedPath = path.join(runDir, 'runner-phase1-attempt-claude-capture.tmux-capture.log');
+    expect(fs.existsSync(expectedPath)).toBe(true);
+    expect(fs.readFileSync(expectedPath, 'utf-8')).toBe('fake claude pane snapshot\nrunner output line\n');
+  });
+
+  it('writes capture file for the Codex branch too', async () => {
+    const { captureWorkspacePaneSnapshot } = await import('../../src/tmux.js');
+    const { runInteractivePhase } = await import('../../src/phases/interactive.js');
+
+    vi.mocked(captureWorkspacePaneSnapshot).mockReset();
+    vi.mocked(captureWorkspacePaneSnapshot).mockReturnValue('fake codex pane snapshot\n');
+
+    const runDir = makeTmpDir();
+    const harnessDir = makeTmpDir();
+    const repoDir = createTestRepo();
+    // P2 gate uses codex by default, but capture is interactive-only.
+    // Override P1 preset to a codex variant so the Codex branch is exercised.
+    const state = makeState({
+      tmuxSession: 'test-session',
+      tmuxWorkspacePane: '%1',
+      tmuxControlPane: '%0',
+      phasePresets: {
+        '1': 'codex-high',
+        '2': 'codex-high',
+        '3': 'sonnet-high',
+        '4': 'codex-high',
+        '5': 'opus-1m-xhigh',
+        '7': 'codex-high',
+      },
+    });
+
+    await runInteractivePhase(1, state, harnessDir, runDir, repoDir, 'attempt-codex-capture');
+
+    expect(vi.mocked(captureWorkspacePaneSnapshot)).toHaveBeenCalledWith('%1');
+    const expectedPath = path.join(runDir, 'runner-phase1-attempt-codex-capture.tmux-capture.log');
+    expect(fs.existsSync(expectedPath)).toBe(true);
+    expect(fs.readFileSync(expectedPath, 'utf-8')).toBe('fake codex pane snapshot\n');
+  });
+
+  it('best-effort: no exception thrown + no file written when capture returns null', async () => {
+    const { captureWorkspacePaneSnapshot } = await import('../../src/tmux.js');
+    const { runInteractivePhase } = await import('../../src/phases/interactive.js');
+
+    vi.mocked(captureWorkspacePaneSnapshot).mockReset();
+    vi.mocked(captureWorkspacePaneSnapshot).mockReturnValue(null);
+
+    const runDir = makeTmpDir();
+    const harnessDir = makeTmpDir();
+    const repoDir = createTestRepo();
+    const state = makeState({ tmuxSession: 'test-session', tmuxWorkspacePane: '%1', tmuxControlPane: '%0' });
+
+    await expect(
+      runInteractivePhase(1, state, harnessDir, runDir, repoDir, 'attempt-fail-capture'),
+    ).resolves.toBeDefined();
+
+    const expectedPath = path.join(runDir, 'runner-phase1-attempt-fail-capture.tmux-capture.log');
+    expect(fs.existsSync(expectedPath)).toBe(false);
   });
 });
 

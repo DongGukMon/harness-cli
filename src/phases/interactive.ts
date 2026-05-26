@@ -16,6 +16,7 @@ import { clearLockChild } from '../lock.js';
 import { isValidChecklistSchema } from './checklist.js';
 import { resolveArtifact } from '../artifact.js';
 import { claudeSessionJsonlPath } from '../runners/claude-usage.js';
+import { captureWorkspacePaneSnapshot } from '../tmux.js';
 
 /**
  * Inline Complexity-section check (spec R5). Kept here instead of importing
@@ -245,6 +246,33 @@ export function validatePhaseArtifacts(
 export { isValidChecklistSchema } from './checklist.js';
 
 /**
+ * #114 PR #3: persist the workspace pane's visible buffer + scrollback to a
+ * per-attempt log file BEFORE the next attempt's respawnPane() clears it.
+ * Best-effort — capture failure surfaces only as the stderr line that
+ * `captureWorkspacePaneSnapshot` already emits; the harness must not abort a
+ * phase over a debug-aid capture failure.
+ */
+function persistWorkspacePaneCapture(
+  state: HarnessState,
+  runDir: string,
+  phase: number,
+  attemptId: string,
+): void {
+  const pane = state.tmuxWorkspacePane;
+  if (!pane || !attemptId) return;
+  const captured = captureWorkspacePaneSnapshot(pane);
+  if (captured === null) return;
+  const logPath = path.join(runDir, `runner-phase${phase}-${attemptId}.tmux-capture.log`);
+  try {
+    fs.writeFileSync(logPath, captured, 'utf-8');
+  } catch (err) {
+    process.stderr.write(
+      `[harness] failed to write pane capture to ${logPath}: ${(err as Error).message}\n`,
+    );
+  }
+}
+
+/**
  * Run an interactive phase. Dispatches to claude or codex runner based on preset.
  *
  * `logger` is plumbed through to `waitForPhaseCompletion` for #114 PR #2
@@ -292,6 +320,7 @@ export async function runInteractivePhase(
       INTERACTIVE_TIMEOUT_MS,
       logger ? { logger } : undefined,
     );
+    persistWorkspacePaneCapture(updatedState, runDir, phase, resolvedAttemptId);
     return { ...result, attemptId };
   } else {
     const { spawnCodexInteractiveInPane } = await import('../runners/codex.js');
@@ -338,6 +367,7 @@ export async function runInteractivePhase(
       INTERACTIVE_TIMEOUT_MS,
       logger ? { logger } : undefined,
     );
+    persistWorkspacePaneCapture(updatedState, runDir, phase, attemptId);
 
     // Issue #84 — when Phase 5 fails under a Codex preset and Codex itself
     // declared completion (fresh sentinel) but the working tree is dirty in
