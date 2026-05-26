@@ -6,6 +6,7 @@ import { statusCommand } from '../src/commands/status.js';
 import { listCommand } from '../src/commands/list.js';
 import { skipCommand } from '../src/commands/skip.js';
 import { jumpCommand } from '../src/commands/jump.js';
+import { terminalActionCommand } from '../src/commands/terminal-action.js';
 import { innerCommand } from '../src/commands/inner.js';
 import { installSkillsCommand } from '../src/commands/install-skills.js';
 import { uninstallSkillsCommand } from '../src/commands/uninstall-skills.js';
@@ -102,6 +103,14 @@ program
   .action(async (phase: string) => {
     const globalOpts = program.opts();
     await jumpCommand(phase, { root: globalOpts.root });
+  });
+
+program
+  .command('terminal-action <runId> <action>')
+  .description('inject R/Q/J:<phase> into a run\'s terminal-failed R/J/Q wait (#117 Bug A)')
+  .action(async (runId: string, action: string) => {
+    const globalOpts = program.opts();
+    await terminalActionCommand(runId, action, { root: globalOpts.root });
   });
 
 program

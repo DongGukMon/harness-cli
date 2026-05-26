@@ -6,7 +6,7 @@
 - **7단계 full flow**: spec → spec gate → plan → plan gate → implement → verify → eval gate
 - 작은 작업을 위한 **5단계 light flow**: design+plan → pre-impl gate → implement → verify → eval gate
 - 시작/재개 시점의 **phase별 모델 preset 선택**
-- `resume`, `status`, `list`, `skip`, `jump`를 통한 **tmux 기반 복구/제어**
+- `resume`, `status`, `list`, `skip`, `jump`, `terminal-action`을 통한 **tmux 기반 복구/제어**
 - **선택적 세션 로깅**과 경과 시간·토큰 수를 보여주는 live footer
 
 하나의 긴 채팅 세션을 계속 끌고 가는 대신, harness는 파일과 상태를 통해 phase 간 컨텍스트를 넘깁니다. 그래서 각 phase를 깨끗하게 다시 시작할 수 있고, 독립 리뷰 단계도 구현 세션의 문맥을 그대로 물려받지 않습니다.
@@ -329,6 +329,25 @@ phase-harness jump 3
 - completed run이 아닌 경우 backward jump만 허용
 - light flow에서 `skipped` phase로는 jump 불가
 - 적용 방식은 `skip`과 동일
+
+### `phase-harness terminal-action <runId> <action>`
+
+terminal-failed의 R/J/Q 프롬프트에 멈춰 있는 run에 `R`, `Q`, `J:<phase>` 결정을 파일 채널로 주입합니다. supervisor 자동화 및 외부 도구에서 사용하기 위한 admin 커맨드: `<runDir>/terminal-action.requested`에 액션을 기록하면, inner process가 failed-terminal 대기 중에 약 500 ms 주기로 폴링해서 소비합니다.
+
+```bash
+phase-harness terminal-action 2026-05-25-mytask R          # 실패한 phase resume
+phase-harness terminal-action 2026-05-25-mytask Q          # 종료
+phase-harness terminal-action 2026-05-25-mytask J:3        # phase 3로 jump
+```
+
+왜 필요한가: 하네스의 Ink TUI가 tmux pane의 foreground 프로그램으로 떠 있으면 `tmux send-keys -t <pane> R`가 조용히 무시됩니다. Ink는 controlling TTY에서 stdin을 읽는데 tmux는 그 디바이스에 쓰지 않기 때문입니다. 파일 채널은 pane attach 상태와 무관하게 작동합니다.
+
+동작:
+- action 토큰을 먼저 검증합니다. 대소문자 무시 `R`, `Q`, `J:<n>` (n은 1..7) 만 허용합니다.
+- run이 terminal-failed 상태(어떤 phase가 `failed`/`error` 이고 run이 completed가 아님)일 때만 의미가 있습니다. 아니면 non-zero로 종료하고 대기/상태 확인을 안내합니다.
+- 발생하는 `terminal_action` event는 `source: 'signal'`을 가집니다. operator 키 입력(`source: 'user-key'`)과 구분 가능합니다.
+- workspace worker가 살아 있는 상태의 `R`는 Y/N confirm-kill 프롬프트(#116 B3)를 건너뛰고 `confirmedKill: true`로 기록됩니다. supervisor는 interactive 프롬프트에 답할 수 없고, `R`를 발행한 행위 자체가 kill을 의도한 것이기 때문입니다.
+- `J:<phase>`의 target은 valid jump target(≤ failed phase, `skipped` 아님)이어야 합니다. 범위 밖이거나 skipped이면 조용히 drop됩니다 (파일 삭제, action 미발생).
 
 ### `phase-harness install-skills`
 
