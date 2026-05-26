@@ -4,9 +4,10 @@ import { randomUUID } from 'crypto';
 import chokidar from 'chokidar';
 import type { HarnessState, InteractivePhase, Artifacts, SessionLogger } from '../types.js';
 import {
-  getPhaseArtifactFiles, getPresetById, INTERACTIVE_TIMEOUT_MS,
+  getPhaseArtifactFiles, getPresetById,
   HEARTBEAT_INTERVAL_MS, STALL_THRESHOLD_MS, TIMEOUT_WARNING_FRACTION,
 } from '../config.js';
+import { getEffectiveInteractiveTimeoutMs } from '../userConfig.js';
 import { writeState, syncLegacyMirror } from '../state.js';
 import { getHead, detectUncommittedChanges, type UncommittedRepo } from '../git.js';
 import { isPidAlive } from '../process.js';
@@ -308,6 +309,11 @@ export async function runInteractivePhase(
   const promptFile = path.join(runDir, `phase-${phase}-init-prompt.md`);
   fs.writeFileSync(promptFile, prompt, 'utf-8');
 
+  // Resolve effective per-phase timeout (#116 B4). User-config override
+  // if present, else the default INTERACTIVE_TIMEOUT_MS. Single read at
+  // phase entry — no plumbing through waitForPhaseCompletion's signature.
+  const effectiveTimeoutMs = getEffectiveInteractiveTimeoutMs(phase);
+
   // Dispatch to runner
   if (preset.runner === 'claude') {
     const { pid: claudePid } = await runClaudeInteractive(
@@ -317,7 +323,7 @@ export async function runInteractivePhase(
     const resolvedAttemptId = updatedState.phaseAttemptId[String(phase)] ?? attemptId;
     const result = await waitForPhaseCompletion(
       sentinelPath, resolvedAttemptId, claudePid, phase, updatedState, cwd, runDir,
-      INTERACTIVE_TIMEOUT_MS,
+      effectiveTimeoutMs,
       logger ? { logger } : undefined,
     );
     persistWorkspacePaneCapture(updatedState, runDir, phase, resolvedAttemptId);
@@ -364,7 +370,7 @@ export async function runInteractivePhase(
 
     const result: InteractiveResult = await waitForPhaseCompletion(
       sentinelPath, attemptId, codexPid, phase, updatedState, cwd, runDir,
-      INTERACTIVE_TIMEOUT_MS,
+      effectiveTimeoutMs,
       logger ? { logger } : undefined,
     );
     persistWorkspacePaneCapture(updatedState, runDir, phase, attemptId);

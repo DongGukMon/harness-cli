@@ -8,7 +8,7 @@ import {
   configSetCommand,
   configResetCommand,
 } from '../../src/commands/config.js';
-import { PHASE_DEFAULTS } from '../../src/config.js';
+import { PHASE_DEFAULTS, INTERACTIVE_TIMEOUT_MS } from '../../src/config.js';
 
 const tmpDirs: string[] = [];
 afterEach(() => {
@@ -40,13 +40,17 @@ function captureStderr(fn: () => void): string {
 }
 
 describe('configListCommand', () => {
-  it('prints 6 data rows + header + separator when no overrides', () => {
+  it('prints 9 data rows (6 preset + 3 timeoutMs) + header + separator when no overrides', () => {
     const home = makeTmp();
     const out = captureStdout(() => configListCommand({ homeDir: home }));
     const lines = out.trim().split('\n');
-    expect(lines).toHaveLength(8); // header + separator + 6 rows
+    // header + separator + 6 preset rows + 3 timeoutMs rows (phases 1/3/5)
+    expect(lines).toHaveLength(11);
     expect(out).toContain('phase.1.preset');
     expect(out).toContain('phase.7.preset');
+    expect(out).toContain('phase.1.timeoutMs');
+    expect(out).toContain('phase.3.timeoutMs');
+    expect(out).toContain('phase.5.timeoutMs');
     expect(out).toContain('default');
   });
   it('shows override source and value for overridden phase', () => {
@@ -55,6 +59,16 @@ describe('configListCommand', () => {
     const out = captureStdout(() => configListCommand({ homeDir: home }));
     expect(out).toContain('opus-1m-max');
     expect(out).toContain('override');
+  });
+  it('shows override source + value for an overridden timeoutMs (#116 B4)', () => {
+    const home = makeTmp();
+    writeConfig(home, { phase: { '3': { timeoutMs: 3_600_000 } } });
+    const out = captureStdout(() => configListCommand({ homeDir: home }));
+    // The phase.3.timeoutMs row should show the override value and 'override' source
+    const row = out.split('\n').find((l) => l.startsWith('phase.3.timeoutMs'));
+    expect(row).toBeDefined();
+    expect(row!).toContain('3600000');
+    expect(row!).toContain('override');
   });
 });
 
@@ -126,6 +140,86 @@ describe('configResetCommand', () => {
     configResetCommand('phase.1.preset', { homeDir: home });
     const out2 = captureStdout(() => configResetCommand('phase.1.preset', { homeDir: home }));
     expect(out2).toContain('no override to reset');
+  });
+});
+
+// ─── #116 B4: phase.<N>.timeoutMs subcommand wiring ─────────────────────────
+
+describe('configSetCommand — phase.<N>.timeoutMs (#116 B4)', () => {
+  it('writes phase.5.timeoutMs = 3600000 to config.json', () => {
+    const home = makeTmp();
+    const out = captureStdout(() => configSetCommand('phase.5.timeoutMs', '3600000', { homeDir: home }));
+    expect(out.trim()).toBe('phase.5.timeoutMs = 3600000');
+    const saved = JSON.parse(fs.readFileSync(path.join(home, '.harness', 'config.json'), 'utf-8'));
+    expect(saved.phase['5'].timeoutMs).toBe(3_600_000);
+  });
+  it.each([
+    ['non-numeric', 'abc'],
+    ['negative', '-1'],
+    ['zero', '0'],
+    ['float', '1234.5'],
+  ])('rejects invalid value (%s), exits 1, does not create config.json', (_name, badValue) => {
+    const home = makeTmp();
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => { throw new Error('exit1'); });
+    const err = captureStderr(() => {
+      try { configSetCommand('phase.5.timeoutMs', badValue, { homeDir: home }); } catch { /* exit mock */ }
+    });
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    expect(err).toContain('positive integer');
+    expect(fs.existsSync(path.join(home, '.harness', 'config.json'))).toBe(false);
+  });
+  it.each(['2', '4', '7'])(
+    'rejects phase.%s.timeoutMs (gates not configurable here), exits 1',
+    (n) => {
+      const home = makeTmp();
+      const exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => { throw new Error('exit1'); });
+      captureStderr(() => {
+        try { configSetCommand(`phase.${n}.timeoutMs`, '3600000', { homeDir: home }); } catch { /* exit mock */ }
+      });
+      expect(exitSpy).toHaveBeenCalledWith(1);
+      expect(fs.existsSync(path.join(home, '.harness', 'config.json'))).toBe(false);
+    },
+  );
+});
+
+describe('configGetCommand — phase.<N>.timeoutMs (#116 B4)', () => {
+  it('prints bare numeric value when override present', () => {
+    const home = makeTmp();
+    writeConfig(home, { phase: { '3': { timeoutMs: 3_600_000 } } });
+    const out = captureStdout(() => configGetCommand('phase.3.timeoutMs', { homeDir: home }));
+    expect(out.trim()).toBe('3600000');
+  });
+  it('prints default value + (default) annotation when unset', () => {
+    const home = makeTmp();
+    const out = captureStdout(() => configGetCommand('phase.3.timeoutMs', { homeDir: home }));
+    expect(out).toContain(String(INTERACTIVE_TIMEOUT_MS));
+    expect(out).toContain('(default)');
+  });
+});
+
+describe('configResetCommand — phase.<N>.timeoutMs (#116 B4)', () => {
+  it('removes override and prints "reset <key>"', () => {
+    const home = makeTmp();
+    writeConfig(home, { phase: { '5': { timeoutMs: 3_600_000 } } });
+    const out = captureStdout(() => configResetCommand('phase.5.timeoutMs', { homeDir: home }));
+    expect(out).toContain('reset phase.5.timeoutMs');
+    const saved = JSON.parse(fs.readFileSync(path.join(home, '.harness', 'config.json'), 'utf-8'));
+    expect(saved.phase?.['5']?.timeoutMs).toBeUndefined();
+  });
+  it('is idempotent — prints no-op message and exits 0 on second reset', () => {
+    const home = makeTmp();
+    writeConfig(home, { phase: { '5': { timeoutMs: 3_600_000 } } });
+    configResetCommand('phase.5.timeoutMs', { homeDir: home });
+    const out2 = captureStdout(() => configResetCommand('phase.5.timeoutMs', { homeDir: home }));
+    expect(out2).toContain('no override to reset');
+  });
+  it('preserves preset override on the same phase when only timeoutMs is reset', () => {
+    const home = makeTmp();
+    writeConfig(home, { phase: { '5': { preset: 'sonnet-high', timeoutMs: 3_600_000 } } });
+    configResetCommand('phase.5.timeoutMs', { homeDir: home });
+    const saved = JSON.parse(fs.readFileSync(path.join(home, '.harness', 'config.json'), 'utf-8'));
+    expect(saved.phase['5'].preset).toBe('sonnet-high');
+    expect(saved.phase['5'].timeoutMs).toBeUndefined();
   });
 });
 
