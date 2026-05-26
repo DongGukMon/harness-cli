@@ -2,12 +2,10 @@ import fs from 'fs';
 import path from 'path';
 import { randomUUID } from 'crypto';
 import chokidar from 'chokidar';
-import type { HarnessState, InteractivePhase, Artifacts, SessionLogger } from '../types.js';
+import type { HarnessState, InteractivePhase, Artifacts } from '../types.js';
 import {
   getPhaseArtifactFiles, getPresetById,
-  HEARTBEAT_INTERVAL_MS, STALL_THRESHOLD_MS, TIMEOUT_WARNING_FRACTION,
 } from '../config.js';
-import { getEffectiveInteractiveTimeoutMs } from '../userConfig.js';
 import { writeState, syncLegacyMirror } from '../state.js';
 import { getHead, detectUncommittedChanges, type UncommittedRepo } from '../git.js';
 import { isPidAlive } from '../process.js';
@@ -16,7 +14,6 @@ import { runClaudeInteractive } from '../runners/claude.js';
 import { clearLockChild } from '../lock.js';
 import { isValidChecklistSchema } from './checklist.js';
 import { resolveArtifact } from '../artifact.js';
-import { claudeSessionJsonlPath } from '../runners/claude-usage.js';
 import { captureWorkspacePaneSnapshot } from '../tmux.js';
 
 /**
@@ -275,10 +272,6 @@ function persistWorkspacePaneCapture(
 
 /**
  * Run an interactive phase. Dispatches to claude or codex runner based on preset.
- *
- * `logger` is plumbed through to `waitForPhaseCompletion` for #114 PR #2
- * observability events (`runner_heartbeat`, `runner_stalled`, `phase_timeout_warning`).
- * Optional so test helpers don't need to supply one.
  */
 export async function runInteractivePhase(
   phase: InteractivePhase,
@@ -288,7 +281,6 @@ export async function runInteractivePhase(
   cwd: string,
   attemptId: string,
   resume: boolean = false,
-  logger?: Pick<SessionLogger, 'logEvent'>,
 ): Promise<InteractiveResult & { attemptId: string }> {
   // Pre-set attemptId before preparePhase so it can respect the caller-assigned ID
   state.phaseAttemptId[String(phase)] = attemptId;
@@ -309,11 +301,6 @@ export async function runInteractivePhase(
   const promptFile = path.join(runDir, `phase-${phase}-init-prompt.md`);
   fs.writeFileSync(promptFile, prompt, 'utf-8');
 
-  // Resolve effective per-phase timeout (#116 B4). User-config override
-  // if present, else the default INTERACTIVE_TIMEOUT_MS. Single read at
-  // phase entry — no plumbing through waitForPhaseCompletion's signature.
-  const effectiveTimeoutMs = getEffectiveInteractiveTimeoutMs(phase);
-
   // Dispatch to runner
   if (preset.runner === 'claude') {
     const { pid: claudePid } = await runClaudeInteractive(
@@ -323,8 +310,6 @@ export async function runInteractivePhase(
     const resolvedAttemptId = updatedState.phaseAttemptId[String(phase)] ?? attemptId;
     const result = await waitForPhaseCompletion(
       sentinelPath, resolvedAttemptId, claudePid, phase, updatedState, cwd, runDir,
-      effectiveTimeoutMs,
-      logger ? { logger } : undefined,
     );
     persistWorkspacePaneCapture(updatedState, runDir, phase, resolvedAttemptId);
     return { ...result, attemptId };
@@ -370,8 +355,6 @@ export async function runInteractivePhase(
 
     const result: InteractiveResult = await waitForPhaseCompletion(
       sentinelPath, attemptId, codexPid, phase, updatedState, cwd, runDir,
-      effectiveTimeoutMs,
-      logger ? { logger } : undefined,
     );
     persistWorkspacePaneCapture(updatedState, runDir, phase, attemptId);
 
@@ -406,22 +389,6 @@ export async function runInteractivePhase(
 }
 
 /**
- * Optional dependencies for `waitForPhaseCompletion` — observability hooks
- * added in PR #2 of #114. Both are optional so existing callsites and tests
- * that omit them keep compiling unchanged.
- *
- * `getOutputBytes` returns the current running-total byte count from whatever
- * signal best represents runner progress (production: Claude session JSONL
- * size). Returning `undefined` means "no signal" — the heartbeat still emits
- * but the stall counter MUST NOT increment, so e.g. a Codex run whose JSONL
- * never exists doesn't spam `runner_stalled` every 5 min.
- */
-export interface WaitForPhaseCompletionOptions {
-  logger?: Pick<SessionLogger, 'logEvent'>;
-  getOutputBytes?: () => number | undefined;
-}
-
-/**
  * Wait for sentinel file or Claude PID death.
  * Uses chokidar for filesystem watching plus polling for PID liveness.
  * Also responds to interrupt flags written by SIGUSR1 (skip/jump control).
@@ -434,15 +401,6 @@ export async function waitForPhaseCompletion(
   state: HarnessState,
   cwd: string,
   runDir: string,
-  // Absolute wall-clock timeout. Issue #107: when Codex CLI / Claude TUI keeps
-  // its PID alive past the verdict (e.g. drops into an interactive REPL prompt
-  // after emitting the response) but never writes the sentinel via tool use,
-  // the harness used to wait forever. Callers MUST pass a phase-appropriate
-  // timeout (GATE_TIMEOUT_MS for gates, INTERACTIVE_TIMEOUT_MS for P1/P3/P5).
-  // The parameter stays optional so existing test helpers compile, but
-  // production callers always set it.
-  timeoutMs?: number,
-  options?: WaitForPhaseCompletionOptions,
 ): Promise<InteractiveResult> {
   return new Promise<InteractiveResult>((resolve) => {
     let settled = false;
@@ -450,9 +408,6 @@ export async function waitForPhaseCompletion(
     let sentinelPollInterval: ReturnType<typeof setInterval> | null = null;
     let pidPollInterval: ReturnType<typeof setInterval> | null = null;
     let interruptPollInterval: ReturnType<typeof setInterval> | null = null;
-    let nullPidTimeout: ReturnType<typeof setTimeout> | null = null;
-    let absTimeout: ReturnType<typeof setTimeout> | null = null;
-    let heartbeatInterval: ReturnType<typeof setInterval> | null = null;
 
     function settle(status: 'completed' | 'failed'): void {
       if (settled) return;
@@ -473,146 +428,8 @@ export async function waitForPhaseCompletion(
         clearInterval(interruptPollInterval);
         interruptPollInterval = null;
       }
-      if (nullPidTimeout !== null) {
-        clearTimeout(nullPidTimeout);
-        nullPidTimeout = null;
-      }
-      if (absTimeout !== null) {
-        clearTimeout(absTimeout);
-        absTimeout = null;
-      }
-      if (heartbeatInterval !== null) {
-        clearInterval(heartbeatInterval);
-        heartbeatInterval = null;
-      }
       // Workspace pane persists — no kill/select needed
       resolve({ status });
-    }
-
-    // #114 PR #2: observability heartbeat for interactive phases (1/3/5).
-    // Gate phases (2/4/7) and any other call get skipped — the heartbeat
-    // event type is typed `phase: 1 | 3 | 5`, and gates have their own 6 min
-    // cap that fires fast enough that freeze diagnosis is rarely needed.
-    //
-    // Three signals emitted from this loop:
-    //   - `runner_heartbeat` every tick
-    //   - `runner_stalled` after STALL_THRESHOLD_MS of consecutive zero-output
-    //   - `phase_timeout_warning` one-shot at TIMEOUT_WARNING_FRACTION of timeoutMs
-    //
-    // `outputBytesSinceLastHeartbeat === undefined` means "no signal" (e.g.
-    // Codex runs where no Claude session JSONL exists). It MUST NOT count as
-    // "zero output" — otherwise every Codex run would emit `runner_stalled`
-    // at the 5 min mark unconditionally. See advisor note for #114 PR #2.
-    const heartbeatLogger = options?.logger ?? null;
-    if (
-      heartbeatLogger !== null &&
-      (phase === 1 || phase === 3 || phase === 5)
-    ) {
-      const phaseStartTs = Date.now();
-      const getOutputBytes = options?.getOutputBytes ?? (() => {
-        // Default production source: Claude session JSONL size (sessionId === attemptId).
-        if (!attemptId) return undefined;
-        try {
-          const p = claudeSessionJsonlPath(attemptId, cwd);
-          return fs.statSync(p).size;
-        } catch {
-          return undefined;
-        }
-      });
-      let lastOutputBytes: number | undefined = undefined;
-      let lastProgressTs: number = phaseStartTs;
-      let stallEmittedAt: number | null = null;
-      let warningEmitted = false;
-
-      heartbeatInterval = setInterval(() => {
-        if (settled) return;
-        const now = Date.now();
-        const elapsedMs = now - phaseStartTs;
-        const currentBytes = getOutputBytes();
-        let outputBytesSinceLastHeartbeat: number | undefined;
-        if (currentBytes !== undefined && lastOutputBytes !== undefined) {
-          outputBytesSinceLastHeartbeat = currentBytes - lastOutputBytes;
-        } else if (currentBytes !== undefined) {
-          // First tick with a valid signal — establish baseline, omit delta.
-          outputBytesSinceLastHeartbeat = undefined;
-        } else {
-          // No signal (e.g. Codex). Omit field; do NOT update lastProgressTs.
-          outputBytesSinceLastHeartbeat = undefined;
-        }
-        if (currentBytes !== undefined) lastOutputBytes = currentBytes;
-
-        // Track "last visible progress" only when we actually have a signal.
-        // Undefined ticks do not reset OR advance the silence window.
-        if (outputBytesSinceLastHeartbeat !== undefined && outputBytesSinceLastHeartbeat > 0) {
-          lastProgressTs = now;
-          stallEmittedAt = null;
-        }
-
-        const phaseTyped = phase as 1 | 3 | 5;
-        const heartbeatEvent: any = {
-          event: 'runner_heartbeat',
-          phase: phaseTyped,
-          attemptId,
-          pid: claudePid,
-          pidAlive: claudePid !== null ? isPidAlive(claudePid) : false,
-          elapsedMs,
-        };
-        if (outputBytesSinceLastHeartbeat !== undefined) {
-          heartbeatEvent.outputBytesSinceLastHeartbeat = outputBytesSinceLastHeartbeat;
-        }
-        heartbeatLogger.logEvent(heartbeatEvent);
-
-        // Stall detection: emit if we've had a valid-but-zero signal long enough.
-        // `outputBytesSinceLastHeartbeat === 0` (not undefined) is the only thing
-        // that counts toward silenceMs.
-        if (
-          outputBytesSinceLastHeartbeat === 0 &&
-          stallEmittedAt === null &&
-          now - lastProgressTs >= STALL_THRESHOLD_MS
-        ) {
-          stallEmittedAt = now;
-          heartbeatLogger.logEvent({
-            event: 'runner_stalled',
-            phase: phaseTyped,
-            attemptId,
-            pid: claudePid,
-            pidAlive: claudePid !== null ? isPidAlive(claudePid) : false,
-            silenceMs: now - lastProgressTs,
-            elapsedMs,
-          });
-        }
-
-        // One-shot timeout warning at TIMEOUT_WARNING_FRACTION.
-        if (
-          !warningEmitted &&
-          timeoutMs !== undefined &&
-          timeoutMs > 0 &&
-          elapsedMs >= timeoutMs * TIMEOUT_WARNING_FRACTION
-        ) {
-          warningEmitted = true;
-          heartbeatLogger.logEvent({
-            event: 'phase_timeout_warning',
-            phase: phaseTyped,
-            attemptId,
-            elapsedMs,
-            timeoutMs,
-            remainingMs: Math.max(0, timeoutMs - elapsedMs),
-          });
-        }
-      }, HEARTBEAT_INTERVAL_MS);
-    }
-
-    // Absolute timeout (issue #107). Fires even when claudePid is alive but
-    // the runner refuses to exit (TUI mode after verdict; sentinel never
-    // written). One stderr line so the operator knows why the phase failed.
-    if (timeoutMs !== undefined && timeoutMs > 0) {
-      absTimeout = setTimeout(() => {
-        if (settled) return;
-        process.stderr.write(
-          `[harness] phase ${phase} timed out after ${Math.round(timeoutMs / 1000)}s waiting for sentinel\n`,
-        );
-        settle('failed');
-      }, timeoutMs);
     }
 
     // Sentinel detection → evaluate artifacts
@@ -694,13 +511,6 @@ export async function waitForPhaseCompletion(
         }
       }
     }, 500);
-
-    // Sentinel-only timeout: 10 minutes when claudePid is null
-    if (claudePid === null) {
-      nullPidTimeout = setTimeout(() => {
-        settle('failed');
-      }, 10 * 60 * 1000);
-    }
 
     // Immediate check
     if (fs.existsSync(sentinelPath)) {

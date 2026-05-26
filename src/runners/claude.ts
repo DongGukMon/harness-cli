@@ -3,7 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import type { HarnessState, GatePhaseResult } from '../types.js';
 import type { ModelPreset } from '../config.js';
-import { GATE_TIMEOUT_MS, SIGTERM_WAIT_MS } from '../config.js';
+import { SIGTERM_WAIT_MS } from '../config.js';
 import { sendKeysToPane, pollForPidFile, respawnPane } from '../tmux.js';
 import { getProcessStartTime, killProcessGroup } from '../process.js';
 import { updateLockChild, clearLockChild } from '../lock.js';
@@ -114,17 +114,10 @@ export async function runClaudeGate(
 
   const result = await new Promise<GatePhaseResult>((resolve) => {
     let settled = false;
-    const timeout = setTimeout(async () => {
-      if (settled) return;
-      settled = true;
-      await killProcessGroup(childPid, SIGTERM_WAIT_MS);
-      resolve({ type: 'error', error: `Claude gate timed out after ${GATE_TIMEOUT_MS}ms` });
-    }, GATE_TIMEOUT_MS);
 
     child.on('close', (code: number | null) => {
       if (settled) return;
       settled = true;
-      clearTimeout(timeout);
       const stdout = Buffer.concat(stdoutChunks).toString('utf-8');
       const stderr = Buffer.concat(stderrChunks).toString('utf-8');
       if (runDir !== undefined) persistGateRunnerStdio(runDir, phase, stdout, stderr);
@@ -134,7 +127,6 @@ export async function runClaudeGate(
     child.on('error', (err: Error) => {
       if (settled) return;
       settled = true;
-      clearTimeout(timeout);
       resolve({ type: 'error', error: `Claude gate error: ${err.message}` });
     });
   });

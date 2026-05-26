@@ -67,19 +67,9 @@ export function getEffectiveReopenTarget(pa: PendingAction): number | null {
   return null;
 }
 
-export const GATE_TIMEOUT_MS = 360_000;  // 6 min — Codex high-effort typically takes 2-4 min
-export const VERIFY_TIMEOUT_MS = 300_000;
-export const INTERACTIVE_TIMEOUT_MS = 1_800_000; // 30 min
 export const SIGTERM_WAIT_MS = 5_000;
 export const GROUP_DRAIN_WAIT_MS = 5_000;
 export const HANDOFF_TIMEOUT_MS = 5_000;
-
-// #114 PR #2: cadence + thresholds for the runner-observability heartbeat loop
-// inside `waitForPhaseCompletion`. Encoded in ms (not tick counts) so the cadence
-// can be retuned later without breaking the stall threshold's semantic meaning.
-export const HEARTBEAT_INTERVAL_MS = 30_000;       // 30 s heartbeat cadence
-export const STALL_THRESHOLD_MS = 300_000;         // 5 min of consecutive zero-output → runner_stalled
-export const TIMEOUT_WARNING_FRACTION = 0.8;       // phase_timeout_warning fires once at this fraction of timeoutMs
 
 export const GATE_RETRY_LIMIT_FULL = 3;
 export const GATE_RETRY_LIMIT_LIGHT = 5;

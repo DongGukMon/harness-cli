@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { EventEmitter } from 'events';
 import { runCodexGate } from '../../src/runners/codex.js';
-import { GATE_TIMEOUT_MS, type ModelPreset } from '../../src/config.js';
+import type { ModelPreset } from '../../src/config.js';
 
 vi.mock('child_process', async (importOriginal) => {
   const actual = await importOriginal<typeof import('child_process')>();
@@ -126,29 +126,6 @@ describe('runCodexGate — resume path', () => {
       expect(result.resumeFallback).toBe(false);
     }
     expect((cp.spawn as any).mock.calls.length).toBe(1);
-  });
-
-  it('does NOT fall back on timeout (observable: no second spawn, timeout message)', async () => {
-    vi.useFakeTimers();
-    try {
-      const cp = await import('child_process');
-      (cp.spawn as any).mockImplementationOnce(() =>
-        makeMockChild({ stdout: '', neverClose: true }),
-      );
-      const pending = runCodexGate(
-        2, preset, 'resume prompt', '/tmp/h', '/tmp/c', 'some-sid', () => 'fresh',
-      );
-      await vi.advanceTimersByTimeAsync(GATE_TIMEOUT_MS + 1000);
-      const result = await pending;
-      expect(result.type).toBe('error');
-      if (result.type === 'error') {
-        expect(result.resumeFallback).toBe(false);
-        expect(result.error).toMatch(/timed out/i);
-      }
-      expect((cp.spawn as any).mock.calls.length).toBe(1);
-    } finally {
-      vi.useRealTimers();
-    }
   });
 
   it('does NOT fall back on success_no_verdict (exit 0이지만 ## Verdict 헤더 없음)', async () => {
