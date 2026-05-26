@@ -9,6 +9,7 @@ import { getProcessStartTime, killProcessGroup } from '../process.js';
 import { updateLockChild, clearLockChild } from '../lock.js';
 import { writeState } from '../state.js';
 import { buildGateResult } from '../phases/verdict.js';
+import { persistGateRunnerStdio } from './gate-stdio-log.js';
 
 export interface ClaudeInteractiveResult {
   pid: number | null;
@@ -83,6 +84,10 @@ export async function runClaudeGate(
   prompt: string,
   harnessDir: string,
   cwd: string,
+  // #114 PR #4: when provided, gate runner stdout/stderr are flushed to
+  // `<runDir>/gate-<phase>-runner.stdio.log` for post-mortem. Optional so
+  // existing test helpers and any non-harness caller compile unchanged.
+  runDir?: string,
 ): Promise<GatePhaseResult> {
   const child = spawn('claude', [
     '--print',
@@ -122,6 +127,7 @@ export async function runClaudeGate(
       clearTimeout(timeout);
       const stdout = Buffer.concat(stdoutChunks).toString('utf-8');
       const stderr = Buffer.concat(stderrChunks).toString('utf-8');
+      if (runDir !== undefined) persistGateRunnerStdio(runDir, phase, stdout, stderr);
       resolve(buildGateResult(code ?? 1, stdout, stderr));
     });
 

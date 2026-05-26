@@ -355,7 +355,7 @@ export async function runGatePhaseInteractive(
   const runner = preset.runner;
   if (runner === 'claude') {
     const phaseStartTs = Date.now();
-    const rawResult = await runClaudeGate(phase, preset, promptText, harnessDir, cwd);
+    const rawResult = await runClaudeGate(phase, preset, promptText, harnessDir, cwd, runDir);
     const durationMs = Date.now() - phaseStartTs;
     let result: GatePhaseResult = { ...rawResult, runner, promptBytes, durationMs };
     if (phase === 2 && state.flow !== 'light') {
