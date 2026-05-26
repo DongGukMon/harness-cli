@@ -421,7 +421,7 @@ export async function runGatePhaseInteractive(
   if (sentinelResult.status === 'failed') {
     gateResult = {
       type: 'error',
-      error: `Gate ${phase} failed (timed out or interrupted)`,
+      error: `Gate ${phase} failed (runner exited without writing sentinel, or interrupted)`,
       runner: 'codex',
       promptBytes,
       durationMs,

@@ -164,7 +164,7 @@ export async function runVerifyPhase(
     process.stderr.write(chunk.toString());
   });
 
-  // Wait for exit
+  // Step 6: Wait for exit
   const outcome = await new Promise<VerifyOutcome>((resolve) => {
     child.on('close', (exitCode: number | null) => {
       const code = exitCode ?? 1;
