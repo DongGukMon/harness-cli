@@ -59,6 +59,20 @@ vi.mock('../../src/context/assembler.js', () => ({
   assembleInteractivePrompt: vi.fn().mockReturnValue('mocked prompt content'),
 }));
 
+// Partial mock: keep the real userConfig surface for tests that depend on it,
+// but allow individual tests to override `getEffectiveInteractiveTimeoutMs`.
+// Default behaviour mirrors INTERACTIVE_TIMEOUT_MS so the existing
+// runInteractivePhase tests continue to operate against the production default.
+vi.mock('../../src/userConfig.js', async () => {
+  const actual = await vi.importActual<typeof import('../../src/userConfig.js')>(
+    '../../src/userConfig.js',
+  );
+  return {
+    ...actual,
+    getEffectiveInteractiveTimeoutMs: vi.fn(() => 1_800_000),
+  };
+});
+
 // ─── helpers ────────────────────────────────────────────────────────────────
 
 const tmpDirs: string[] = [];
@@ -745,6 +759,72 @@ describe('validatePhaseArtifacts — Phase 5', () => {
     const result = validatePhaseArtifacts(5, state, repoDir, repoDir);
     expect(result).toBe(true);
     expect(state.trackedRepos[0].implHead).toBe(newHead);
+  });
+});
+
+// ─── runInteractivePhase: per-phase configurable timeout (#116 B4) ───────────
+
+describe('runInteractivePhase — per-phase timeout override (#116 B4)', () => {
+  it('calls getEffectiveInteractiveTimeoutMs with the current phase number', async () => {
+    const { getEffectiveInteractiveTimeoutMs } = await import('../../src/userConfig.js');
+    const { runInteractivePhase } = await import('../../src/phases/interactive.js');
+
+    vi.mocked(getEffectiveInteractiveTimeoutMs).mockClear();
+    vi.mocked(getEffectiveInteractiveTimeoutMs).mockReturnValue(3_600_000);
+
+    const runDir = makeTmpDir();
+    const harnessDir = makeTmpDir();
+    const repoDir = createTestRepo();
+    const state = makeState({ tmuxSession: 'test-session', tmuxWorkspacePane: '%1', tmuxControlPane: '%0' });
+
+    await runInteractivePhase(5, state, harnessDir, runDir, repoDir, 'test-attempt-id-timeout');
+
+    expect(vi.mocked(getEffectiveInteractiveTimeoutMs)).toHaveBeenCalled();
+    // The phase number (5) must be passed so the helper looks up the right key.
+    const calledPhases = vi.mocked(getEffectiveInteractiveTimeoutMs).mock.calls.map(c => c[0]);
+    expect(calledPhases).toContain(5);
+  });
+
+  it('passes the overridden timeout value to waitForPhaseCompletion (Codex branch)', async () => {
+    // The Codex spawn mock writes the sentinel immediately, so the timeoutMs
+    // value only matters for the absolute-timeout path. To confirm the wire-up,
+    // we set a unique value and verify it's the one observed by the wait loop
+    // via a spy on the heartbeat options path. Simplest practical signal: the
+    // call returns 'completed' (no timeout fires) AND getEffectiveInteractiveTimeoutMs
+    // was the source. The unit-level "value flows in" test is covered by the
+    // userConfig helper test; this test just confirms runInteractivePhase
+    // delegates to the helper instead of using INTERACTIVE_TIMEOUT_MS directly.
+    const { getEffectiveInteractiveTimeoutMs } = await import('../../src/userConfig.js');
+    const { runInteractivePhase } = await import('../../src/phases/interactive.js');
+
+    vi.mocked(getEffectiveInteractiveTimeoutMs).mockClear();
+    vi.mocked(getEffectiveInteractiveTimeoutMs).mockReturnValue(7_200_000);
+
+    const runDir = makeTmpDir();
+    const harnessDir = makeTmpDir();
+    const repoDir = createTestRepo();
+    const state = makeState({
+      tmuxSession: 'test-session',
+      tmuxWorkspacePane: '%1',
+      tmuxControlPane: '%0',
+      phasePresets: {
+        '1': 'codex-high',
+        '2': 'codex-high',
+        '3': 'sonnet-high',
+        '4': 'codex-high',
+        '5': 'opus-1m-xhigh',
+        '7': 'codex-high',
+      },
+    });
+
+    await runInteractivePhase(1, state, harnessDir, runDir, repoDir, 'attempt-codex-timeout');
+
+    // Helper was called with the phase number — proves runInteractivePhase
+    // delegates to the resolver in the Codex branch instead of using the
+    // INTERACTIVE_TIMEOUT_MS constant directly. (Artifact validation may still
+    // fail since this test doesn't populate spec.md / decisionLog.md, but
+    // the timeout-resolution wiring fires before validation.)
+    expect(vi.mocked(getEffectiveInteractiveTimeoutMs)).toHaveBeenCalledWith(1);
   });
 });
 

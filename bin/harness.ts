@@ -157,21 +157,21 @@ program
 
 const configCmd = program
   .command('config')
-  .description('manage per-phase preset overrides in ~/.harness/config.json');
+  .description('manage per-phase preset and interactive-timeout overrides in ~/.harness/config.json');
 
 configCmd
   .command('list')
-  .description('list all phase preset keys with their current value and source')
+  .description('list all phase config keys (preset + timeoutMs) with their current value and source')
   .action(() => { configListCommand(); });
 
 configCmd
   .command('get <key>')
-  .description('get the effective value for a config key (e.g. phase.1.preset)')
+  .description('get the effective value for a config key (e.g. phase.1.preset or phase.3.timeoutMs)')
   .action((key: string) => { configGetCommand(key); });
 
 configCmd
   .command('set <key> <value>')
-  .description('set a config key to a preset id (e.g. phase.1.preset opus-1m-max)')
+  .description('set a config key — phase.<N>.preset <id> (e.g. opus-1m-max) or phase.<1|3|5>.timeoutMs <ms>')
   .action((key: string, value: string) => { configSetCommand(key, value); });
 
 configCmd
