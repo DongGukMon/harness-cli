@@ -6,7 +6,7 @@ It supports:
 - a **full 7-phase flow**: spec → spec gate → plan → plan gate → implement → verify → eval gate
 - a **light 5-phase flow** for smaller tasks: design+plan → pre-impl gate → implement → verify → eval gate
 - **per-phase model preset selection** at start/resume
-- **tmux-based crash recovery** with `resume`, `status`, `list`, `skip`, and `jump`
+- **tmux-based crash recovery** with `resume`, `status`, `list`, `skip`, `jump`, and `terminal-action`
 - **optional session logging** and a live footer with elapsed time and token totals
 
 Unlike a single long-lived chat session, harness passes context through files and state, so each phase can restart cleanly and independent review phases do not inherit the implementation session's context.
@@ -322,6 +322,25 @@ Rules:
 - backward only unless the run is already completed
 - cannot jump into a `skipped` phase in light flow
 - saved/applied the same way as `skip`
+
+### `phase-harness terminal-action <runId> <action>`
+
+Inject an `R`, `Q`, or `J:<phase>` decision into a run that is paused at the terminal-failed R/J/Q prompt. Intended for supervisor automation and external tooling: writes `<runDir>/terminal-action.requested`, which the inner process polls every ~500 ms while it is in the failed-terminal wait.
+
+```bash
+phase-harness terminal-action 2026-05-25-mytask R          # resume the failed phase
+phase-harness terminal-action 2026-05-25-mytask Q          # quit
+phase-harness terminal-action 2026-05-25-mytask J:3        # jump back to phase 3
+```
+
+Why this exists: when the harness Ink TUI is the foreground program in a tmux pane, `tmux send-keys -t <pane> R` is silently dropped because Ink reads from the controlling TTY, not the pane device tmux writes to. The file-based channel works regardless of pane attachment state.
+
+Behavior:
+- The action token is validated up-front. `R`, `Q`, and `J:<n>` (with n in 1..7) are accepted, case-insensitive.
+- The run must currently be at terminal-failed (at least one phase has status `failed`/`error` AND the run is not completed). Otherwise the command exits non-zero with a hint to wait or check `phase-harness status`.
+- The triggered `terminal_action` event carries `source: 'signal'` so retro/event-log readers can distinguish file-injected actions from operator keystrokes (`source: 'user-key'`).
+- For `R` with an alive workspace worker, the Y/N confirm-kill prompt (#116 B3) is bypassed and `confirmedKill: true` is recorded — the supervisor cannot answer an interactive prompt, and the act of issuing `R` already implies the kill.
+- For `J:<phase>`, the target must be a valid jump target (≤ failed phase, not `skipped`). Out-of-range or skipped targets are silently dropped (file deleted, no action emitted).
 
 ### `phase-harness install-skills`
 

@@ -14,6 +14,14 @@ export class InputManager {
   private pendingKey: PendingKey | null = null;
   private static readonly PENDING_KEY_TTL_MS = 1000;
 
+  /**
+   * #117 Bug A: cancellation sentinel emitted by `cancelWaitForKey()` so a
+   * concurrent file-channel poll can short-circuit the in-flight `waitForKey()`.
+   * Picked because `\x00` is not a valid keystroke through the raw-mode pipe
+   * (printable-ASCII gate in `onData` filters everything below 0x20).
+   */
+  public static readonly CANCEL_SENTINEL = '\x00';
+
   public onConfigCancel: (() => void) | null = null;
 
   start(initialState: InputState = 'configuring'): void {
@@ -71,6 +79,16 @@ export class InputManager {
       }
 
       this.handler = (key: string) => {
+        // #117 Bug A: `cancelWaitForKey()` calls the handler with the cancellation
+        // sentinel to short-circuit a pending wait when an out-of-band action
+        // arrives (e.g. file-channel signal). The wait resolves with the sentinel;
+        // the caller is expected to discard it.
+        if (key === InputManager.CANCEL_SENTINEL) {
+          this.handler = null;
+          this.state = this.isPreLoop ? 'configuring' : 'idle';
+          resolve(InputManager.CANCEL_SENTINEL);
+          return;
+        }
         const lower = key.toLowerCase();
         if (validKeys.has(lower)) {
           this.handler = null;
@@ -79,6 +97,19 @@ export class InputManager {
         }
       };
     });
+  }
+
+  /**
+   * #117 Bug A: cancel an in-flight `waitForKey()` so a concurrent signal path
+   * (file channel) can take over. Resolves the pending promise with
+   * `CANCEL_SENTINEL`; if no wait is pending this is a no-op. Additive — does
+   * not change the normal keystroke path (the sentinel is filtered out of the
+   * `onData` printable-ASCII gate, so it can never be produced by a real keypress).
+   */
+  cancelWaitForKey(): void {
+    if (this.handler !== null) {
+      this.handler(InputManager.CANCEL_SENTINEL);
+    }
   }
 
   waitForLine(): Promise<string> {

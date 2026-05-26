@@ -95,12 +95,31 @@ function makeLogger(): SessionLogger {
 
 class MockInput {
   private queue: string[] = [];
+  private pending: { resolve: (v: string) => void; valid: Set<string> } | null = null;
   enqueue(...keys: string[]): void { this.queue.push(...keys); }
-  async waitForKey(valid: Set<string>): Promise<string> {
+  waitForKey(valid: Set<string>): Promise<string> {
     const k = this.queue.shift();
-    if (k === undefined) throw new Error('test: no key queued');
-    if (!valid.has(k.toLowerCase())) throw new Error(`test: key ${k} not in valid set`);
-    return k.toUpperCase();
+    if (k === undefined) {
+      // No key queued — leave it pending so cancelWaitForKey() can resolve it.
+      // (mirrors real InputManager behavior: the call never returns until either
+      // a keystroke fires or cancelWaitForKey is invoked.)
+      return new Promise<string>((resolve) => {
+        this.pending = { resolve, valid };
+      });
+    }
+    if (!valid.has(k.toLowerCase())) {
+      return Promise.reject(new Error(`test: key ${k} not in valid set`));
+    }
+    return Promise.resolve(k.toUpperCase());
+  }
+  cancelWaitForKey(): void {
+    if (this.pending !== null) {
+      const { resolve } = this.pending;
+      this.pending = null;
+      // \x00 is the cancellation sentinel — the production InputManager uses
+      // the same value so the caller can distinguish "key arrived" from "cancelled".
+      resolve('\x00');
+    }
   }
 }
 
@@ -627,3 +646,221 @@ describe('terminal_action source labeling — issue #114 PR #5', () => {
     }));
   });
 });
+
+// Issue #117 Bug A: file-based action channel for supervisor automation.
+// When `<runDir>/terminal-action.requested` appears, the R/J/Q wait reads its
+// body (R | Q | J:<phase>), deletes the file atomically, and fires the same
+// code path as the keystroke — except the emitted `terminal_action` carries
+// `source: 'signal'` so retro consumers can tell file-injected from user-typed.
+describe('issue #117 Bug A — file-based action channel', () => {
+  function writeSignal(runDir: string, body: string): void {
+    fs.writeFileSync(path.join(runDir, 'terminal-action.requested'), body);
+  }
+
+  it('R signal fires resume with source=signal and deletes the file', async () => {
+    const { runPhaseLoop } = await import('../../src/phases/runner.js');
+    vi.mocked(runPhaseLoop).mockClear();
+    vi.mocked(runPhaseLoop).mockImplementationOnce(async (s: any) => {
+      s.status = 'completed';
+    });
+    const state = makeState();
+    const input = new MockInput(); // no key queued — signal wins the race
+    const logger = makeLogger();
+    const runDir = makeTmpDir();
+
+    // Drop the signal file just before the wait starts. The poll interval (500ms)
+    // will pick it up well within the test's default timeout.
+    setTimeout(() => writeSignal(runDir, 'R'), 50);
+
+    await enterFailedTerminalState(state, '/harness', runDir, '/cwd', input as unknown as InputManager, logger);
+
+    expect(runPhaseLoop).toHaveBeenCalledOnce();
+    const resumeEvent = (logger.logEvent as any).mock.calls
+      .map((c: any[]) => c[0])
+      .find((e: any) => e.event === 'terminal_action' && e.action === 'resume');
+    expect(resumeEvent).toBeDefined();
+    expect(resumeEvent.source).toBe('signal');
+    expect(fs.existsSync(path.join(runDir, 'terminal-action.requested'))).toBe(false);
+  });
+
+  it('Q signal fires quit with source=signal and deletes the file', async () => {
+    const state = makeState();
+    const input = new MockInput();
+    const logger = makeLogger();
+    const runDir = makeTmpDir();
+    setTimeout(() => writeSignal(runDir, 'Q'), 50);
+
+    await enterFailedTerminalState(state, '/harness', runDir, '/cwd', input as unknown as InputManager, logger);
+
+    expect(logger.logEvent).toHaveBeenCalledWith(expect.objectContaining({
+      event: 'terminal_action',
+      action: 'quit',
+      source: 'signal',
+    }));
+    expect(fs.existsSync(path.join(runDir, 'terminal-action.requested'))).toBe(false);
+  });
+
+  it('J:<phase> signal fires jump with source=signal and correct targetPhase', async () => {
+    const { runPhaseLoop } = await import('../../src/phases/runner.js');
+    vi.mocked(runPhaseLoop).mockClear();
+    vi.mocked(runPhaseLoop).mockImplementationOnce(async (s: any) => {
+      s.status = 'completed';
+    });
+    const state = makeState();
+    const input = new MockInput();
+    const logger = makeLogger();
+    const runDir = makeTmpDir();
+    setTimeout(() => writeSignal(runDir, 'J:3'), 50);
+
+    await enterFailedTerminalState(state, '/harness', runDir, '/cwd', input as unknown as InputManager, logger);
+
+    expect(state.currentPhase).toBe(3);
+    expect(logger.logEvent).toHaveBeenCalledWith(expect.objectContaining({
+      event: 'terminal_action',
+      action: 'jump',
+      fromPhase: 5,
+      targetPhase: 3,
+      source: 'signal',
+    }));
+    expect(fs.existsSync(path.join(runDir, 'terminal-action.requested'))).toBe(false);
+  });
+
+  it('invalid body (garbage) deletes the file and continues waiting (no spurious action)', async () => {
+    const state = makeState();
+    const input = new MockInput();
+    const logger = makeLogger();
+    const runDir = makeTmpDir();
+    // Garbage first, then a real Q so the loop eventually exits.
+    setTimeout(() => writeSignal(runDir, 'xyz garbage'), 50);
+    setTimeout(() => writeSignal(runDir, 'Q'), 700);
+
+    await enterFailedTerminalState(state, '/harness', runDir, '/cwd', input as unknown as InputManager, logger);
+
+    // No terminal_action with source=signal was emitted for the garbage body.
+    // (Only the final quit, written by the second signal, lands.)
+    const sigActions = (logger.logEvent as any).mock.calls
+      .map((c: any[]) => c[0])
+      .filter((e: any) => e.event === 'terminal_action' && e.source === 'signal');
+    expect(sigActions).toHaveLength(1);
+    expect(sigActions[0].action).toBe('quit');
+    // Both files were deleted (latest one consumed; first one cleared as invalid).
+    expect(fs.existsSync(path.join(runDir, 'terminal-action.requested'))).toBe(false);
+  });
+
+  it('J:<phase> with target > failedPhase → file deleted, no action fires (target-list rejection)', async () => {
+    // failedPhase=5; J:7 passes the body parser (1..7 range) but the
+    // target-list validation inside enterFailedTerminalState rejects it
+    // (listJumpTargets is bounded to ≤ failedPhase). Hits the
+    // `if (!targets.includes(signalJumpTarget)) continue` branch.
+    const state = makeState();
+    const input = new MockInput();
+    const logger = makeLogger();
+    const runDir = makeTmpDir();
+    setTimeout(() => writeSignal(runDir, 'J:7'), 50);
+    setTimeout(() => writeSignal(runDir, 'Q'), 700);
+
+    await enterFailedTerminalState(state, '/harness', runDir, '/cwd', input as unknown as InputManager, logger);
+
+    const jumpActions = (logger.logEvent as any).mock.calls
+      .map((c: any[]) => c[0])
+      .filter((e: any) => e.event === 'terminal_action' && e.action === 'jump');
+    expect(jumpActions).toHaveLength(0); // out-of-range J:7 dropped silently
+    expect(state.currentPhase).toBe(5); // currentPhase untouched
+    expect(fs.existsSync(path.join(runDir, 'terminal-action.requested'))).toBe(false);
+  });
+
+  it('J:<phase> with out-of-spec phase (>7) is rejected by the parser → file deleted, no action fires', async () => {
+    // J:8 exercises parseSignalAction's range guard (1..7), distinct from the
+    // target-list validation above. Both rejections must produce the same
+    // "drop silently" behavior.
+    const state = makeState();
+    const input = new MockInput();
+    const logger = makeLogger();
+    const runDir = makeTmpDir();
+    setTimeout(() => writeSignal(runDir, 'J:8'), 50);
+    setTimeout(() => writeSignal(runDir, 'Q'), 700);
+
+    await enterFailedTerminalState(state, '/harness', runDir, '/cwd', input as unknown as InputManager, logger);
+
+    const jumpActions = (logger.logEvent as any).mock.calls
+      .map((c: any[]) => c[0])
+      .filter((e: any) => e.event === 'terminal_action' && e.action === 'jump');
+    expect(jumpActions).toHaveLength(0);
+    expect(state.currentPhase).toBe(5);
+    expect(fs.existsSync(path.join(runDir, 'terminal-action.requested'))).toBe(false);
+  });
+
+  it('J:<phase> with skipped-target (light flow) → file deleted, no action fires', async () => {
+    const state = makeState({
+      flow: 'light',
+      currentPhase: 5,
+      phases: { '1': 'completed', '2': 'skipped', '3': 'skipped', '4': 'skipped', '5': 'failed', '6': 'pending', '7': 'pending' },
+    });
+    const input = new MockInput();
+    const logger = makeLogger();
+    const runDir = makeTmpDir();
+    setTimeout(() => writeSignal(runDir, 'J:3'), 50);
+    setTimeout(() => writeSignal(runDir, 'Q'), 700);
+
+    await enterFailedTerminalState(state, '/harness', runDir, '/cwd', input as unknown as InputManager, logger);
+
+    const jumpActions = (logger.logEvent as any).mock.calls
+      .map((c: any[]) => c[0])
+      .filter((e: any) => e.event === 'terminal_action' && e.action === 'jump');
+    expect(jumpActions).toHaveLength(0);
+    expect(state.currentPhase).toBe(5);
+    expect(fs.existsSync(path.join(runDir, 'terminal-action.requested'))).toBe(false);
+  });
+
+  it('R signal with alive worker: skips the Y/N confirm prompt, emits confirmedKill=true + source=signal', async () => {
+    const { runPhaseLoop } = await import('../../src/phases/runner.js');
+    vi.mocked(runPhaseLoop).mockClear();
+    vi.mocked(runPhaseLoop).mockImplementationOnce(async (s: any) => {
+      s.status = 'completed';
+    });
+    const { isPidAlive, isSameProcessInstance } = await import('../../src/process.js');
+    vi.mocked(isPidAlive).mockReturnValue(true);
+    vi.mocked(isSameProcessInstance).mockReturnValue(true);
+
+    const state = makeState({
+      lastWorkspacePid: 4242,
+      lastWorkspacePidStartTime: 1_700_000_000,
+    });
+    // Note: NO 'y' queued — signal R must skip the prompt entirely.
+    // The supervisor already decided to kill; making it wait for a Y/N answer
+    // it cannot send would deadlock.
+    const input = new MockInput();
+    const logger = makeLogger();
+    const runDir = makeTmpDir();
+    setTimeout(() => writeSignal(runDir, 'R'), 50);
+
+    await enterFailedTerminalState(state, '/harness', runDir, '/cwd', input as unknown as InputManager, logger);
+
+    expect(runPhaseLoop).toHaveBeenCalledOnce();
+    const resumeEvent = (logger.logEvent as any).mock.calls
+      .map((c: any[]) => c[0])
+      .find((e: any) => e.event === 'terminal_action' && e.action === 'resume');
+    expect(resumeEvent).toBeDefined();
+    expect(resumeEvent.source).toBe('signal');
+    expect(resumeEvent.confirmedKill).toBe(true);
+  });
+
+  it('file present BEFORE wait starts → picked up on the next poll iteration', async () => {
+    const state = makeState();
+    const input = new MockInput();
+    const logger = makeLogger();
+    const runDir = makeTmpDir();
+    // Write the file before entering the wait — no setTimeout. The poll
+    // interval (500ms) must still pick this up.
+    writeSignal(runDir, 'Q');
+
+    await enterFailedTerminalState(state, '/harness', runDir, '/cwd', input as unknown as InputManager, logger);
+
+    expect(logger.logEvent).toHaveBeenCalledWith(expect.objectContaining({
+      event: 'terminal_action',
+      action: 'quit',
+      source: 'signal',
+    }));
+    expect(fs.existsSync(path.join(runDir, 'terminal-action.requested'))).toBe(false);
+  });
+}, { timeout: 10_000 });

@@ -7,11 +7,100 @@ import type {
   PhaseStatus,
   SessionLogger,
 } from '../types.js';
-import type { InputManager } from '../input.js';
+import { InputManager } from '../input.js';
 import { writeState, invalidatePhaseSessionsOnJump } from '../state.js';
 import { renderControlPanel, printError, printInfo } from '../ui.js';
 import { isPidAlive, isSameProcessInstance } from '../process.js';
 import type { WorkerLiveness } from '../ink/store.js';
+
+// #117 Bug A: file-based action channel.
+// Supervisor / external automation drops a one-line file into the run dir
+// containing the action to inject: `R`, `Q`, or `J:<phase>`. `enterFailedTerminalState`
+// polls for the file every TERMINAL_ACTION_POLL_MS and, when present, parses
+// the body, deletes the file atomically, and fires the same code path as the
+// matching keystroke — with `terminal_action.source = 'signal'` so retro tools
+// can distinguish injected actions from user keypresses.
+//
+// Why this exists: when the harness's Ink TUI is the foreground program in a
+// tmux pane, `tmux send-keys -t <pane> R` is silently dropped — the keystroke
+// hits the underlying TTY but never reaches Ink's input loop. Without this
+// channel, supervisor automation cannot reliably steer a failed-terminal run.
+export const TERMINAL_ACTION_FILE = 'terminal-action.requested';
+const TERMINAL_ACTION_POLL_MS = 500;
+
+type SignalAction =
+  | { kind: 'resume' }
+  | { kind: 'quit' }
+  | { kind: 'jump'; phase: PhaseNumber };
+
+/**
+ * Parse a `terminal-action.requested` body into a SignalAction. Returns null
+ * on any malformed input — caller deletes the file and continues waiting.
+ * Accepts `R`, `Q`, `J:<n>` (n in 1..7) — case-insensitive, whitespace-trimmed.
+ */
+function parseSignalAction(body: string): SignalAction | null {
+  const t = body.trim().toUpperCase();
+  if (t === 'R') return { kind: 'resume' };
+  if (t === 'Q') return { kind: 'quit' };
+  if (t.startsWith('J:')) {
+    const phaseStr = t.slice(2);
+    const n = Number(phaseStr);
+    if (!Number.isInteger(n) || n < 1 || n > 7) return null;
+    return { kind: 'jump', phase: n as PhaseNumber };
+  }
+  return null;
+}
+
+/**
+ * Race a `waitForKey()` call against a poll of the signal file. Returns either
+ * a key result OR a parsed signal action. If the signal file's body is malformed
+ * (returns null from parseSignalAction), the file is deleted and the poll keeps
+ * running — the keystroke path stays active throughout. The validKeys are passed
+ * straight through to InputManager; the poll uses TERMINAL_ACTION_POLL_MS.
+ */
+async function waitForKeyOrSignal(
+  inputManager: InputManager,
+  validKeys: Set<string>,
+  runDir: string,
+): Promise<{ kind: 'key'; key: string } | { kind: 'signal'; action: SignalAction }> {
+  const filePath = path.join(runDir, TERMINAL_ACTION_FILE);
+
+  return new Promise((resolve, reject) => {
+    let settled = false;
+
+    const interval = setInterval(() => {
+      let body: string;
+      try { body = fs.readFileSync(filePath, 'utf-8'); } catch { return; }
+      // Best-effort atomic consume: unlink first so a concurrent supervisor
+      // writer can't have its action overwritten between our parse + the next
+      // poll. If unlink fails, treat the file as absent (next poll re-checks).
+      try { fs.unlinkSync(filePath); } catch { /* race: deleted under us */ }
+      const action = parseSignalAction(body);
+      if (action === null) {
+        // Garbage body → file already deleted above; continue polling.
+        return;
+      }
+      if (settled) return;
+      settled = true;
+      clearInterval(interval);
+      inputManager.cancelWaitForKey();
+      resolve({ kind: 'signal', action });
+    }, TERMINAL_ACTION_POLL_MS);
+
+    inputManager.waitForKey(validKeys).then((key) => {
+      if (key === InputManager.CANCEL_SENTINEL) return; // cancelled by signal branch
+      if (settled) return;
+      settled = true;
+      clearInterval(interval);
+      resolve({ kind: 'key', key });
+    }, (err) => {
+      if (settled) return;
+      settled = true;
+      clearInterval(interval);
+      reject(err);
+    });
+  });
+}
 
 /**
  * Issue #116 B1 — compute the workspace-pane worker liveness once at
@@ -237,11 +326,24 @@ export async function enterFailedTerminalState(
     process.stderr.write(summarizeGitStatus(cwd) + '\n');
     process.stderr.write('\n[R] Resume   [J] Jump to phase   [Q] Quit\n');
 
-    const choice = await inputManager.waitForKey(new Set(['r', 'j', 'q']));
+    const dispatch = await waitForKeyOrSignal(inputManager, new Set(['r', 'j', 'q']), runDir);
     const fromPhase = findFailedPhase(state) ?? state.currentPhase;
 
+    // Reduce the dispatched event into (choice, source) — keystroke and signal
+    // share the rest of the R/J/Q code paths but emit distinct `source` labels.
+    const source: 'user-key' | 'signal' = dispatch.kind === 'signal' ? 'signal' : 'user-key';
+    let choice: 'R' | 'J' | 'Q';
+    let signalJumpTarget: PhaseNumber | null = null;
+    if (dispatch.kind === 'key') {
+      choice = dispatch.key as 'R' | 'J' | 'Q';
+    } else {
+      if (dispatch.action.kind === 'resume') choice = 'R';
+      else if (dispatch.action.kind === 'quit') choice = 'Q';
+      else { choice = 'J'; signalJumpTarget = dispatch.action.phase; }
+    }
+
     if (choice === 'Q') {
-      logger.logEvent({ event: 'terminal_action', action: 'quit', fromPhase, source: 'user-key' });
+      logger.logEvent({ event: 'terminal_action', action: 'quit', fromPhase, source });
       return;
     }
 
@@ -252,23 +354,34 @@ export async function enterFailedTerminalState(
       // an Ink Y/N confirmation BEFORE proceeding so the operator can't
       // silently lose mid-flight work. Dead / undefined liveness skips this
       // branch entirely — byte-identical to the pre-B3 R path.
+      //
+      // #117 Bug A: file-channel signals deliberately bypass the Y/N prompt.
+      // The supervisor has no way to answer it (their channel is one-shot
+      // file-drop), and the very reason the supervisor invoked R is that it
+      // already decided the worker should be killed. Treat signal R with an
+      // alive worker as an implicit confirmedKill — same outcome the operator
+      // would produce by pressing Y, but recorded with source='signal'.
       let confirmedKill: boolean | undefined;
       if (workerLiveness === 'alive') {
-        renderControlPanel(state, logger, 'terminal-failed-confirm-kill', workerLiveness);
-        const confirm = await inputManager.waitForKey(new Set(['y', 'n']));
-        if (confirm === 'N') {
-          // Bail out without emitting a terminal_action — N is neither
-          // "confirmed kill" nor a blind press; it's a no-op. Re-enter the
-          // loop and re-render the R/J/Q action menu.
-          continue;
+        if (source === 'signal') {
+          confirmedKill = true;
+        } else {
+          renderControlPanel(state, logger, 'terminal-failed-confirm-kill', workerLiveness);
+          const confirm = await inputManager.waitForKey(new Set(['y', 'n']));
+          if (confirm === 'N') {
+            // Bail out without emitting a terminal_action — N is neither
+            // "confirmed kill" nor a blind press; it's a no-op. Re-enter the
+            // loop and re-render the R/J/Q action menu.
+            continue;
+          }
+          confirmedKill = true;
         }
-        confirmedKill = true;
       }
 
       logger.logEvent(
         confirmedKill === true
-          ? { event: 'terminal_action', action: 'resume', fromPhase, confirmedKill: true, source: 'user-key' }
-          : { event: 'terminal_action', action: 'resume', fromPhase, source: 'user-key' },
+          ? { event: 'terminal_action', action: 'resume', fromPhase, confirmedKill: true, source }
+          : { event: 'terminal_action', action: 'resume', fromPhase, source },
       );
       try {
         await performResume(state, harnessDir, runDir, cwd, inputManager, logger, sidecarReplayAllowed);
@@ -289,11 +402,24 @@ export async function enterFailedTerminalState(
       printError('No phases available to jump to.');
       continue;
     }
-    const targetKeys = new Set(targets.map(t => String(t)));
-    process.stderr.write(`\nJump to which phase? (${targets.join(' / ')})\n`);
-    const phaseKey = await inputManager.waitForKey(targetKeys);
-    const target = Number(phaseKey) as PhaseNumber;
-    logger.logEvent({ event: 'terminal_action', action: 'jump', fromPhase, targetPhase: target, source: 'user-key' });
+    let target: PhaseNumber;
+    if (signalJumpTarget !== null) {
+      // #117 Bug A: signal already specified the target — validate against the
+      // dynamic target list and drop silently on out-of-range / skipped. The
+      // file has already been deleted by the poller; the next poll iteration
+      // (after re-rendering the R/J/Q menu) will see no file.
+      if (!targets.includes(signalJumpTarget)) {
+        // Quietly absorb — caller can re-issue with a valid target.
+        continue;
+      }
+      target = signalJumpTarget;
+    } else {
+      const targetKeys = new Set(targets.map(t => String(t)));
+      process.stderr.write(`\nJump to which phase? (${targets.join(' / ')})\n`);
+      const phaseKey = await inputManager.waitForKey(targetKeys);
+      target = Number(phaseKey) as PhaseNumber;
+    }
+    logger.logEvent({ event: 'terminal_action', action: 'jump', fromPhase, targetPhase: target, source });
 
     try {
       await performJump(target, state, harnessDir, runDir, cwd, inputManager, logger);
