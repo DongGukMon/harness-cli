@@ -252,25 +252,20 @@ phase-harness start --root /tmp/demo "task"
 
 ### `phase-harness config`
 
-`~/.harness/config.json`에 저장되는 페이즈별 프리셋·인터랙티브 타임아웃 오버라이드를 관리합니다. 프리셋 오버라이드는 새 `start`/`run` 실행 시에만 적용되며, 기존 실행에는 영향을 주지 않습니다. 타임아웃 오버라이드는 모든 인터랙티브 페이즈 진입 시(=`resume` 포함) 읽힙니다.
+`~/.harness/config.json`에 저장되는 페이즈별 프리셋 오버라이드를 관리합니다. 프리셋 오버라이드는 새 `start`/`run` 실행 시에만 적용되며, 기존 실행에는 영향을 주지 않습니다.
 
 ```bash
 phase-harness config list                              # 전체 페이즈 키와 현재 값·출처 표시
 phase-harness config get phase.1.preset                # 유효 값 확인 (오버라이드 또는 기본값)
 phase-harness config set phase.1.preset opus-1m-max    # 프리셋 오버라이드 저장
 phase-harness config reset phase.1.preset              # 프리셋 오버라이드 제거, 내장 기본값으로 복원
-
-# 페이즈별 인터랙티브 타임아웃 (#116 B4) — 밀리초 단위, 인터랙티브 페이즈만
-phase-harness config set phase.3.timeoutMs 3600000     # P3 타임아웃을 60분으로 상향
-phase-harness config get phase.3.timeoutMs             # 유효 값 확인
-phase-harness config reset phase.3.timeoutMs           # 내장 30분 기본값으로 복원
 ```
 
 `start`/`run` 시 프리셋 해결 우선순위: (1) 저장된 config 오버라이드, (2) 내장 `PHASE_DEFAULTS`.
 
 `resume`은 항상 실행 생성 시 `state.json`에 고정된 프리셋을 사용합니다. 저장된 프리셋 config는 resume 시 재적용되지 않습니다.
 
-`phase.<N>.timeoutMs` 키는 인터랙티브 페이즈(`1`, `3`, `5`)에만 유효합니다. 게이트 페이즈(2/4/7)는 별도의 `GATE_TIMEOUT_MS = 6 min` 상한을 사용하며 여기서는 의도적으로 노출하지 않습니다.
+페이즈는 wall-clock 타임아웃이 없습니다. 페이즈는 러너가 종료(PID 사망)되거나 sentinel 파일 `phase-<N>.done`을 작성할 때에만 종료됩니다. 러너가 종료도 sentinel 작성도 없이 hang하면 컨트롤 패널(`quit` / `skip` / `jump`)으로 해제하세요.
 
 ### `phase-harness resume [runId]`
 

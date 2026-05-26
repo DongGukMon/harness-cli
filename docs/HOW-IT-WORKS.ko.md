@@ -55,11 +55,9 @@ P1 design+plan → P2 pre-impl gate → P5 implement → P6 verify → P7 eval g
 
 ### 사용자 config 오버라이드
 
-`phase-harness config set`으로 `~/.harness/config.json`에 페이즈별 프리셋·인터랙티브 타임아웃 오버라이드를 저장할 수 있습니다. 새 `phase-harness start` / `phase-harness run` 실행 시, 하네스가 이 파일을 읽어 내장 `PHASE_DEFAULTS` 위에 **프리셋** 오버라이드를 덮어쓴 후 `state.json`을 기록합니다. 저장된 프리셋 id가 카탈로그에 더 이상 없으면(stale) stderr 경고를 출력하고 내장 기본값을 사용합니다.
+`phase-harness config set`으로 `~/.harness/config.json`에 페이즈별 프리셋 오버라이드를 저장할 수 있습니다. 새 `phase-harness start` / `phase-harness run` 실행 시, 하네스가 이 파일을 읽어 내장 `PHASE_DEFAULTS` 위에 프리셋 오버라이드를 덮어쓴 후 `state.json`을 기록합니다. 저장된 프리셋 id가 카탈로그에 더 이상 없으면(stale) stderr 경고를 출력하고 내장 기본값을 사용합니다.
 
-`phase-harness resume`은 **프리셋** 오버라이드를 위해 `~/.harness/config.json`을 다시 읽지 않습니다. 기존 실행의 프리셋은 `state.json`이 기준입니다.
-
-**인터랙티브 타임아웃 (#116 B4)**: `phase.<N>.timeoutMs` (N ∈ {1, 3, 5})는 해당 인터랙티브 페이즈의 `INTERACTIVE_TIMEOUT_MS` 기본값(30분)을 오버라이드합니다. 리졸버는 모든 인터랙티브 페이즈 진입 시(=`resume` 포함) 호출되므로, 저장한 값은 새 `start` 없이 다음 페이즈 진입부터 적용됩니다. 저장된 값이 양의 정수가 아니면 stderr 경고 1줄을 출력하고 기본값으로 fallback합니다. 게이트 페이즈(2/4/7)는 별도의 `GATE_TIMEOUT_MS = 6 min` 상한을 사용하며 의도적으로 설정 노출 대상이 아닙니다.
+`phase-harness resume`은 `~/.harness/config.json`을 다시 읽지 않습니다. 기존 실행의 프리셋은 `state.json`이 기준입니다.
 
 `~/.harness/config.json`이 유효하지 않은 JSON이면, 모든 `config` 서브커맨드와 새 `start`/`run`은 즉시 non-zero로 종료됩니다.
 
@@ -211,10 +209,7 @@ outer cwd가 git 레포가 아니어도 codex가 trust 프롬프트나 git-repo 
 | P6 Verify | 고정 스크립트 | 자동 셸 | eval report + verify sidecar | fail 시 P5 재오픈, retry limit 3 |
 | P7 Eval Gate | `codex-high` | gate | verdict + feedback sidecar | full은 P5, light는 scope에 따라 P5 또는 P1 |
 
-현재 timeout 상수(`src/config.ts`):
-- interactive: 30분 (페이즈별 `phase.<N>.timeoutMs`로 오버라이드 가능 — 위의 "사용자 config 오버라이드" 참조)
-- gate: 6분
-- verify: 5분
+페이즈는 wall-clock 타임아웃이 없습니다. 페이즈는 러너가 종료(PID 사망)되거나 sentinel 파일 `phase-<N>.done`을 작성할 때에만 종료됩니다. 러너가 verdict는 emit했지만 REPL에 머물러 sentinel을 작성하지 않을 경우, 운영자는 컨트롤 패널(`quit` / `skip` / `jump`)을 사용하거나 sentinel을 수동으로 작성해야 합니다.
 
 ### 명확성 점수 & 모호성 거부권 (P2 전체 플로우 전용)
 
