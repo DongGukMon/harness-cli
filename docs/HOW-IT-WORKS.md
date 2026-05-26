@@ -55,11 +55,9 @@ Existing saved runs are not auto-migrated to the new 1M defaults; only newly cre
 
 ### User config overrides
 
-Users can persist per-phase preset and interactive-timeout overrides in `~/.harness/config.json` via `phase-harness config set`. On every fresh `phase-harness start` / `phase-harness run`, the harness reads this file and overlays any saved **preset** overrides onto the built-in `PHASE_DEFAULTS` before writing `state.json`. If a saved preset id is no longer in the catalog (stale), a stderr warning is emitted and the built-in default is used instead.
+Users can persist per-phase preset overrides in `~/.harness/config.json` via `phase-harness config set`. On every fresh `phase-harness start` / `phase-harness run`, the harness reads this file and overlays any saved preset overrides onto the built-in `PHASE_DEFAULTS` before writing `state.json`. If a saved preset id is no longer in the catalog (stale), a stderr warning is emitted and the built-in default is used instead.
 
-`phase-harness resume` never reads `~/.harness/config.json` for **preset** overrides; the presets in `state.json` are authoritative for existing runs.
-
-**Interactive timeouts (#116 B4)**: `phase.<N>.timeoutMs` (N ∈ {1, 3, 5}) overrides `INTERACTIVE_TIMEOUT_MS` (default 30 min) for the matching interactive phase. The resolver runs at every interactive phase entry, including on `resume`, so changes take effect on the next phase open without needing a fresh `start`. Non-integer / non-positive saved values fall back to the default with a single stderr warning. Gate phases (2/4/7) use the separate `GATE_TIMEOUT_MS = 6 min` cap and are intentionally not configurable here.
+`phase-harness resume` never reads `~/.harness/config.json`; the presets in `state.json` are authoritative for existing runs.
 
 If `~/.harness/config.json` contains invalid JSON, every `config` subcommand and any new `start`/`run` exits non-zero immediately.
 
@@ -211,10 +209,7 @@ When the outer cwd is not a git repo, `ensureCodexIsolation` writes a `[projects
 | P6 Verify | fixed script | automated shell | eval report + verify sidecars | fail reopens P5; retry limit 3 |
 | P7 Eval Gate | `codex-high` | gate | verdict + optional feedback sidecars | full: reopen P5; light: reopen P5 or P1 based on scope |
 
-Current timeout constants (`src/config.ts`):
-- interactive phases: 30 minutes (per-phase override via `phase.<N>.timeoutMs` in `~/.harness/config.json`; see "User config overrides" above)
-- gate phases: 6 minutes
-- verify: 5 minutes
+Phases have no wall-clock timeout. A phase ends only when its runner exits (PID death) or writes the sentinel file `phase-<N>.done`. If a runner emits its verdict but stays alive in a REPL without writing the sentinel, the operator must intervene via the control panel (`quit` / `skip` / `jump`) or write the sentinel by hand.
 
 ### Clarity Scores & Ambiguity Veto (P2 full flow only)
 

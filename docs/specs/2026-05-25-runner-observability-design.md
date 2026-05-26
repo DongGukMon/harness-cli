@@ -1,5 +1,7 @@
 # Runner Observability for Silent-Freeze Detection — Design Spec
 
+> **Status: Partially superseded by [docs/specs/2026-05-26-timeout-removal-design.md](2026-05-26-timeout-removal-design.md)** — the `runner_heartbeat`, `runner_stalled`, and `phase_timeout_warning` events plus their underlying interactive-phase wall-clock timeout were removed. The tmux pane capture portion (#114 PR #3) and PR-runner stdio persistence (#114 PR #4) remain in effect.
+
 - issue: [#114](https://github.com/DongGukMon/harness-cli/issues/114)
 - related code: `src/types.ts` (LogEvent union), `src/phases/interactive.ts` (timeout + sentinel waiter), `src/runners/claude.ts` + `src/runners/codex.ts` (runner spawn), `src/phases/terminal-ui.ts` (auto-resume), `src/logger.ts` (events.jsonl writer)
 - related design history: `docs/specs/2026-05-07-events-jsonl-15d4-design.md` (events.jsonl auto-retrospective — read-side; this spec is write-side)

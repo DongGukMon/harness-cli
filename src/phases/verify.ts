@@ -3,7 +3,7 @@ import path from 'path';
 import { spawn } from 'child_process';
 
 import type { HarnessState, SessionLogger, VerifyOutcome, VerifyResult } from '../types.js';
-import { VERIFY_TIMEOUT_MS, SIGTERM_WAIT_MS } from '../config.js';
+import { SIGTERM_WAIT_MS } from '../config.js';
 import { writeState } from '../state.js';
 import { updateLockChild, clearLockChild } from '../lock.js';
 import { runPhase6Preconditions, resolveArtifact } from '../artifact.js';
@@ -164,21 +164,9 @@ export async function runVerifyPhase(
     process.stderr.write(chunk.toString());
   });
 
-  // Wait for exit or timeout
+  // Step 6: Wait for exit
   const outcome = await new Promise<VerifyOutcome>((resolve) => {
-    let timedOut = false;
-
-    const timer = setTimeout(async () => {
-      timedOut = true;
-      await killProcessGroup(childPid, SIGTERM_WAIT_MS);
-      writeVerifyResult(runDir, 1, false);
-      resolve(buildErrorOutcome(runDir, '', ''));
-    }, VERIFY_TIMEOUT_MS);
-
     child.on('close', (exitCode: number | null) => {
-      if (timedOut) return;
-      clearTimeout(timer);
-
       const code = exitCode ?? 1;
       const hasSummary = checkHasSummary(evalAbsPath);
 

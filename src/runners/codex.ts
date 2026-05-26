@@ -3,7 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import type { HarnessState, GatePhaseResult } from '../types.js';
 import type { ModelPreset } from '../config.js';
-import { GATE_TIMEOUT_MS, SIGTERM_WAIT_MS } from '../config.js';
+import { SIGTERM_WAIT_MS } from '../config.js';
 import { updateLockChild, clearLockChild } from '../lock.js';
 import { getProcessStartTime, killProcessGroup } from '../process.js';
 import { sendKeysToPane, pollForPidFile, respawnPane } from '../tmux.js';
@@ -26,7 +26,6 @@ type RawCategory =
   | 'success_no_verdict'
   | 'session_missing'
   | 'nonzero_exit_other'
-  | 'timeout'
   | 'spawn_error';
 
 interface RawExecResult {
@@ -35,7 +34,6 @@ interface RawExecResult {
   stdout: string;
   stderr: string;
   spawnError?: string;
-  timedOut?: boolean;
 }
 
 interface RawExecInput {
@@ -106,25 +104,16 @@ async function runCodexExecRaw(input: RawExecInput): Promise<RawExecResult> {
   const finishResult = await new Promise<{
     exitCode: number | null;
     spawnError?: string;
-    timedOut?: boolean;
   }>((resolve) => {
     let settled = false;
-    const timeout = setTimeout(async () => {
-      if (settled) return;
-      settled = true;
-      await killProcessGroup(childPid, SIGTERM_WAIT_MS);
-      resolve({ exitCode: null, timedOut: true });
-    }, GATE_TIMEOUT_MS);
     child.on('close', (code) => {
       if (settled) return;
       settled = true;
-      clearTimeout(timeout);
       resolve({ exitCode: code ?? 1 });
     });
     child.on('error', (err) => {
       if (settled) return;
       settled = true;
-      clearTimeout(timeout);
       resolve({ exitCode: null, spawnError: err.message });
     });
   });
@@ -137,7 +126,6 @@ async function runCodexExecRaw(input: RawExecInput): Promise<RawExecResult> {
 
   let category: RawCategory;
   if (finishResult.spawnError !== undefined) category = 'spawn_error';
-  else if (finishResult.timedOut) category = 'timeout';
   else if (finishResult.exitCode !== null && finishResult.exitCode !== 0) {
     category = isResumeSessionMissingError(stderr) ? 'session_missing' : 'nonzero_exit_other';
   } else {
@@ -150,7 +138,6 @@ async function runCodexExecRaw(input: RawExecInput): Promise<RawExecResult> {
     stdout,
     stderr,
     spawnError: finishResult.spawnError,
-    timedOut: finishResult.timedOut,
   };
 }
 
@@ -183,7 +170,6 @@ function rawToResult(
 
   // All error categories project through a single error branch; messages distinct per category.
   const errorMessage =
-    raw.category === 'timeout' ? `Codex gate timed out after ${GATE_TIMEOUT_MS}ms` :
     raw.category === 'spawn_error' ? `Codex gate error: ${raw.spawnError ?? 'unknown spawn failure'}` :
     raw.category === 'success_no_verdict' ? 'Gate output missing ## Verdict header' :
     raw.category === 'session_missing' ? `Codex resume failed: session not found (stderr: ${raw.stderr.trim().slice(0, 200)})` :

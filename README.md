@@ -252,25 +252,20 @@ Any invalid value for the first three variables disables the feature for that pr
 
 ### `phase-harness config`
 
-Manage per-phase preset and interactive-timeout overrides saved in `~/.harness/config.json`. Preset overrides apply to fresh `start`/`run` calls only; existing runs are unaffected. Timeout overrides are read at every interactive phase entry (including on `resume`).
+Manage per-phase preset overrides saved in `~/.harness/config.json`. Preset overrides apply to fresh `start`/`run` calls only; existing runs are unaffected.
 
 ```bash
 phase-harness config list                              # show all phase keys with value and source
 phase-harness config get phase.1.preset                # effective value (override or default)
 phase-harness config set phase.1.preset opus-1m-max    # persist preset override
 phase-harness config reset phase.1.preset              # remove preset override, revert to built-in default
-
-# Per-phase interactive timeout (#116 B4) — milliseconds, interactive phases only
-phase-harness config set phase.3.timeoutMs 3600000     # raise P3 cap to 60 min
-phase-harness config get phase.3.timeoutMs             # show effective value
-phase-harness config reset phase.3.timeoutMs           # revert to built-in 30 min default
 ```
 
-Resolution precedence on `start`/`run` (presets): (1) saved config override, (2) built-in `PHASE_DEFAULTS`.
+Resolution precedence on `start`/`run`: (1) saved config override, (2) built-in `PHASE_DEFAULTS`.
 
 `resume` always uses the presets frozen in `state.json` at run-creation time — saved preset config is never re-applied on resume.
 
-The `phase.<N>.timeoutMs` key is valid only for interactive phases (`1`, `3`, `5`). Gate phases (2/4/7) use the separate `GATE_TIMEOUT_MS = 6 min` cap and are intentionally not configurable here.
+Phases have no wall-clock timeout. A phase ends only when its runner exits (PID death) or writes the sentinel file `phase-<N>.done`. If a runner hangs without exiting and without writing the sentinel, use the control panel (`quit` / `skip` / `jump`) to unblock.
 
 ### `phase-harness resume [runId]`
 

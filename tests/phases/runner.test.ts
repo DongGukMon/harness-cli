@@ -181,7 +181,7 @@ describe('Test 1: Phase 1 completed → dispatches gate Phase 2', () => {
 
     await runPhaseLoop(state, HDIR, runDir, CWD, createNoOpInputManager(), new NoopLogger(), { value: false });
 
-    expect(vi.mocked(runInteractivePhase)).toHaveBeenCalledWith(1, expect.any(Object), HDIR, runDir, CWD, expect.any(String), expect.any(Boolean), expect.any(Object));
+    expect(vi.mocked(runInteractivePhase)).toHaveBeenCalledWith(1, expect.any(Object), HDIR, runDir, CWD, expect.any(String), expect.any(Boolean));
     expect(vi.mocked(runGatePhase)).toHaveBeenCalledWith(2, expect.any(Object), HDIR, runDir, CWD, expect.any(Object));
   });
 });

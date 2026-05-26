@@ -4,7 +4,6 @@ import { randomUUID } from 'crypto';
 import type { HarnessState, PendingAction, PhaseNumber, InteractivePhase, GatePhase, GatePhaseResult, Scope, SessionLogger, ClaudeTokens } from '../types.js';
 import type { InputManager } from '../input.js';
 import {
-  GATE_TIMEOUT_MS,
   VERIFY_RETRY_LIMIT,
   TERMINAL_PHASE,
   getGateRetryLimit,
@@ -426,7 +425,7 @@ export async function handleInteractivePhase(
       ...(claudeResumeSessionId !== null ? { claudeResumeSessionId } : {}),
     });
 
-    const result = await runInteractivePhase(phase, state, harnessDir, runDir, cwd, attemptId, resume, logger);
+    const result = await runInteractivePhase(phase, state, harnessDir, runDir, cwd, attemptId, resume);
     clearWatchdog();
 
     // Check for control-signal redirect BEFORE branching on result.status.
@@ -642,7 +641,7 @@ export async function handleGatePhase(
 
   logger.logEvent({ event: 'phase_start', phase, attemptId, preset: gatePresetMeta });
 
-  printInfo(`Codex 리뷰 진행 중... (최대 ${Math.round(GATE_TIMEOUT_MS / 1000)}초 소요)`);
+  printInfo('Codex 리뷰 진행 중...');
   const rawResult = await runGatePhase(phase, state, harnessDir, runDir, cwd, sidecarReplayAllowed);
   const codexTokens = (rawResult as GatePhaseResult & { codexTokens?: ClaudeTokens | null }).codexTokens;
   const result: GatePhaseResult = rawResult;
