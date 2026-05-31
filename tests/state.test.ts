@@ -267,7 +267,7 @@ describe('migrateState', () => {
   });
 
   it('preserves opus-max (now a real max-effort preset) across migration', () => {
-    // Post-2026-04-19: 'opus-max' is the Opus 4.7 effort=max preset. Legacy
+    // Post-2026-04-19: 'opus-max' is the Opus 4.8 effort=max preset. Legacy
     // rewrite-to-opus-xhigh was dropped because it would silently downgrade
     // new users' explicit `opus-max` selections on resume.
     const raw = { phasePresets: { '1': 'opus-max', '3': 'sonnet-high', '5': 'opus-xhigh' } };

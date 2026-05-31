@@ -32,14 +32,14 @@ Built-in presets come from `src/config.ts`:
 
 | id | runner | model | effort |
 |---|---|---|---|
-| `opus-1m-max` | claude | `claude-opus-4-7[1m]` | `max` |
-| `opus-1m-xhigh` | claude | `claude-opus-4-7[1m]` | `xhigh` |
-| `opus-1m-high` | claude | `claude-opus-4-7[1m]` | `high` |
+| `opus-1m-max` | claude | `claude-opus-4-8[1m]` | `max` |
+| `opus-1m-xhigh` | claude | `claude-opus-4-8[1m]` | `xhigh` |
+| `opus-1m-high` | claude | `claude-opus-4-8[1m]` | `high` |
 | `sonnet-1m-max` | claude | `claude-sonnet-4-6[1m]` | `max` |
 | `sonnet-1m-high` | claude | `claude-sonnet-4-6[1m]` | `high` |
-| `opus-max` | claude | `claude-opus-4-7` | `max` |
-| `opus-xhigh` | claude | `claude-opus-4-7` | `xhigh` |
-| `opus-high` | claude | `claude-opus-4-7` | `high` |
+| `opus-max` | claude | `claude-opus-4-8` | `max` |
+| `opus-xhigh` | claude | `claude-opus-4-8` | `xhigh` |
+| `opus-high` | claude | `claude-opus-4-8` | `high` |
 | `sonnet-max` | claude | `claude-sonnet-4-6` | `max` |
 | `sonnet-high` | claude | `claude-sonnet-4-6` | `high` |
 | `codex-high` | codex | `gpt-5.5` | `high` |
