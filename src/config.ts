@@ -13,21 +13,21 @@ export interface PhasePresetMap {
 }
 
 // Model effort axes (per Anthropic 2026-04 guidance):
-//   - Opus 4.7: high < xhigh < max (three distinct tiers)
+//   - Opus 4.8: high < xhigh < max (three distinct tiers)
 //   - Sonnet 4.6: high < max (two tiers; no xhigh)
 // The catalog registers both the legacy tiers and explicit 1M-context tiers so
 // users can choose compatibility vs. long-context defaults via
 // `promptModelConfig`. New runs prefer the explicit 1M tiers; legacy tiers
 // remain available as manual fallback choices.
 export const MODEL_PRESETS: ModelPreset[] = [
-  { id: 'opus-1m-max',   label: 'Claude Opus 4.7 1M / max',    runner: 'claude', model: 'claude-opus-4-7[1m]',   effort: 'max'    },
-  { id: 'opus-1m-xhigh', label: 'Claude Opus 4.7 1M / xhigh',  runner: 'claude', model: 'claude-opus-4-7[1m]',   effort: 'xhigh'  },
-  { id: 'opus-1m-high',  label: 'Claude Opus 4.7 1M / high',   runner: 'claude', model: 'claude-opus-4-7[1m]',   effort: 'high'   },
+  { id: 'opus-1m-max',   label: 'Claude Opus 4.8 1M / max',    runner: 'claude', model: 'claude-opus-4-8[1m]',   effort: 'max'    },
+  { id: 'opus-1m-xhigh', label: 'Claude Opus 4.8 1M / xhigh',  runner: 'claude', model: 'claude-opus-4-8[1m]',   effort: 'xhigh'  },
+  { id: 'opus-1m-high',  label: 'Claude Opus 4.8 1M / high',   runner: 'claude', model: 'claude-opus-4-8[1m]',   effort: 'high'   },
   { id: 'sonnet-1m-max', label: 'Claude Sonnet 4.6 1M / max',  runner: 'claude', model: 'claude-sonnet-4-6[1m]', effort: 'max'    },
   { id: 'sonnet-1m-high',label: 'Claude Sonnet 4.6 1M / high', runner: 'claude', model: 'claude-sonnet-4-6[1m]', effort: 'high'   },
-  { id: 'opus-max',     label: 'Claude Opus 4.7 / max',    runner: 'claude', model: 'claude-opus-4-7',   effort: 'max'    },
-  { id: 'opus-xhigh',   label: 'Claude Opus 4.7 / xhigh',  runner: 'claude', model: 'claude-opus-4-7',   effort: 'xhigh'  },
-  { id: 'opus-high',    label: 'Claude Opus 4.7 / high',   runner: 'claude', model: 'claude-opus-4-7',   effort: 'high'   },
+  { id: 'opus-max',     label: 'Claude Opus 4.8 / max',    runner: 'claude', model: 'claude-opus-4-8',   effort: 'max'    },
+  { id: 'opus-xhigh',   label: 'Claude Opus 4.8 / xhigh',  runner: 'claude', model: 'claude-opus-4-8',   effort: 'xhigh'  },
+  { id: 'opus-high',    label: 'Claude Opus 4.8 / high',   runner: 'claude', model: 'claude-opus-4-8',   effort: 'high'   },
   { id: 'sonnet-max',   label: 'Claude Sonnet 4.6 / max',  runner: 'claude', model: 'claude-sonnet-4-6', effort: 'max'    },
   { id: 'sonnet-high',  label: 'Claude Sonnet 4.6 / high', runner: 'claude', model: 'claude-sonnet-4-6', effort: 'high'   },
   { id: 'codex-high',   label: 'Codex / high',             runner: 'codex',  model: 'gpt-5.5',           effort: 'high'   },

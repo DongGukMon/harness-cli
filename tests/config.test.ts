@@ -31,11 +31,11 @@ describe('getGateRetryLimit', () => {
 });
 
 describe('light flow phase config', () => {
-  it('defaults Phase 1 to Opus 4.7 xhigh for full and light flows', () => {
+  it('defaults Phase 1 to Opus 4.8 xhigh for full and light flows', () => {
     expect(PHASE_DEFAULTS[1]).toBe('opus-1m-xhigh');
     expect(LIGHT_PHASE_DEFAULTS[1]).toBe('opus-1m-xhigh');
     expect(MODEL_PRESETS.find(p => p.id === 'opus-1m-xhigh')).toMatchObject({
-      model: 'claude-opus-4-7[1m]',
+      model: 'claude-opus-4-8[1m]',
       effort: 'xhigh',
     });
   });

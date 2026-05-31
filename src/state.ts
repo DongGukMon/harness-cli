@@ -88,7 +88,7 @@ export function migrateState(raw: any, cwd?: string): HarnessState {
   }
   const legacyDefaults = getLegacyPhaseDefaults(raw.flow);
   // Note: the legacy `opus-max` → `opus-xhigh` migration (PR #22) was dropped
-  // when the catalog re-introduced a real `opus-max` preset pinned to Opus 4.7
+  // when the catalog re-introduced a real `opus-max` preset pinned to Opus 4.8
   // effort=`max`. Any state.json from before PR #22 that stored `opus-max`
   // now resolves to that real max-effort preset (i.e. resume cost may increase
   // vs. the PR #22 intent of xhigh). Users who want the old xhigh behavior on
