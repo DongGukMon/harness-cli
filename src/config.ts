@@ -13,18 +13,27 @@ export interface PhasePresetMap {
 }
 
 // Model effort axes (per Anthropic 2026-04 guidance):
+//   - Fable 5: high < xhigh < max (new tier above Opus; same axes as Opus 4.8)
 //   - Opus 4.8: high < xhigh < max (three distinct tiers)
 //   - Sonnet 4.6: high < max (two tiers; no xhigh)
 // The catalog registers both the legacy tiers and explicit 1M-context tiers so
 // users can choose compatibility vs. long-context defaults via
 // `promptModelConfig`. New runs prefer the explicit 1M tiers; legacy tiers
 // remain available as manual fallback choices.
+// Claude Mythos 5 is intentionally absent: it is restricted to Project
+// Glasswing partners and cannot be selected through the Claude Code CLI.
 export const MODEL_PRESETS: ModelPreset[] = [
+  { id: 'fable-1m-max',   label: 'Claude Fable 5 1M / max',   runner: 'claude', model: 'claude-fable-5[1m]',    effort: 'max'    },
+  { id: 'fable-1m-xhigh', label: 'Claude Fable 5 1M / xhigh', runner: 'claude', model: 'claude-fable-5[1m]',    effort: 'xhigh'  },
+  { id: 'fable-1m-high',  label: 'Claude Fable 5 1M / high',  runner: 'claude', model: 'claude-fable-5[1m]',    effort: 'high'   },
   { id: 'opus-1m-max',   label: 'Claude Opus 4.8 1M / max',    runner: 'claude', model: 'claude-opus-4-8[1m]',   effort: 'max'    },
   { id: 'opus-1m-xhigh', label: 'Claude Opus 4.8 1M / xhigh',  runner: 'claude', model: 'claude-opus-4-8[1m]',   effort: 'xhigh'  },
   { id: 'opus-1m-high',  label: 'Claude Opus 4.8 1M / high',   runner: 'claude', model: 'claude-opus-4-8[1m]',   effort: 'high'   },
   { id: 'sonnet-1m-max', label: 'Claude Sonnet 4.6 1M / max',  runner: 'claude', model: 'claude-sonnet-4-6[1m]', effort: 'max'    },
   { id: 'sonnet-1m-high',label: 'Claude Sonnet 4.6 1M / high', runner: 'claude', model: 'claude-sonnet-4-6[1m]', effort: 'high'   },
+  { id: 'fable-max',    label: 'Claude Fable 5 / max',     runner: 'claude', model: 'claude-fable-5',    effort: 'max'    },
+  { id: 'fable-xhigh',  label: 'Claude Fable 5 / xhigh',   runner: 'claude', model: 'claude-fable-5',    effort: 'xhigh'  },
+  { id: 'fable-high',   label: 'Claude Fable 5 / high',    runner: 'claude', model: 'claude-fable-5',    effort: 'high'   },
   { id: 'opus-max',     label: 'Claude Opus 4.8 / max',    runner: 'claude', model: 'claude-opus-4-8',   effort: 'max'    },
   { id: 'opus-xhigh',   label: 'Claude Opus 4.8 / xhigh',  runner: 'claude', model: 'claude-opus-4-8',   effort: 'xhigh'  },
   { id: 'opus-high',    label: 'Claude Opus 4.8 / high',   runner: 'claude', model: 'claude-opus-4-8',   effort: 'high'   },

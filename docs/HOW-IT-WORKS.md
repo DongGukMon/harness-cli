@@ -32,11 +32,17 @@ Built-in presets come from `src/config.ts`:
 
 | id | runner | model | effort |
 |---|---|---|---|
+| `fable-1m-max` | claude | `claude-fable-5[1m]` | `max` |
+| `fable-1m-xhigh` | claude | `claude-fable-5[1m]` | `xhigh` |
+| `fable-1m-high` | claude | `claude-fable-5[1m]` | `high` |
 | `opus-1m-max` | claude | `claude-opus-4-8[1m]` | `max` |
 | `opus-1m-xhigh` | claude | `claude-opus-4-8[1m]` | `xhigh` |
 | `opus-1m-high` | claude | `claude-opus-4-8[1m]` | `high` |
 | `sonnet-1m-max` | claude | `claude-sonnet-4-6[1m]` | `max` |
 | `sonnet-1m-high` | claude | `claude-sonnet-4-6[1m]` | `high` |
+| `fable-max` | claude | `claude-fable-5` | `max` |
+| `fable-xhigh` | claude | `claude-fable-5` | `xhigh` |
+| `fable-high` | claude | `claude-fable-5` | `high` |
 | `opus-max` | claude | `claude-opus-4-8` | `max` |
 | `opus-xhigh` | claude | `claude-opus-4-8` | `xhigh` |
 | `opus-high` | claude | `claude-opus-4-8` | `high` |
