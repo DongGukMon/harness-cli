@@ -23,8 +23,10 @@
 이 기본값은 런타임에 바꿀 수 있습니다. `phase-harness start` / `phase-harness resume`를 실행할 때마다, 남아 있는 non-verify phase들에 대해 모델 preset 선택 UI가 먼저 뜹니다.
 
 현재 내장 preset:
+- `fable-1m-max`, `fable-1m-xhigh`, `fable-1m-high`
 - `opus-1m-max`, `opus-1m-xhigh`, `opus-1m-high`
 - `sonnet-1m-max`, `sonnet-1m-high`
+- `fable-max`, `fable-xhigh`, `fable-high`
 - `opus-max`, `opus-xhigh`, `opus-high`
 - `sonnet-max`, `sonnet-high`
 - `codex-high`, `codex-medium`

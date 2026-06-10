@@ -23,8 +23,10 @@ By default, harness uses:
 Those defaults are configurable at runtime. On every `phase-harness start` / `phase-harness resume`, harness prompts for the model preset of every remaining non-verify phase.
 
 Current built-in presets:
+- `fable-1m-max`, `fable-1m-xhigh`, `fable-1m-high`
 - `opus-1m-max`, `opus-1m-xhigh`, `opus-1m-high`
 - `sonnet-1m-max`, `sonnet-1m-high`
+- `fable-max`, `fable-xhigh`, `fable-high`
 - `opus-max`, `opus-xhigh`, `opus-high`
 - `sonnet-max`, `sonnet-high`
 - `codex-high`, `codex-medium`

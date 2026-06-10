@@ -40,6 +40,19 @@ describe('light flow phase config', () => {
     });
   });
 
+  it('registers Claude Fable 5 presets in 1M and non-1M tiers', () => {
+    expect(MODEL_PRESETS.find(p => p.id === 'fable-1m-xhigh')).toMatchObject({
+      runner: 'claude',
+      model: 'claude-fable-5[1m]',
+      effort: 'xhigh',
+    });
+    expect(MODEL_PRESETS.find(p => p.id === 'fable-max')).toMatchObject({
+      runner: 'claude',
+      model: 'claude-fable-5',
+      effort: 'max',
+    });
+  });
+
   it('uses GPT-5.5 for Codex presets', () => {
     expect(MODEL_PRESETS.find(p => p.id === 'codex-high')).toMatchObject({
       model: 'gpt-5.5',
